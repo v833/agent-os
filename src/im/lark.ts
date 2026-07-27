@@ -4,6 +4,7 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { mkdir } from "node:fs/promises";
 import { extname, join } from "node:path";
+import type { CardJson } from "./card.js";
 import { parseMentions, type Mention } from "./message-parser.js";
 
 const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
@@ -41,6 +42,12 @@ export interface Bot {
     text: string,
     replyInThread?: boolean,
   ) => Promise<string | undefined>;
+  replyCard: (
+    messageId: string,
+    card: CardJson,
+    replyInThread?: boolean,
+  ) => Promise<string | undefined>;
+  updateCard: (messageId: string, card: CardJson) => Promise<void>;
   downloadResource: (
     messageId: string,
     fileKey: string,
@@ -116,6 +123,23 @@ export function startBot(options: BotOptions): Bot {
         },
       });
       return response.data?.message_id;
+    },
+    async replyCard(messageId, card, replyInThread = false) {
+      const response = await client.im.v1.message.reply({
+        path: { message_id: messageId },
+        data: {
+          msg_type: "interactive",
+          content: JSON.stringify(card),
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+      return response.data?.message_id;
+    },
+    async updateCard(messageId, card) {
+      await client.im.v1.message.patch({
+        path: { message_id: messageId },
+        data: { content: JSON.stringify(card) },
+      });
     },
     async downloadResource(messageId, fileKey, type, saveDir, fileName) {
       const response = await client.im.v1.messageResource.get({

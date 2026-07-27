@@ -32,15 +32,17 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：话题回复、提及解析和资源下载入口
+- `src/index.ts`：话题任务卡片、模拟进度、提及解析和资源下载入口
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试
-- `src/im/lark.ts`：飞书收发、话题回复和消息资源下载
+- `src/im/lark.ts`：飞书收发、卡片回复/更新和消息资源下载
 - `src/im/lark.test.ts`：正文解析、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
 - `src/im/message-parser.test.ts`：提及和资源解析测试
-- `README.md`：飞书配置、话题、提及和下载验证步骤
+- `src/im/card.ts`：任务卡片构建与两秒节流更新器
+- `src/im/card.test.ts`：卡片渲染、边界和节流行为测试
+- `README.md`：飞书配置、话题、卡片、提及和下载验证步骤
 
 ## 工程约定
 
