@@ -32,13 +32,19 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：会话路由、命令、任务卡片和取消流程入口
+- `src/index.ts`：会话路由、命令、双 CLI 调度、任务卡片和取消入口
 - `src/core/session-manager.ts`：话题映射、状态机与持久化协调
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
 - `src/core/command-parser.ts`：`/status`、`/close`、`/help` 解析
 - `src/core/command-parser.test.ts`：会话命令解析测试
+- `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
+- `src/cli/jsonl-runner.ts`：无头 CLI 子进程、JSONL、取消和退出处理
+- `src/cli/claude-runner.ts`：Claude Code 最终结果适配器
+- `src/cli/codex-runner.ts`：Codex 最终结果适配器
+- `src/cli/jsonl-runner.test.ts`：子进程生命周期与错误边界测试
+- `src/cli/cli-runners.test.ts`：双 CLI 参数和协议解析测试
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试

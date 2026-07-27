@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持“一个飞书话题对应一个 Agent OS 会话”，会话可跨进程重启恢复，并保留任务卡片、`@` 提及解析以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，完成后更新任务卡片并把最终回答送回原话题。会话可跨进程重启恢复，同时保留 `@` 提及解析以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -26,6 +26,39 @@ pnpm start
 ```
 
 看到 `ws client ready` 后，在测试话题群里 `@机器人` 发送消息。
+
+## CLI 引擎配置
+
+先确认本机终端可以找到两个 CLI：
+
+```powershell
+codex --version
+claude --version
+```
+
+Claude Code 尚未安装时执行：
+
+```powershell
+npm install -g @anthropic-ai/claude-code
+claude
+```
+
+首次运行 `claude` 时完成 Anthropic 登录。使用 DeepSeek 等兼容后端时，把供应商地址、认证令牌和模型配置保存在用户级 `~/.claude/settings.json`，不要写入项目或提交仓库。
+
+在 `.env` 中选择新话题默认使用的引擎和工作目录：
+
+```dotenv
+CLI_ENGINE=codex
+CODEX_WORKDIR=C:\你的\项目\绝对路径
+CLAUDE_WORKDIR=C:\你的\项目\绝对路径
+```
+
+- `CLI_ENGINE` 只能是 `codex` 或 `claude`，留空时默认使用 Codex。
+- 对应工作目录留空时使用 Agent OS 的启动目录。
+- 工作目录决定 CLI 读取、修改和执行命令的项目，启动前必须确认路径正确。
+- 已持久化话题继续使用自己的 `cliId`；切换 `CLI_ENGINE` 只影响之后创建的新话题。
+
+Codex 通过 `codex exec --json --full-auto --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
 ## 话题与提及验证
 
@@ -76,37 +109,56 @@ Get-ChildItem -LiteralPath .\data\downloads
 
 群聊中不带 `@机器人` 的普通消息默认不会推送给应用。
 
-## 会自动刷新的任务卡片
+## 飞书到 CLI 的真实执行链路
 
-在话题里发送：
-
-```text
-@机器人 帮我执行一个模拟任务
-```
-
-预期过程：
-
-- 当前话题出现一张蓝色共享卡片，初始进度为 `0%`
-- 八个模拟步骤每隔约 `700ms` 产生一次进度
-- 两秒窗口内只提交最新状态，因此通常有约两次中间刷新，再立即提交一次最终状态
-- 更新始终修改原卡片，不会连续发送新消息
-- 运行中进度最多到 `90%`
-- 完成时卡片立即变绿、进度为 `100%`、按钮显示“已完成”
-
-对应终端日志：
+在新话题发送一个容易核对的只读任务：
 
 ```text
-[卡片] 已发送 message_id=om_xxx inThread=true
-[进度] 11% 读取项目结构
-...
-[卡片] 已刷新
-...
-[卡片] 任务完成
+@机器人 请读取 package.json，告诉我项目名称和主要依赖，不要修改文件
 ```
 
-卡片使用 JSON 2.0，并设置 `config.update_multi=true`，确保后续更新同步给所有查看者。蓝色、绿色和红色分别表示运行中、已完成和执行失败；按钮目前禁用，卡片点击与审批回调留到后续实现。
+系统会依次执行：
 
-正常进度只刷新卡片，不发送 `@` 通知。只有异常、权限不足或等待人工审批时，后续流程才使用 `OWNER_OPEN_ID` 点名提醒。
+1. 创建或复用当前话题的 Agent OS 会话，并切换为 `active`。
+2. 在原话题发送蓝色的“Codex 任务”或“Claude Code 任务”卡片。
+3. 后台启动真实 CLI 子进程，飞书长连接仍可处理 `/status` 和 `/close`。
+4. 按行解析 stdout 中的 JSONL；普通诊断噪音会被忽略。
+5. 成功时把原卡片更新为绿色 `100%`，再把最终回答回复到同一话题。
+6. 失败时把卡片更新为红色，并在同一话题回复具体错误。
+7. 最后清理运行记录，把未关闭的会话持久化为 `idle`。
+
+终端会输出实际引擎和工作目录：
+
+```text
+[CLI] command=codex cwd=C:\你的\项目
+[CLI] 启动 engine=codex cwd=C:\你的\项目
+[CLI] 完成 engine=codex session_id=019f...
+```
+
+Claude Code 的 `session_id` 来自最终 `result` 事件；Codex 的会话标识来自 `thread.started.thread_id`，最终回答取最后一个 `item.completed` 的 `agent_message`。
+
+子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。
+
+### 双引擎首通验收
+
+Codex：
+
+1. 设置 `CLI_ENGINE=codex` 并运行 `pnpm start`。
+2. 新开飞书话题发送只读任务。
+3. 确认出现“Codex 任务”卡片，完成后变绿并收到真实回答。
+4. 终端应打印 Codex `session_id`。
+
+Claude Code：
+
+1. 先在同一终端手动执行一次 `claude -p "只回答 2" --output-format stream-json --verbose`，确认认证和模型后端可用。
+2. 设置 `CLI_ENGINE=claude`；watch 模式会因 `.env` 变化自动重启。
+3. 新开飞书话题发送只读任务，旧话题仍保留原执行引擎。
+4. 确认出现“Claude Code 任务”卡片，完成后变绿并收到真实回答。
+5. 终端应打印 Claude Code `session_id`。
+
+真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
+
+当前只打印 CLI 返回的会话标识，尚未把它保存进 `Session`，也没有在下一轮带上 `resume` 参数。因此同一话题虽然会复用 Agent OS 会话，本阶段的每条普通任务仍是一次新的 CLI 对话。
 
 ## 会话模型
 
@@ -126,7 +178,7 @@ creating → active → idle → active
 ```
 
 - `creating`：刚创建，尚未执行
-- `active`：模拟任务正在运行
+- `active`：Codex 或 Claude Code 子进程正在运行
 - `idle`：上一轮完成，可以继续追问
 - `closed`：话题会话已关闭，不再接受任务
 
@@ -188,7 +240,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/help`：列出三条命令
 - `/close`：关闭当前话题会话
 
-如果任务仍在执行，`/close` 会通过 `AbortController` 取消后台模拟任务，停止卡片刷新，并且不会写入绿色的成功终态。关闭后在同一话题发送普通消息，只会收到“请新开一个话题”的提醒。
+如果任务仍在执行，`/close` 会通过 `AbortController` 终止后台 CLI 子进程，并且不会写入绿色成功终态或回复最终答案。关闭后在同一话题发送普通消息，只会收到“请新开一个话题”的提醒。
 
 建议按以下顺序验证：
 
@@ -197,7 +249,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 3. 同一话题继续发送任务，日志显示 `[会话] 复用`
 4. 执行中发送普通消息，收到忙碌提示
 5. 发送 `/status` 和 `/help` 检查命令回复
-6. 新任务执行中发送 `/close`，日志出现 `[卡片] 任务已取消`
+6. 新任务执行中发送 `/close`，日志出现 `[CLI] 任务已取消 engine=...`
 7. 关闭的话题继续发送消息，收到新开话题提示
 8. 新开话题后应得到不同的会话 ID，并能正常完成任务
 

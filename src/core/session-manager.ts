@@ -35,6 +35,7 @@ export interface SessionManagerOptions {
   now?: () => Date;
   createId?: () => string;
   store?: SessionStore;
+  defaultCliId?: CliId;
 }
 
 // 所有合法状态迁移集中在这里，避免入口的不同分支各自修改状态。
@@ -61,11 +62,13 @@ export class SessionManager {
   private readonly now: () => Date;
   private readonly createId: () => string;
   private readonly store?: SessionStore;
+  private readonly defaultCliId: CliId;
 
   constructor(options: SessionManagerOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? randomUUID;
     this.store = options.store;
+    this.defaultCliId = options.defaultCliId ?? "codex";
   }
 
   /** 创建管理器并按原飞书话题键恢复已持久化的会话。 */
@@ -106,7 +109,7 @@ export class SessionManager {
       id: this.createId(),
       threadId,
       chatId: message.chatId,
-      cliId: "codex",
+      cliId: this.defaultCliId,
       status: "creating",
       createdAt: now,
       updatedAt: now,

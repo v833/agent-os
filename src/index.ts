@@ -1,14 +1,20 @@
 /**
- * Agent OS 进程入口：把飞书消息接入会话模型、控制命令、资源下载和任务卡片。
- * 当前阶段由一个进程统一维护“一个飞书话题对应一个有生命周期的会话”。
+ * Agent OS 进程入口：把飞书消息接入会话模型、控制命令、资源下载、
+ * 真实 CLI 调度和任务卡片，并维护“一个飞书话题对应一个会话”。
  */
 import "dotenv/config";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
+import { runClaude } from "./cli/claude-runner.js";
+import { runCodex } from "./cli/codex-runner.js";
 import { parseCommand } from "./core/command-parser.js";
-import { SessionManager, type Session } from "./core/session-manager.js";
+import {
+  SessionManager,
+  type CliId,
+  type Session,
+} from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
-import { buildTaskCard, ThrottledCardUpdater } from "./im/card.js";
-import { startBot, type Bot } from "./im/lark.js";
+import { buildTaskCard } from "./im/card.js";
+import { startBot } from "./im/lark.js";
 import {
   extractResourceKeys,
   resolveMentions,
@@ -16,93 +22,48 @@ import {
 
 const appId = process.env.BOT_A_APP_ID;
 const appSecret = process.env.BOT_A_APP_SECRET;
+const configuredCliId = process.env.CLI_ENGINE?.trim().toLowerCase() || "codex";
 
 if (!appId || !appSecret) {
   console.error("缺少 BOT_A_APP_ID / BOT_A_APP_SECRET，请检查 .env");
   process.exit(1);
 }
+if (configuredCliId !== "codex" && configuredCliId !== "claude") {
+  console.error("CLI_ENGINE 只支持 codex 或 claude，请检查 .env");
+  process.exit(1);
+}
+
+const defaultCliId: CliId = configuredCliId;
+const cliWorkdirs: Record<CliId, string> = {
+  codex: resolvePath(process.env.CODEX_WORKDIR?.trim() || process.cwd()),
+  claude: resolvePath(process.env.CLAUDE_WORKDIR?.trim() || process.cwd()),
+};
+const CLI_LABELS: Record<CliId, string> = {
+  codex: "Codex",
+  claude: "Claude Code",
+};
 
 console.log("Agent OS 启动，正在建立飞书长连接…");
+console.log(
+  `[CLI] command=${defaultCliId} cwd=${cliWorkdirs[defaultCliId]}`,
+);
 
 // 启动消息长连接前先恢复会话，避免恢复期间收到消息并创建重复映射。
 const sessions = await SessionManager.open({
   store: new JsonSessionStore(join("data", "sessions.json")),
+  defaultCliId,
 });
 console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
 // AbortController 与会话一一对应，使 /close 能取消后台任务，而不影响其他话题。
 const activeRuns = new Map<string, AbortController>();
 
-/** 等待一段时间；收到取消信号时提前结束，并用 false 告知调用方不要继续执行。 */
-function wait(milliseconds: number, signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return Promise.resolve(false);
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", stopWaiting);
-      resolve(true);
-    }, milliseconds);
-    const stopWaiting = () => {
-      clearTimeout(timer);
-      resolve(false);
-    };
-    signal.addEventListener("abort", stopWaiting, { once: true });
-  });
-}
-
-const DEMO_STEPS = [
-  "读取项目结构",
-  "定位任务入口",
-  "分析相关文件",
-  "生成修改方案",
-  "写入代码改动",
-  "检查类型错误",
-  "运行验证命令",
-  "整理执行结果",
-];
-
-async function runCardDemo(
-  bot: Bot,
-  cardId: string,
-  resolved: string,
-  signal: AbortSignal,
-): Promise<void> {
-  const activities: string[] = [];
-  // Agent 事件可能很密集，由更新器合并中间状态，避免触发飞书频率限制。
-  const updater = new ThrottledCardUpdater(async (card) => {
-    await bot.updateCard(cardId, card);
-    console.log("[卡片] 已刷新");
-  });
-
-  for (const [index, step] of DEMO_STEPS.entries()) {
-    if (!(await wait(700, signal))) {
-      await updater.cancel();
-      console.log("[卡片] 任务已取消");
-      return;
-    }
-    activities.push(step);
-    const progress = Math.round(((index + 1) / DEMO_STEPS.length) * 90);
-    console.log(`[进度] ${progress}% ${step}`);
-    updater.push(
-      buildTaskCard({
-        title: "Agent OS 模拟任务",
-        status: "running",
-        progress,
-        detail: step,
-        activities: activities.slice(-3),
-      }),
-    );
+function executeCli(cliId: CliId, prompt: string, signal: AbortSignal) {
+  const cwd = cliWorkdirs[cliId];
+  console.log(`[CLI] 启动 engine=${cliId} cwd=${cwd}`);
+  if (cliId === "claude") {
+    return runClaude({ prompt, cwd, signal });
   }
-
-  await updater.finish(
-    buildTaskCard({
-      title: "Agent OS 模拟任务",
-      status: "success",
-      progress: 100,
-      detail: `已处理：${resolved || "富媒体消息"}`,
-      activities: activities.slice(-3),
-    }),
-  );
-  console.log("[卡片] 任务完成");
+  return runCodex({ prompt, cwd, signal });
 }
 
 async function markSessionIdle(sessionId: string): Promise<void> {
@@ -219,6 +180,8 @@ startBot({
     await sessions.transition(session.id, "active");
     const run = new AbortController();
     activeRuns.set(session.id, run);
+    const cliLabel = CLI_LABELS[session.cliId];
+    const taskTitle = `${cliLabel} 任务`;
 
     const resources = extractResourceKeys(
       message.messageType,
@@ -247,10 +210,10 @@ startBot({
       cardId = await bot.replyCard(
         message.messageId,
         buildTaskCard({
-          title: "Agent OS 模拟任务",
+          title: taskTitle,
           status: "running",
           progress: 0,
-          detail: "正在准备任务环境",
+          detail: "正在启动执行引擎",
         }),
         hasThread,
       );
@@ -270,10 +233,46 @@ startBot({
     }
     console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
 
-    // 不阻塞长连接的消息回调；任务在后台运行，但所有出口都必须在 finally 中回收。
-    void runCardDemo(bot, cardId, resolved, run.signal)
-      .catch((error) => {
-        console.error("[卡片] 演示失败:", (error as Error).message);
+    // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
+    void executeCli(session.cliId, resolved, run.signal)
+      .then(async (result) => {
+        // /close 与子进程结束可能竞态；取消后不允许再回传成功状态。
+        if (run.signal.aborted) return;
+        await bot.updateCard(
+          cardId,
+          buildTaskCard({
+            title: taskTitle,
+            status: "success",
+            progress: 100,
+            detail: "执行完成",
+          }),
+        );
+        await bot.reply(message.messageId, result.answer, hasThread);
+        console.log(
+          `[CLI] 完成 engine=${session.cliId} session_id=${result.sessionId ?? "(无)"}`,
+        );
+      })
+      .catch(async (error) => {
+        if (run.signal.aborted) {
+          console.log(`[CLI] 任务已取消 engine=${session.cliId}`);
+          return;
+        }
+        const errorMessage = (error as Error).message;
+        console.error(`[CLI] 执行失败 engine=${session.cliId}:`, errorMessage);
+        await bot.updateCard(
+          cardId,
+          buildTaskCard({
+            title: taskTitle,
+            status: "failed",
+            progress: 0,
+            detail: errorMessage,
+          }),
+        );
+        await bot.reply(
+          message.messageId,
+          `${cliLabel} 执行失败：${errorMessage}`,
+          hasThread,
+        );
       })
       .finally(async () => {
         // 仅清理自己登记的运行实例，防止旧任务的迟到回调删除同会话的新任务。
@@ -286,6 +285,10 @@ startBot({
             (error as Error).message,
           );
         }
+      })
+      .catch((error) => {
+        // 卡片更新、飞书回复或 finally 持久化失败也必须被消费，避免未处理拒绝。
+        console.error("[任务] 回传或收尾失败:", (error as Error).message);
       });
   },
 });

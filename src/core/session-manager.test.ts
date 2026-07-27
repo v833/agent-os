@@ -36,6 +36,17 @@ test("同一群聊和话题复用同一个会话", async () => {
   assert.equal(manager.size, 1);
 });
 
+test("新会话使用配置的默认执行引擎", async () => {
+  const manager = new SessionManager({
+    createId: () => "session-claude",
+    defaultCliId: "claude",
+  });
+
+  const created = (await manager.resolve(address())).session;
+
+  assert.equal(created.cliId, "claude");
+});
+
 test("话题地址优先使用 threadId，其次 rootId，最后 messageId", async () => {
   let sequence = 0;
   const manager = new SessionManager({ createId: () => `session-${++sequence}` });
