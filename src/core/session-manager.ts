@@ -1,9 +1,9 @@
 /**
- * Agent OS 内存会话模型：把飞书话题地址映射为稳定会话，
- * 并集中约束 creating、active、idle、closed 的生命周期流转。
- * 当前只保存在进程内，重启后的持久化由后续存储层负责。
+ * Agent OS 会话模型：把飞书话题地址映射为稳定会话，集中约束
+ * creating、active、idle、closed 的生命周期，并协调内存与磁盘状态。
  */
 import { randomUUID } from "node:crypto";
+import type { SessionStore } from "./session-store.js";
 
 export type CliId = "codex" | "claude";
 
@@ -34,6 +34,7 @@ export interface ResolvedSession {
 export interface SessionManagerOptions {
   now?: () => Date;
   createId?: () => string;
+  store?: SessionStore;
 }
 
 // 所有合法状态迁移集中在这里，避免入口的不同分支各自修改状态。
@@ -59,10 +60,27 @@ export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly now: () => Date;
   private readonly createId: () => string;
+  private readonly store?: SessionStore;
 
   constructor(options: SessionManagerOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? randomUUID;
+    this.store = options.store;
+  }
+
+  /** 创建管理器并按原飞书话题键恢复已持久化的会话。 */
+  static async open(
+    options: SessionManagerOptions = {},
+  ): Promise<SessionManager> {
+    const manager = new SessionManager(options);
+    const restored = (await options.store?.load()) ?? [];
+    for (const session of restored) {
+      manager.sessions.set(
+        sessionKey(session.chatId, session.threadId),
+        session,
+      );
+    }
+    return manager;
   }
 
   get size(): number {
@@ -76,7 +94,7 @@ export class SessionManager {
     );
   }
 
-  resolve(message: MessageAddress): ResolvedSession {
+  async resolve(message: MessageAddress): Promise<ResolvedSession> {
     const threadId = topicIdOf(message);
     const key = sessionKey(message.chatId, threadId);
     const existing = this.sessions.get(key);
@@ -94,10 +112,20 @@ export class SessionManager {
       updatedAt: now,
     };
     this.sessions.set(key, session);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 首次保存失败时撤销内存创建，下一条消息仍可重新建立会话。
+      if (this.sessions.get(key) === session) this.sessions.delete(key);
+      throw error;
+    }
     return { session, isNew: true };
   }
 
-  transition(sessionId: string, nextStatus: SessionStatus): Session {
+  async transition(
+    sessionId: string,
+    nextStatus: SessionStatus,
+  ): Promise<Session> {
     const current = this.get(sessionId);
     if (!current) throw new Error(`会话不存在: ${sessionId}`);
     if (!ALLOWED_TRANSITIONS[current.status].includes(nextStatus)) {
@@ -110,7 +138,19 @@ export class SessionManager {
       status: nextStatus,
       updatedAt: this.now().toISOString(),
     };
-    this.sessions.set(sessionKey(updated.chatId, updated.threadId), updated);
+    const key = sessionKey(updated.chatId, updated.threadId);
+    this.sessions.set(key, updated);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 只回滚自己的更新，不能覆盖同一会话随后已经完成的新状态变化。
+      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
+      throw error;
+    }
     return updated;
+  }
+
+  private async persist(): Promise<void> {
+    await this.store?.save([...this.sessions.values()]);
   }
 }

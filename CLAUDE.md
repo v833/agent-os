@@ -33,8 +33,10 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 ## 模块地图
 
 - `src/index.ts`：会话路由、命令、任务卡片和取消流程入口
-- `src/core/session-manager.ts`：话题到会话的映射与状态机
-- `src/core/session-manager.test.ts`：会话路由和状态流转测试
+- `src/core/session-manager.ts`：话题映射、状态机与持久化协调
+- `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
+- `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
+- `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
 - `src/core/command-parser.ts`：`/status`、`/close`、`/help` 解析
 - `src/core/command-parser.test.ts`：会话命令解析测试
 - `src/cli-events.ts`：Codex/Claude 事件解析

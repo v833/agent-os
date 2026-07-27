@@ -6,6 +6,7 @@ import "dotenv/config";
 import { join } from "node:path";
 import { parseCommand } from "./core/command-parser.js";
 import { SessionManager, type Session } from "./core/session-manager.js";
+import { JsonSessionStore } from "./core/session-store.js";
 import { buildTaskCard, ThrottledCardUpdater } from "./im/card.js";
 import { startBot, type Bot } from "./im/lark.js";
 import {
@@ -23,8 +24,11 @@ if (!appId || !appSecret) {
 
 console.log("Agent OS 启动，正在建立飞书长连接…");
 
-// 全局只保留一个会话管理器，确保同一进程收到的后续话题消息能复用先前会话。
-const sessions = new SessionManager();
+// 启动消息长连接前先恢复会话，避免恢复期间收到消息并创建重复映射。
+const sessions = await SessionManager.open({
+  store: new JsonSessionStore(join("data", "sessions.json")),
+});
+console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
 // AbortController 与会话一一对应，使 /close 能取消后台任务，而不影响其他话题。
 const activeRuns = new Map<string, AbortController>();
 
@@ -101,10 +105,10 @@ async function runCardDemo(
   console.log("[卡片] 任务完成");
 }
 
-function markSessionIdle(sessionId: string): void {
+async function markSessionIdle(sessionId: string): Promise<void> {
   // /close 可能与后台 finally 同时发生；已关闭会话不能被迟到的清理逻辑改回 idle。
   if (sessions.get(sessionId)?.status !== "active") return;
-  sessions.transition(sessionId, "idle");
+  await sessions.transition(sessionId, "idle");
   console.log(`[会话] id=${sessionId} status=idle`);
 }
 
@@ -131,7 +135,7 @@ startBot({
   onMessage: async (message, bot) => {
     const resolved = resolveMentions(message.text, message.mentions);
     const hasThread = Boolean(message.threadId || message.rootId);
-    const { session, isNew } = sessions.resolve(message);
+    const { session, isNew } = await sessions.resolve(message);
 
     console.log(
       `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,
@@ -172,7 +176,7 @@ startBot({
       // 先发取消信号，再关闭状态；后台任务看到信号后会停止卡片刷新。
       activeRuns.get(session.id)?.abort();
       if (session.status !== "closed") {
-        sessions.transition(session.id, "closed");
+        await sessions.transition(session.id, "closed");
       }
       await bot.reply(
         message.messageId,
@@ -192,6 +196,16 @@ startBot({
       return;
     }
 
+    if (!isNew && session.status === "creating") {
+      // 首次写盘尚未完成时，后续消息只能等待，不能并发启动同一会话。
+      await bot.reply(
+        message.messageId,
+        "当前会话正在准备，请稍后再追问。",
+        hasThread,
+      );
+      return;
+    }
+
     if (session.status === "active") {
       // 一个会话同一时刻只允许一个任务，避免卡片和会话上下文并发写入。
       await bot.reply(
@@ -202,7 +216,7 @@ startBot({
       return;
     }
 
-    sessions.transition(session.id, "active");
+    await sessions.transition(session.id, "active");
     const run = new AbortController();
     activeRuns.set(session.id, run);
 
@@ -243,7 +257,7 @@ startBot({
     } catch (error) {
       // 任务尚未真正启动；创建卡片失败时必须撤销 active 状态，允许用户重试。
       if (activeRuns.get(session.id) === run) activeRuns.delete(session.id);
-      markSessionIdle(session.id);
+      await markSessionIdle(session.id);
       throw error;
     }
 
@@ -251,7 +265,7 @@ startBot({
       console.error("[卡片] 响应里没有 message_id，无法继续更新");
       // 飞书成功响应也可能缺少 ID，此时同样按启动失败回收会话状态。
       if (activeRuns.get(session.id) === run) activeRuns.delete(session.id);
-      markSessionIdle(session.id);
+      await markSessionIdle(session.id);
       return;
     }
     console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
@@ -261,10 +275,17 @@ startBot({
       .catch((error) => {
         console.error("[卡片] 演示失败:", (error as Error).message);
       })
-      .finally(() => {
+      .finally(async () => {
         // 仅清理自己登记的运行实例，防止旧任务的迟到回调删除同会话的新任务。
         if (activeRuns.get(session.id) === run) activeRuns.delete(session.id);
-        markSessionIdle(session.id);
+        try {
+          await markSessionIdle(session.id);
+        } catch (error) {
+          console.error(
+            "[会话] 保存空闲状态失败:",
+            (error as Error).message,
+          );
+        }
       });
   },
 });
