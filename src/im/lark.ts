@@ -1,5 +1,6 @@
 /**
- * 飞书接入：WebSocket 长连接收消息 + REST 回消息。
+ * 飞书平台适配器：WSClient 负责长连接收事件，Client 负责 REST 发消息、
+ * 更新卡片和下载资源；对外只暴露 Agent OS 自己的干净消息模型。
  */
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { mkdir } from "node:fs/promises";
@@ -16,6 +17,7 @@ const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
   "image/x-icon": "ico",
 };
 
+/** 收敛后的入站消息，隔离飞书 SDK 事件结构对核心层的影响。 */
 export interface IncomingMessage {
   messageId: string;
   chatId: string;
@@ -58,6 +60,7 @@ export interface Bot {
 }
 
 export function getHeader(headers: any, name: string): string {
+  // SDK/HTTP 客户端版本不同，headers 可能是 Headers，也可能是普通对象或数组。
   const headerValue =
     typeof headers?.get === "function"
       ? headers.get(name)
@@ -72,6 +75,7 @@ export function resourceExtension(
   fileName: string | undefined,
   contentType: string,
 ): string {
+  // 文件优先尊重用户原始文件名；图片通常没有文件名，只能依赖响应 MIME。
   const originalExtension = fileName
     ? extname(fileName).slice(1).toLowerCase()
     : "";
@@ -84,6 +88,7 @@ export function resourceExtension(
 }
 
 export function extractText(messageType: string, content: string): string {
+  // 飞书协议是双层 JSON：事件已解析，message.content 仍需单独 JSON.parse。
   const parsed = JSON.parse(content);
 
   if (messageType === "text") {
@@ -91,6 +96,7 @@ export function extractText(messageType: string, content: string): string {
   }
 
   if (messageType === "post") {
+    // post 中的 at/img 是结构化元素，正文只拼接 text，身份和资源由其他解析器处理。
     const paragraphs: unknown[][] = parsed.content ?? [];
     return paragraphs
       .flat()
@@ -109,6 +115,7 @@ export function extractText(messageType: string, content: string): string {
 
 export function startBot(options: BotOptions): Bot {
   const { appId, appSecret, onMessage } = options;
+  // Client 管“出站”：SDK 会自动维护 tenant token，无需业务层处理刷新。
   const client = new Lark.Client({ appId, appSecret });
 
   const bot: Bot = {
@@ -136,12 +143,14 @@ export function startBot(options: BotOptions): Bot {
       return response.data?.message_id;
     },
     async updateCard(messageId, card) {
+      // 更新必须使用机器人卡片自己的 message_id，而不是用户的入站 message_id。
       await client.im.v1.message.patch({
         path: { message_id: messageId },
         data: { content: JSON.stringify(card) },
       });
     },
     async downloadResource(messageId, fileKey, type, saveDir, fileName) {
+      // message_id 与 file_key 必须来自同一条消息，否则飞书会返回资源不存在。
       const response = await client.im.v1.messageResource.get({
         path: { message_id: messageId, file_key: fileKey },
         params: { type },
@@ -149,15 +158,18 @@ export function startBot(options: BotOptions): Bot {
       const contentType = getHeader(response.headers, "content-type");
       const extension = resourceExtension(type, fileName, contentType);
       const savePath = join(saveDir, `${fileKey}.${extension}`);
+      // data/downloads 按需创建，并由 .gitignore 排除，避免提交用户附件。
       await mkdir(saveDir, { recursive: true });
       await response.writeFile(savePath);
       return savePath;
     },
   };
 
+  // EventDispatcher 管“分发”：这里只订阅收消息事件，后续事件继续集中注册。
   const dispatcher = new Lark.EventDispatcher({}).register({
     "im.message.receive_v1": async (data) => {
       const message = data.message;
+      // 在平台边界完成字段归一化，core 层不直接依赖飞书原始事件类型。
       const incomingMessage: IncomingMessage = {
         messageId: message.message_id,
         chatId: message.chat_id,
@@ -175,6 +187,7 @@ export function startBot(options: BotOptions): Bot {
     },
   });
 
+  // WSClient 管“入站”：主动连飞书平台，无需公网 webhook，并由 SDK 自动重连。
   const wsClient = new Lark.WSClient({ appId, appSecret });
   void wsClient.start({ eventDispatcher: dispatcher });
 

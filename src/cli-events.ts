@@ -1,5 +1,10 @@
+/**
+ * AI CLI 事件适配层：把 Codex 与 Claude Code 的 JSONL 事件
+ * 收敛成统一、适合日志和飞书卡片展示的中文时间线文本。
+ */
 type JsonObject = Record<string, unknown>;
 
+/** 外部 CLI 事件不可信，读取字段前先确认它确实是普通对象。 */
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null;
 }
@@ -70,6 +75,7 @@ export function parseCliEventLine(line: string): string[] {
   try {
     return formatCliEvent(JSON.parse(line));
   } catch {
+    // CLI 重连或诊断日志可能混入 stdout；噪音行不能中断整条事件流。
     return [];
   }
 }

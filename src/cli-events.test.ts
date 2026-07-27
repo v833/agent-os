@@ -1,3 +1,7 @@
+/**
+ * CLI 事件适配层测试：确保两种执行引擎输出同一种时间线语义，
+ * 同时验证网络日志等非 JSON 噪音不会让解析器崩溃。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCliEventLine } from "./cli-events.js";

@@ -1,3 +1,4 @@
+/** 提及与富媒体解析测试：覆盖占位符还原和三种资源承载形式。 */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {

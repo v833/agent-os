@@ -1,3 +1,7 @@
+/**
+ * 内存会话模型测试：验证话题路由优先级、跨群隔离、会话复用，
+ * 以及状态机拒绝非法迁移的行为。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { SessionManager } from "./session-manager.js";

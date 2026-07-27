@@ -1,5 +1,6 @@
 /**
- * 飞书任务卡片：构建卡片内容，并把高频进度合并成低频更新。
+ * 飞书任务卡片层：构建只表达任务状态的 JSON 2.0 卡片，
+ * 并把高频 Agent 事件合并成低频、顺序稳定的消息更新。
  */
 
 export type CardJson = Record<string, unknown>;
@@ -20,6 +21,7 @@ const STATUS_STYLE = {
 } as const;
 
 function clampProgress(progress: number): number {
+  // 外部执行器的进度可能越界或带小数，渲染前统一收敛到整数百分比。
   return Math.min(100, Math.max(0, Math.round(progress)));
 }
 
@@ -39,6 +41,7 @@ export function buildTaskCard(options: TaskCardOptions): CardJson {
   return {
     schema: "2.0",
     config: {
+      // 共享卡片必须开启 update_multi，patch 后所有查看者才能看到同一状态。
       update_multi: true,
       summary: { content: `${options.title}：${style.label}` },
     },
@@ -97,10 +100,12 @@ export class ThrottledCardUpdater {
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.pendingCard = undefined;
+    // 先等已发出的网络请求结束，避免旧进度晚到并覆盖最终状态。
     await this.updateChain;
     await this.updateCard(finalCard);
   }
 
+  /** 取消待发送状态，但等待已经开始的更新结束，不再写入成功终态。 */
   async cancel(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -111,6 +116,7 @@ export class ThrottledCardUpdater {
   }
 
   private schedule(): void {
+    // 窗口内只保留一个定时器，后续 push 只覆盖 pendingCard。
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
@@ -123,6 +129,7 @@ export class ThrottledCardUpdater {
     this.pendingCard = undefined;
     if (!card || this.closed) return;
 
+    // Promise 链保证 patch 严格串行，防止响应乱序使卡片状态倒退。
     this.updateChain = this.updateChain
       .then(() => this.updateCard(card))
       .finally(() => {

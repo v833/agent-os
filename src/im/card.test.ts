@@ -1,3 +1,7 @@
+/**
+ * 任务卡片测试：覆盖状态样式、进度边界，以及高频更新合并、
+ * 最终收尾和取消时不再写成功状态等并发约束。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildTaskCard, ThrottledCardUpdater } from "./card.js";
@@ -53,6 +57,7 @@ test("节流器在窗口内只提交最新卡片，并串行收尾", async () =>
     10,
   );
 
+  // 连续 push 模拟 CLI 短时间内产生多条事件，窗口内只应保留 version 2。
   updater.push({ version: 1 });
   updater.push({ version: 2 });
   await new Promise((resolve) => setTimeout(resolve, 20));

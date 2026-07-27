@@ -1,3 +1,7 @@
+/**
+ * 飞书适配器纯函数测试：不连接开放平台，只验证双层 JSON 文本解析、
+ * 响应头兼容和下载文件扩展名选择规则。
+ */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { extractText, getHeader, resourceExtension } from "./lark.js";

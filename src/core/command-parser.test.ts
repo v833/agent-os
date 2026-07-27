@@ -1,3 +1,4 @@
+/** 会话命令测试：覆盖带提及的合法命令和普通文本误识别边界。 */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCommand } from "./command-parser.js";

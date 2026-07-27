@@ -1,3 +1,7 @@
+/**
+ * 飞书消息语义解析层：把 SDK 原始 mentions 和 content 字符串
+ * 转换为稳定的提及、可读文本和可下载资源描述。
+ */
 export interface Mention {
   key: string;
   name: string;
@@ -35,6 +39,7 @@ export function extractResourceKeys(
   messageType: string,
   content: string,
 ): MessageResource[] {
+  // 飞书事件外层已由 SDK 解析，但 content 仍是 JSON 字符串，需要再解析一层。
   const parsed = JSON.parse(content);
   const resources: MessageResource[] = [];
 
@@ -51,6 +56,7 @@ export function extractResourceKeys(
   }
 
   if (messageType === "post") {
+    // 富文本图片藏在二维元素数组中；这里只收集资源，不把 img/at 混入正文。
     const paragraphs: any[][] = parsed.content ?? [];
     for (const element of paragraphs.flat()) {
       if (element.tag === "img" && element.image_key) {
