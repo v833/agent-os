@@ -9,7 +9,7 @@
 - `pnpm start`：同 `pnpm dev`
 - `pnpm start:once`：不启用 watch，直接启动飞书机器人
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
-- `pnpm test`：运行事件解析器测试
+- `pnpm test`：运行 CLI 与飞书消息解析测试
 - `pnpm probe:cli`：从标准输入读取 Codex/Claude JSONL 并输出时间线
 
 ## CLI Headless 调试
@@ -32,13 +32,15 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：飞书 echo bot 入口与凭证校验
+- `src/index.ts`：话题回复、提及解析和资源下载入口
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试
-- `src/im/lark.ts`：飞书 WebSocket 收消息与 REST 回消息
-- `src/im/lark.test.ts`：飞书消息正文解析测试
-- `README.md`：飞书平台配置和首次收发验证步骤
+- `src/im/lark.ts`：飞书收发、话题回复和消息资源下载
+- `src/im/lark.test.ts`：正文解析、响应头和扩展名测试
+- `src/im/message-parser.ts`：提及还原与富媒体资源提取
+- `src/im/message-parser.test.ts`：提及和资源解析测试
+- `README.md`：飞书配置、话题、提及和下载验证步骤
 
 ## 工程约定
 

@@ -1,0 +1,59 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  extractResourceKeys,
+  parseMentions,
+  resolveMentions,
+} from "./message-parser.js";
+
+test("解析提及信息", () => {
+  assert.deepEqual(
+    parseMentions([
+      { key: "@_user_1", name: "MyBot", id: { open_id: "ou_bot" } },
+      { key: "@_user_2", name: "运营专家", id: { open_id: "ou_user" } },
+    ]),
+    [
+      { key: "@_user_1", name: "MyBot", openId: "ou_bot" },
+      { key: "@_user_2", name: "运营专家", openId: "ou_user" },
+    ],
+  );
+  assert.deepEqual(parseMentions(undefined), []);
+});
+
+test("还原所有重复出现的提及占位符", () => {
+  assert.equal(
+    resolveMentions("  @_user_1 看看 @_user_2，@_user_1 也确认一下  ", [
+      { key: "@_user_1", name: "MyBot", openId: "ou_bot" },
+      { key: "@_user_2", name: "运营专家", openId: "ou_user" },
+    ]),
+    "@MyBot 看看 @运营专家，@MyBot 也确认一下",
+  );
+});
+
+test("提取图片和文件消息的资源", () => {
+  assert.deepEqual(
+    extractResourceKeys("image", JSON.stringify({ image_key: "img_v3_xxx" })),
+    [{ type: "image", key: "img_v3_xxx" }],
+  );
+  assert.deepEqual(
+    extractResourceKeys(
+      "file",
+      JSON.stringify({ file_key: "file_v3_xxx", file_name: "report.xlsx" }),
+    ),
+    [{ type: "file", key: "file_v3_xxx", fileName: "report.xlsx" }],
+  );
+});
+
+test("提取 post 消息内嵌的全部图片", () => {
+  const content = JSON.stringify({
+    content: [
+      [{ tag: "text", text: "截图如下" }, { tag: "img", image_key: "img_1" }],
+      [{ tag: "img", image_key: "img_2" }],
+    ],
+  });
+
+  assert.deepEqual(extractResourceKeys("post", content), [
+    { type: "image", key: "img_1" },
+    { type: "image", key: "img_2" },
+  ]);
+});

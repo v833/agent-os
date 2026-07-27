@@ -8,7 +8,7 @@
     "start": "tsx watch --include .env src/index.ts",
     "start:once": "tsx src/index.ts",
     "build": "tsc",
-    "test": "tsx --test src/cli-events.test.ts src/im/lark.test.ts",
+    "test": "tsx --test src/cli-events.test.ts src/im/lark.test.ts src/im/message-parser.test.ts",
     "probe:cli": "tsx src/probe-cli.ts"
   },
   "dependencies": {

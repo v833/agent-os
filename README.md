@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段是飞书 echo bot：通过 WebSocket 长连接接收消息，再通过 REST API 原样回复。
+当前阶段支持飞书话题内回复、`@` 提及解析，以及图片和文件下载。
 
 ## 飞书开放平台配置
 
@@ -25,14 +25,56 @@ pnpm test
 pnpm start
 ```
 
-看到 `ws client ready` 后，在测试群里 `@机器人` 发送消息。终端应输出：
+看到 `ws client ready` 后，在测试话题群里 `@机器人` 发送消息。
+
+## 话题与提及验证
+
+分别在话题根消息和已有话题中 `@机器人`。终端应输出：
 
 ```text
-[收到] chat=oc_xxx type=group sender=ou_xxx 内容: @_user_1 你好
-[已回] message_id=om_xxx
+[收到] chat=oc_xxx threadId=omt_xxx rootId=om_xxx sender=ou_xxx
+  原文: @_user_1 帮我看看 @_user_2 的代码
+  还原: @MyBot 帮我看看 @运营专家 的代码
+  mentions: @_user_1=MyBot(ou_xxx), @_user_2=运营专家(ou_xxx)
+[已回] message_id=om_xxx inThread=true
 ```
 
-群里会收到机器人回复。群聊中不带 `@机器人` 的普通消息默认不会推送给应用。
+根消息的 `rootId` 可能为空，但话题消息会带 `threadId`；已有话题内的回复通常同时带 `threadId` 和 `rootId`。机器人回复应留在当前话题。
+
+`text` 消息正文中的 `@_user_N` 会被还原为显示名；`post` 消息中的 `at` 标签不会混入正文，此时以 `mentions` 日志中的身份和 `open_id` 为准。
+
+## 图片和文件下载
+
+不要只发送裸图片。在话题编辑器中输入 `@机器人 帮我看看这张图`，再把文字和图片作为同一条消息发送，以覆盖 `post` 内嵌图片分支。
+
+资源会保存到：
+
+```text
+data/downloads/
+```
+
+图片根据响应 `Content-Type` 保存为 `jpg`、`png`、`gif`、`webp`、`bmp` 或 `ico`；无法识别时使用 `.img`。普通文件优先保留原文件扩展名，无法识别时使用 `.bin`。
+
+PowerShell 中可以检查下载结果：
+
+```powershell
+Get-ChildItem -LiteralPath .\data\downloads
+```
+
+验证范围：
+
+- `@机器人 + 文字 + JPEG/PNG/WebP`：扩展名应与真实格式一致
+- `@机器人 + 文字 + 普通文件`：应保留原文件扩展名
+- 日志应出现 `  [下载] image|file → data\downloads\...`
+
+下载失败时：
+
+- `234003`：检查 `message_id` 和资源 key 是否来自同一条消息
+- `234004`：检查机器人是否仍在当前群里
+- 权限错误：确认应用已获得读取消息资源所需的消息权限
+- 日志成功但找不到文件：确认从项目根目录运行 `pnpm start`
+
+群聊中不带 `@机器人` 的普通消息默认不会推送给应用。
 
 ## OWNER_OPEN_ID
 
