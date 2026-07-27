@@ -8,10 +8,11 @@
     "start": "tsx watch --include .env src/index.ts",
     "start:once": "tsx src/index.ts",
     "build": "tsc",
-    "test": "tsx --test src/cli-events.test.ts",
+    "test": "tsx --test src/cli-events.test.ts src/im/lark.test.ts",
     "probe:cli": "tsx src/probe-cli.ts"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.71.1",
     "dotenv": "^17.2.1",
     "zod": "^4.0.14"
   },

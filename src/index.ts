@@ -1,31 +1,28 @@
+/**
+ * Agent OS 入口。
+ * 当前阶段：连上飞书，收到消息原样回复（echo bot）。
+ */
 import "dotenv/config";
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { startBot } from "./im/lark.js";
 
-const VERSION = "0.1.0";
+const appId = process.env.BOT_A_APP_ID;
+const appSecret = process.env.BOT_A_APP_SECRET;
 
-function hasCommand(command: string): boolean {
-  const locator = process.platform === "win32" ? "where.exe" : "sh";
-  const args = process.platform === "win32" ? [command] : ["-c", `command -v "$1"`, "--", command];
-
-  return spawnSync(locator, args, { stdio: "ignore" }).status === 0;
+if (!appId || !appSecret) {
+  console.error("缺少 BOT_A_APP_ID / BOT_A_APP_SECRET，请检查 .env");
+  process.exit(1);
 }
 
-function check(label: string, ok: boolean, hint: string): void {
-  console.log(`  ${ok ? "✅" : "⚠️ "} ${label}${ok ? "" : `  → ${hint}`}`);
-}
+console.log("Agent OS 启动，正在建立飞书长连接…");
 
-console.log(`\nAgent OS v${VERSION} — 一个人，一队 Agent\n`);
-console.log("环境自检：");
-
-const nodeMajor = Number(process.versions.node.split(".")[0]);
-check(`Node.js ${process.versions.node}`, nodeMajor >= 22, "需要 Node 22+");
-check(
-  ".env 配置文件",
-  existsSync(".env"),
-  "复制 .env.example 为 .env 并填入飞书凭证",
-);
-check("Claude Code CLI", hasCommand("claude"), "接入 Claude Code 前需要安装");
-check("Codex CLI", hasCommand("codex"), "接入 Codex 前需要安装");
-
-console.log("\n骨架就绪。下一步：接入 AI CLI 的 headless 事件流。\n");
+startBot({
+  appId,
+  appSecret,
+  onMessage: async (message, bot) => {
+    console.log(
+      `[收到] chat=${message.chatId} type=${message.chatType} sender=${message.senderOpenId} 内容: ${message.text}`,
+    );
+    const replyId = await bot.reply(message.messageId, `收到：${message.text}`);
+    console.log(`[已回] message_id=${replyId}`);
+  },
+});
