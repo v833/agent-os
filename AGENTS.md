@@ -9,7 +9,7 @@
 - `pnpm start`：同 `pnpm dev`
 - `pnpm start:once`：不启用 watch，直接启动飞书机器人
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
-- `pnpm test`：运行 CLI 与飞书消息解析测试
+- `pnpm test`：运行 CLI、飞书消息、卡片与会话模型测试
 - `pnpm probe:cli`：从标准输入读取 Codex/Claude JSONL 并输出时间线
 
 ## CLI Headless 调试
@@ -32,7 +32,11 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：话题任务卡片、模拟进度、提及解析和资源下载入口
+- `src/index.ts`：会话路由、命令、任务卡片和取消流程入口
+- `src/core/session-manager.ts`：话题到会话的映射与状态机
+- `src/core/session-manager.test.ts`：会话路由和状态流转测试
+- `src/core/command-parser.ts`：`/status`、`/close`、`/help` 解析
+- `src/core/command-parser.test.ts`：会话命令解析测试
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试
@@ -42,7 +46,7 @@ claude -p --resume <session_id> "再加1呢？只回答数字本身" --output-fo
 - `src/im/message-parser.test.ts`：提及和资源解析测试
 - `src/im/card.ts`：任务卡片构建与两秒节流更新器
 - `src/im/card.test.ts`：卡片渲染、边界和节流行为测试
-- `README.md`：飞书配置、话题、卡片、提及和下载验证步骤
+- `README.md`：飞书配置、会话、卡片、提及和下载验证步骤
 
 ## 工程约定
 

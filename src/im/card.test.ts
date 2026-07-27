@@ -73,3 +73,18 @@ test("finish 会丢弃尚未提交的中间状态", async () => {
 
   assert.deepEqual(updates, [9]);
 });
+
+test("cancel 会停止定时器且不提交最终卡片", async () => {
+  const updates: number[] = [];
+  const updater = new ThrottledCardUpdater(async (card) => {
+    updates.push((card as { version: number }).version);
+  }, 20);
+
+  updater.push({ version: 1 });
+  await updater.cancel();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.deepEqual(updates, []);
+  await updater.finish({ version: 9 });
+  assert.deepEqual(updates, []);
+});
