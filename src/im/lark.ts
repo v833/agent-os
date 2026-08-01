@@ -87,7 +87,24 @@ export function resourceExtension(
   return CONTENT_TYPE_EXTENSIONS[mime] ?? (type === "image" ? "img" : "bin");
 }
 
-export function extractText(messageType: string, content: string): string {
+interface PostElement {
+  tag?: string;
+  text?: string;
+  user_id?: string;
+}
+
+function renderPostElement(element: PostElement): string {
+  // at 保留飞书占位 ID，后续统一由 resolveMentions 还原成人名。
+  if (element.tag === "at") return element.user_id ?? "";
+  if (element.tag === "br") return "\n";
+  if (["text", "a", "code", "code_block", "md"].includes(element.tag ?? "")) {
+    return element.text ?? "";
+  }
+  return "";
+}
+
+/** 从 text/post 的双层 JSON 中提取可直接交给 CLI 的完整文本。 */
+export function extractMessageText(messageType: string, content: string): string {
   // 飞书协议是双层 JSON：事件已解析，message.content 仍需单独 JSON.parse。
   const parsed = JSON.parse(content);
 
@@ -96,17 +113,11 @@ export function extractText(messageType: string, content: string): string {
   }
 
   if (messageType === "post") {
-    // post 中的 at/img 是结构化元素，正文只拼接 text，身份和资源由其他解析器处理。
-    const paragraphs: unknown[][] = parsed.content ?? [];
+    const paragraphs: PostElement[][] = parsed.content ?? [];
     return paragraphs
-      .flat()
-      .filter(
-        (element): element is { tag: string; text?: string } =>
-          typeof element === "object" && element !== null && "tag" in element,
-      )
-      .filter((element) => element.tag === "text")
-      .map((element) => element.text ?? "")
-      .join("")
+      .map((paragraph) => paragraph.map(renderPostElement).join(""))
+      .filter(Boolean)
+      .join("\n")
       .trim();
   }
 
@@ -175,7 +186,7 @@ export function startBot(options: BotOptions): Bot {
         chatId: message.chat_id,
         chatType: message.chat_type,
         messageType: message.message_type,
-        text: extractText(message.message_type, message.content),
+        text: extractMessageText(message.message_type, message.content),
         rawContent: message.content,
         rootId: message.root_id ?? "",
         threadId: message.thread_id ?? "",

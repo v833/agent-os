@@ -19,6 +19,8 @@ const SessionSchema = z.object({
   chatId: z.string().min(1),
   // 当前以 Codex 为默认引擎，同时保留已经接入的 Claude 会话类型。
   cliId: z.enum(["codex", "claude"]),
+  // 旧快照没有恢复指针，首次成功执行后才会写入，因此必须保持可选。
+  cliSessionId: z.string().min(1).optional(),
   status: z.enum(["creating", "active", "idle", "closed"]),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

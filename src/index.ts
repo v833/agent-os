@@ -4,14 +4,12 @@
  */
 import "dotenv/config";
 import { join, resolve as resolvePath } from "node:path";
-import { runClaude } from "./cli/claude-runner.js";
-import { runCodex } from "./cli/codex-runner.js";
+import { ClaudeAdapter } from "./cli/claude-adapter.js";
+import { CodexAdapter } from "./cli/codex-adapter.js";
+import { runCli } from "./cli/runner.js";
+import type { CliAdapter, CliId } from "./cli/types.js";
 import { parseCommand } from "./core/command-parser.js";
-import {
-  SessionManager,
-  type CliId,
-  type Session,
-} from "./core/session-manager.js";
+import { SessionManager, type Session } from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
 import { buildTaskCard } from "./im/card.js";
 import { startBot } from "./im/lark.js";
@@ -42,6 +40,10 @@ const CLI_LABELS: Record<CliId, string> = {
   codex: "Codex",
   claude: "Claude Code",
 };
+const cliAdapters: Record<CliId, CliAdapter> = {
+  codex: new CodexAdapter(),
+  claude: new ClaudeAdapter(),
+};
 
 console.log("Agent OS 启动，正在建立飞书长连接…");
 console.log(
@@ -57,13 +59,21 @@ console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
 // AbortController 与会话一一对应，使 /close 能取消后台任务，而不影响其他话题。
 const activeRuns = new Map<string, AbortController>();
 
-function executeCli(cliId: CliId, prompt: string, signal: AbortSignal) {
+function executeCli(
+  cliId: CliId,
+  prompt: string,
+  cliSessionId: string | undefined,
+  signal: AbortSignal,
+) {
   const cwd = cliWorkdirs[cliId];
   console.log(`[CLI] 启动 engine=${cliId} cwd=${cwd}`);
-  if (cliId === "claude") {
-    return runClaude({ prompt, cwd, signal });
-  }
-  return runCodex({ prompt, cwd, signal });
+  return runCli({
+    adapter: cliAdapters[cliId],
+    prompt,
+    cwd,
+    sessionId: cliSessionId,
+    signal,
+  });
 }
 
 async function markSessionIdle(sessionId: string): Promise<void> {
@@ -85,6 +95,7 @@ function formatSessionStatus(session: Session): string {
     `会话：${session.id}`,
     `状态：${STATUS_LABELS[session.status]}`,
     `执行引擎：${session.cliId}`,
+    `CLI 会话：${session.cliSessionId ?? "(尚未建立)"}`,
     `话题：${session.threadId}`,
     `更新时间：${session.updatedAt}`,
   ].join("\n");
@@ -234,9 +245,21 @@ startBot({
     console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
 
     // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
-    void executeCli(session.cliId, resolved, run.signal)
+    void executeCli(
+      session.cliId,
+      resolved,
+      session.cliSessionId,
+      run.signal,
+    )
       .then(async (result) => {
         // /close 与子进程结束可能竞态；取消后不允许再回传成功状态。
+        if (run.signal.aborted) return;
+        if (
+          result.sessionId &&
+          result.sessionId !== session.cliSessionId
+        ) {
+          await sessions.setCliSessionId(session.id, result.sessionId);
+        }
         if (run.signal.aborted) return;
         await bot.updateCard(
           cardId,

@@ -8,7 +8,7 @@
     "start": "tsx watch --include .env src/index.ts",
     "start:once": "tsx src/index.ts",
     "build": "tsc",
-    "test": "tsx --test src/cli-events.test.ts src/cli/jsonl-runner.test.ts src/cli/cli-runners.test.ts src/im/lark.test.ts src/im/message-parser.test.ts src/im/card.test.ts src/core/session-store.test.ts src/core/session-manager.test.ts src/core/command-parser.test.ts",
+    "test": "tsx --test src/cli-events.test.ts src/cli/runner.test.ts src/cli/cli-adapters.test.ts src/im/lark.test.ts src/im/message-parser.test.ts src/im/card.test.ts src/core/session-store.test.ts src/core/session-manager.test.ts src/core/command-parser.test.ts",
     "probe:cli": "tsx src/probe-cli.ts"
   },
   "dependencies": {

@@ -10,11 +10,33 @@ export interface ResolvedCliCommand {
   argsPrefix: string[];
 }
 
-export interface ResolveCliCommandOptions {
-  name: string;
+interface WindowsCliDefinition {
   windowsPackageEntry: string[];
   windowsPackageEntryType: "node" | "executable";
 }
+
+const WINDOWS_CLI_DEFINITIONS: Record<string, WindowsCliDefinition> = {
+  codex: {
+    windowsPackageEntry: [
+      "node_modules",
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js",
+    ],
+    windowsPackageEntryType: "node",
+  },
+  claude: {
+    windowsPackageEntry: [
+      "node_modules",
+      "@anthropic-ai",
+      "claude-code",
+      "bin",
+      "claude.exe",
+    ],
+    windowsPackageEntryType: "executable",
+  },
+};
 
 function pathDirectories(): string[] {
   return (process.env.PATH ?? "")
@@ -25,29 +47,31 @@ function pathDirectories(): string[] {
 
 /** 解析已安装 CLI 的可执行入口，非 Windows 平台直接交给 PATH。 */
 export function resolveCliCommand(
-  options: ResolveCliCommandOptions,
+  command: string,
 ): ResolvedCliCommand {
-  if (process.platform !== "win32") {
-    return { command: options.name, argsPrefix: [] };
-  }
+  if (process.platform !== "win32") return { command, argsPrefix: [] };
+
+  const definition = WINDOWS_CLI_DEFINITIONS[command];
+  // 测试或后续适配器可以提供绝对入口；只有已知 npm CLI 需要特殊解析。
+  if (!definition) return { command, argsPrefix: [] };
 
   const directories = pathDirectories();
   for (const directory of directories) {
-    const packageEntry = join(directory, ...options.windowsPackageEntry);
+    const packageEntry = join(directory, ...definition.windowsPackageEntry);
     if (!existsSync(packageEntry)) continue;
-    if (options.windowsPackageEntryType === "node") {
+    if (definition.windowsPackageEntryType === "node") {
       return { command: process.execPath, argsPrefix: [packageEntry] };
     }
     return { command: packageEntry, argsPrefix: [] };
   }
 
   for (const directory of directories) {
-    const executable = join(directory, `${options.name}.exe`);
+    const executable = join(directory, `${command}.exe`);
     if (existsSync(executable)) {
       return { command: executable, argsPrefix: [] };
     }
   }
 
   // 明确使用 .exe，避免 Node 命中 npm 的无扩展名 sh 脚本后返回 EPERM。
-  return { command: `${options.name}.exe`, argsPrefix: [] };
+  return { command: `${command}.exe`, argsPrefix: [] };
 }

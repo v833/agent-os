@@ -4,31 +4,50 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractText, getHeader, resourceExtension } from "./lark.js";
+import {
+  extractMessageText,
+  getHeader,
+  resourceExtension,
+} from "./lark.js";
 
 test("提取 text 消息正文", () => {
-  assert.equal(extractText("text", JSON.stringify({ text: "你好" })), "你好");
+  assert.equal(
+    extractMessageText("text", JSON.stringify({ text: "你好" })),
+    "你好",
+  );
 });
 
-test("提取 post 消息中的纯文本并忽略 at 和图片", () => {
+test("提取 post 消息中的提及、链接、代码、Markdown 和换行", () => {
   const content = JSON.stringify({
     content: [
       [
-        { tag: "at", user_id: "ou_xxx" },
-        { tag: "text", text: " 你好，" },
+        { tag: "at", user_id: "@_user_1" },
+        { tag: "text", text: " 请检查 " },
+        { tag: "a", text: "文档", href: "https://example.com" },
+        { tag: "br" },
+        { tag: "code", text: "pnpm build" },
       ],
       [
         { tag: "img", image_key: "img_xxx" },
-        { tag: "text", text: "在吗？ " },
+        { tag: "code_block", text: "const answer = 42;" },
+      ],
+      [
+        { tag: "md", text: "**完成**" },
       ],
     ],
   });
 
-  assert.equal(extractText("post", content), "你好，在吗？");
+  assert.equal(
+    extractMessageText("post", content),
+    "@_user_1 请检查 文档\npnpm build\nconst answer = 42;\n**完成**",
+  );
 });
 
 test("非文本消息返回空字符串", () => {
-  assert.equal(extractText("image", JSON.stringify({ image_key: "img_xxx" })), "");
+  assert.equal(
+    extractMessageText("image", JSON.stringify({ image_key: "img_xxx" })),
+    "",
+  );
 });
 
 test("读取不同形式的 Content-Type 响应头", () => {

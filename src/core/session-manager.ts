@@ -3,9 +3,8 @@
  * creating、active、idle、closed 的生命周期，并协调内存与磁盘状态。
  */
 import { randomUUID } from "node:crypto";
+import type { CliId } from "../cli/types.js";
 import type { SessionStore } from "./session-store.js";
-
-export type CliId = "codex" | "claude";
 
 export type SessionStatus = "creating" | "active" | "idle" | "closed";
 
@@ -14,6 +13,7 @@ export interface Session {
   threadId: string;
   chatId: string;
   cliId: CliId;
+  cliSessionId?: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -147,6 +147,32 @@ export class SessionManager {
       await this.persist();
     } catch (error) {
       // 只回滚自己的更新，不能覆盖同一会话随后已经完成的新状态变化。
+      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
+      throw error;
+    }
+    return updated;
+  }
+
+  /** 保存执行引擎返回的恢复指针，使后续消息和重启恢复都能继续上下文。 */
+  async setCliSessionId(
+    sessionId: string,
+    cliSessionId: string,
+  ): Promise<Session> {
+    const current = this.get(sessionId);
+    if (!current) throw new Error(`会话不存在: ${sessionId}`);
+    if (!cliSessionId) throw new Error("CLI 会话 ID 不能为空");
+
+    const updated: Session = {
+      ...current,
+      cliSessionId,
+      updatedAt: this.now().toISOString(),
+    };
+    const key = sessionKey(updated.chatId, updated.threadId);
+    this.sessions.set(key, updated);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 恢复指针只有真正落盘后才可信，失败时同步撤销内存变化。
       if (this.sessions.get(key) === updated) this.sessions.set(key, current);
       throw error;
     }

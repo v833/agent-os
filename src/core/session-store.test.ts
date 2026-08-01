@@ -43,6 +43,7 @@ test("保存后可以完整恢复 Codex 和 Claude 会话", async (t) => {
       id: "session-2",
       threadId: "omt_claude",
       cliId: "claude",
+      cliSessionId: "claude-session",
       status: "closed",
     }),
   ];
@@ -62,6 +63,7 @@ test("加载时过滤坏记录并把中断会话恢复为空闲", async (t) => {
       session({ status: "creating" }),
       session({ id: "session-2", threadId: "omt_active", status: "active" }),
       session({ id: "session-3", threadId: "omt_closed", status: "closed" }),
+      session({ id: "session-4", threadId: "omt_bad", cliSessionId: "" }),
       { id: "", status: "idle" },
     ]),
     "utf8",
@@ -126,6 +128,7 @@ test("模拟重启后原话题复用同一会话并恢复为空闲", async (t) =
   });
   const created = (await beforeRestart.resolve(message)).session;
   await beforeRestart.transition(created.id, "active");
+  await beforeRestart.setCliSessionId(created.id, "codex-thread");
 
   // 新建管理器模拟进程重启；磁盘中的 active 不能在新进程里继续执行。
   const afterRestart = await SessionManager.open({
@@ -136,4 +139,5 @@ test("模拟重启后原话题复用同一会话并恢复为空闲", async (t) =
   assert.equal(restored.isNew, false);
   assert.equal(restored.session.id, "session-stable");
   assert.equal(restored.session.status, "idle");
+  assert.equal(restored.session.cliSessionId, "codex-thread");
 });

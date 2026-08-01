@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，完成后更新任务卡片并把最终回答送回原话题。会话可跨进程重启恢复，同时保留 `@` 提及解析以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，完成后更新任务卡片并把最终回答送回原话题。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -56,6 +56,7 @@ CLAUDE_WORKDIR=C:\你的\项目\绝对路径
 - `CLI_ENGINE` 只能是 `codex` 或 `claude`，留空时默认使用 Codex。
 - 对应工作目录留空时使用 Agent OS 的启动目录。
 - 工作目录决定 CLI 读取、修改和执行命令的项目，启动前必须确认路径正确。
+- CLI 的本地会话与工作目录绑定；建立会话后不要修改对应 `CODEX_WORKDIR` 或 `CLAUDE_WORKDIR`，否则恢复指针可能失效。
 - 已持久化话题继续使用自己的 `cliId`；切换 `CLI_ENGINE` 只影响之后创建的新话题。
 
 Codex 通过 `codex exec --json --full-auto --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
@@ -74,7 +75,7 @@ Codex 通过 `codex exec --json --full-auto --skip-git-repo-check` 运行，允�
 
 根消息的 `rootId` 可能为空，但话题消息会带 `threadId`；已有话题内的回复通常同时带 `threadId` 和 `rootId`。任务卡片应留在当前话题。
 
-`text` 消息正文中的 `@_user_N` 会被还原为显示名；`post` 消息中的 `at` 标签不会混入正文，此时以 `mentions` 日志中的身份和 `open_id` 为准。
+`text` 消息正文中的 `@_user_N` 会被还原为显示名；`post` 消息会保留 `at` 占位符，并在后续统一还原提及。富文本中的 `text`、链接、行内代码、代码块、Markdown 和换行也会进入 CLI 提示词，图片仍由资源下载链路单独处理。
 
 ## 图片和文件下载
 
@@ -135,9 +136,9 @@ Get-ChildItem -LiteralPath .\data\downloads
 [CLI] 完成 engine=codex session_id=019f...
 ```
 
-Claude Code 的 `session_id` 来自最终 `result` 事件；Codex 的会话标识来自 `thread.started.thread_id`，最终回答取最后一个 `item.completed` 的 `agent_message`。
+Claude Code 的 `session_id` 来自 `system/init` 或最终 `result` 事件；Codex 的会话标识来自 `thread.started.thread_id`，最终回答取最后一个 `item.completed` 的 `agent_message`。供应商事件先由各自适配器翻译，再交给通用 Runner 处理。
 
-子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。
+子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认最多执行 10 分钟；超时或 `/close` 取消时会终止 CLI 及其整棵子进程树。
 
 ### 双引擎首通验收
 
@@ -158,7 +159,16 @@ Claude Code：
 
 真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
 
-当前只打印 CLI 返回的会话标识，尚未把它保存进 `Session`，也没有在下一轮带上 `resume` 参数。因此同一话题虽然会复用 Agent OS 会话，本阶段的每条普通任务仍是一次新的 CLI 对话。
+CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下一轮会自动调用 Claude Code 的 `--resume <session_id>` 或 Codex 的 `exec resume <thread_id>`；新话题没有恢复指针，会从干净上下文开始。
+
+### 多轮对话验收
+
+1. 新开话题发送“请记住暗号‘Agent 操作系统’，只回复‘记住了’”。
+2. 等待完成后，在同一话题追问“我刚才让你记住的暗号是什么？”，回答应包含“Agent 操作系统”。
+3. 发送 `/status`，应同时看到 Agent OS 的“会话”和执行引擎的“CLI 会话”。
+4. 打开 `data/sessions.json`，对应记录应包含非空 `cliSessionId`。
+5. 重启机器人并在原话题继续追问，上下文仍应保留。
+6. 新开另一个话题询问暗号，它不应继承上一话题的上下文。
 
 ## 会话模型
 
@@ -200,13 +210,14 @@ data/sessions.json
 [会话] 已恢复 0 个会话
 ```
 
-每次创建会话或切换状态时，`SessionManager` 都会保存完整快照。保存成功后内存和磁盘一起前进；首次创建保存失败会删除刚建立的内存会话，状态切换保存失败则回滚到原状态。
+每次创建会话、切换状态或更新 CLI 恢复指针时，`SessionManager` 都会保存完整快照。保存成功后内存和磁盘一起前进；首次创建保存失败会删除刚建立的内存会话，状态或恢复指针保存失败则回滚到原值。
 
 磁盘存储遵循以下规则：
 
 - 每条记录先经过 Zod 校验，坏记录会被过滤并从清理后的文件中移除。
 - 重启时仍为 `creating` 或 `active` 的会话恢复成 `idle`，因为旧任务进程已经不存在。
 - Codex 和 Claude 两种 `cliId` 都可以恢复。
+- 旧记录可以没有 `cliSessionId`；首次任务成功后写入，新记录的空字符串会被视为坏数据。
 - 并发保存通过写入队列串行执行，确保后触发的状态不会被旧快照覆盖。
 - 数据先完整写入 `sessions.json.tmp`，再用 `rename` 替换正式文件，避免留下半截 JSON。
 
@@ -219,10 +230,10 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 重启验收步骤：
 
 1. 在飞书新话题发送任务，等待卡片完成。
-2. 在原话题发送 `@机器人 /status`，记下会话 ID；磁盘状态应为 `idle`。
+2. 在原话题发送 `@机器人 /status`，记下“会话”和“CLI 会话”两个 ID；磁盘状态应为 `idle`。
 3. 在终端按 `Ctrl+C`，然后重新运行 `pnpm start`。
 4. 启动日志应显示 `[会话] 已恢复 1 个会话`，数量以实际已有话题为准。
-5. 在原话题再次发送 `@机器人 /status`，会话 ID 应与重启前相同，状态为“空闲”。
+5. 在原话题再次发送 `@机器人 /status`，两个会话 ID 都应与重启前相同，状态为“空闲”。
 6. 新开话题发送消息，应创建不同的会话 ID。
 
 ## 会话命令
@@ -236,7 +247,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 /close
 ```
 
-- `/status`：返回会话 ID、状态、执行引擎、话题 ID 和更新时间
+- `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、话题 ID 和更新时间
 - `/help`：列出三条命令
 - `/close`：关闭当前话题会话
 

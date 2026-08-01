@@ -79,7 +79,7 @@ test("相同话题 ID 在不同群中创建不同会话", async () => {
   assert.equal(manager.size, 2);
 });
 
-test("会话只允许合法状态流转并更新时间", async () => {
+test("会话只允许合法状态流转并保留 CLI 会话 ID", async () => {
   let now = new Date("2026-07-27T00:00:00.000Z");
   const manager = new SessionManager({
     createId: () => "session-1",
@@ -92,12 +92,34 @@ test("会话只允许合法状态流转并更新时间", async () => {
   assert.equal(active.status, "active");
   assert.equal(active.updatedAt, "2026-07-27T00:01:00.000Z");
 
+  now = new Date("2026-07-27T00:02:00.000Z");
+  const withCliSession = await manager.setCliSessionId(
+    created.id,
+    "codex-thread",
+  );
+  assert.equal(withCliSession.cliSessionId, "codex-thread");
+  assert.equal(withCliSession.status, "active");
+  assert.equal(withCliSession.updatedAt, "2026-07-27T00:02:00.000Z");
+
   await manager.transition(created.id, "idle");
   await manager.transition(created.id, "active");
   await manager.transition(created.id, "closed");
   assert.equal(manager.get(created.id)?.status, "closed");
+  assert.equal(manager.get(created.id)?.cliSessionId, "codex-thread");
   await assert.rejects(manager.transition(created.id, "active"), /不能切换/);
   await assert.rejects(manager.transition("missing", "active"), /会话不存在/);
+});
+
+test("CLI 会话 ID 拒绝空值和不存在的 Agent OS 会话", async () => {
+  const manager = new SessionManager({ createId: () => "session-1" });
+  const created = (await manager.resolve(address())).session;
+
+  await assert.rejects(manager.setCliSessionId(created.id, ""), /不能为空/);
+  await assert.rejects(
+    manager.setCliSessionId("missing", "codex-thread"),
+    /会话不存在/,
+  );
+  assert.equal(manager.get(created.id)?.cliSessionId, undefined);
 });
 
 test("打开管理器时恢复原话题和会话 ID", async () => {
@@ -106,6 +128,7 @@ test("打开管理器时恢复原话题和会话 ID", async () => {
     threadId: "omt_thread",
     chatId: "oc_chat",
     cliId: "codex",
+    cliSessionId: "codex-thread",
     status: "idle",
     createdAt: "2026-07-27T00:00:00.000Z",
     updatedAt: "2026-07-27T00:01:00.000Z",
@@ -121,9 +144,10 @@ test("打开管理器时恢复原话题和会话 ID", async () => {
   assert.equal(manager.size, 1);
   assert.equal(resolved.isNew, false);
   assert.equal(resolved.session.id, "session-restored");
+  assert.equal(resolved.session.cliSessionId, "codex-thread");
 });
 
-test("保存失败时回滚新建会话和状态变化", async () => {
+test("保存失败时回滚新建会话、状态变化和 CLI 会话 ID", async () => {
   let failSave = true;
   let sequence = 0;
   const store: SessionStore = {
@@ -146,4 +170,10 @@ test("保存失败时回滚新建会话和状态变化", async () => {
 
   await assert.rejects(manager.transition(created.id, "active"), /disk full/);
   assert.equal(manager.get(created.id)?.status, "creating");
+
+  await assert.rejects(
+    manager.setCliSessionId(created.id, "codex-thread"),
+    /disk full/,
+  );
+  assert.equal(manager.get(created.id)?.cliSessionId, undefined);
 });
