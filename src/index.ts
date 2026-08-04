@@ -7,10 +7,11 @@ import { join, resolve as resolvePath } from "node:path";
 import { ClaudeAdapter } from "./cli/claude-adapter.js";
 import { CodexAdapter } from "./cli/codex-adapter.js";
 import { runCli } from "./cli/runner.js";
-import type { CliAdapter, CliId } from "./cli/types.js";
+import type { CliAdapter, CliEvent, CliId } from "./cli/types.js";
 import { parseCommand } from "./core/command-parser.js";
 import { SessionManager, type Session } from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
+import { TaskProgressTracker } from "./core/task-progress.js";
 import { buildTaskCard } from "./im/card.js";
 import { startBot } from "./im/lark.js";
 import {
@@ -64,6 +65,7 @@ function executeCli(
   prompt: string,
   cliSessionId: string | undefined,
   signal: AbortSignal,
+  onEvent?: (event: CliEvent) => void,
 ) {
   const cwd = cliWorkdirs[cliId];
   console.log(`[CLI] 启动 engine=${cliId} cwd=${cwd}`);
@@ -73,6 +75,7 @@ function executeCli(
     cwd,
     sessionId: cliSessionId,
     signal,
+    onEvent,
   });
 }
 
@@ -244,12 +247,35 @@ startBot({
     }
     console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
 
+    const progress = new TaskProgressTracker();
+
     // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
     void executeCli(
       session.cliId,
       resolved,
       session.cliSessionId,
       run.signal,
+      (event) => {
+        if (
+          event.type !== "tool_start" &&
+          event.type !== "tool_end" &&
+          event.type !== "context"
+        ) {
+          return;
+        }
+
+        const snapshot = progress.accept(event);
+        const currentDetail = snapshot.currentDetail
+          ? ` detail=${snapshot.currentDetail}`
+          : "";
+        const context =
+          snapshot.contextUsedTokens === undefined
+            ? ""
+            : ` context=${snapshot.contextUsedTokens}`;
+        console.log(
+          `[进度] ${snapshot.current}${currentDetail} tools=${snapshot.completedCount}/${snapshot.toolCount}${context}`,
+        );
+      },
     )
       .then(async (result) => {
         // /close 与子进程结束可能竞态；取消后不允许再回传成功状态。

@@ -5,7 +5,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import { resolveCliCommand } from "./command-resolver.js";
-import type { CliAdapter, CliRunResult } from "./types.js";
+import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -16,6 +16,7 @@ export interface RunCliOptions {
   sessionId?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  onEvent?: (event: CliEvent) => void;
 }
 
 function stopProcessTree(child: ChildProcess): void {
@@ -49,6 +50,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     sessionId,
     signal,
     timeoutMs = DEFAULT_TIMEOUT_MS,
+    onEvent,
   } = options;
 
   if (signal?.aborted) {
@@ -74,6 +76,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     const lines = createInterface({ input: child.stdout });
     let observedSessionId = sessionId;
     let finalAnswer: string | undefined;
+    let finalStats: CliRunResult["stats"];
     let resultError: Error | undefined;
     let stderr = "";
     let settled = false;
@@ -104,13 +107,23 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
     lines.on("line", (line) => {
       try {
-        const event = adapter.parseEvent(line);
-        if (!event) return;
-        if (event.sessionId) observedSessionId = event.sessionId;
-        if (event.type === "error") {
-          resultError = new Error(event.message);
-        } else if (event.type === "result") {
-          finalAnswer = event.answer;
+        for (const event of adapter.parseEvents(line)) {
+          // 观察者不能破坏 Runner 内部状态更新；异常会在进程退出后稳定拒绝。
+          try {
+            onEvent?.(event);
+          } catch (error) {
+            resultError =
+              error instanceof Error ? error : new Error(String(error));
+          }
+          if ("sessionId" in event && event.sessionId) {
+            observedSessionId = event.sessionId;
+          }
+          if (event.type === "error") {
+            resultError = new Error(event.message);
+          } else if (event.type === "result") {
+            finalAnswer = event.answer;
+            finalStats = event.stats;
+          }
         }
       } catch (error) {
         resultError =
@@ -164,6 +177,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       resolve({
         answer: finalAnswer,
         ...(observedSessionId ? { sessionId: observedSessionId } : {}),
+        ...(finalStats ? { stats: finalStats } : {}),
       });
     });
   });

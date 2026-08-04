@@ -75,73 +75,249 @@ test("Windows 下解析到可直接 spawn 的真实 CLI 入口", () => {
   assert.equal(claude.command.toLowerCase().endsWith(".cmd"), false);
 });
 
-test("Claude Code 解析初始化、最终回答和结果错误", () => {
+test("Claude Code 一行解析上下文和全部工具调用", () => {
   const adapter = new ClaudeAdapter();
 
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
       JSON.stringify({
         type: "system",
         subtype: "init",
         session_id: "claude-session",
       }),
     ),
-    { type: "session", sessionId: "claude-session" },
+    [{ type: "session", sessionId: "claude-session" }],
   );
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          usage: {
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 3,
+          },
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-read",
+              name: "Read",
+              input: { file_path: "C:\\repo\\src\\index.ts" },
+            },
+            {
+              type: "tool_use",
+              id: "tool-bash",
+              name: "Bash",
+              input: { description: "  运行   测试  " },
+            },
+          ],
+        },
+      }),
+    ),
+    [
+      { type: "context", usedTokens: 38 },
+      {
+        type: "tool_start",
+        toolUseId: "tool-read",
+        toolName: "Read",
+        label: "读取文件",
+        detail: "repo/src/index.ts",
+      },
+      {
+        type: "tool_start",
+        toolUseId: "tool-bash",
+        toolName: "Bash",
+        label: "运行命令",
+        detail: "运行 测试",
+      },
+    ],
+  );
+});
+
+test("Claude Code 解析工具结果、最终统计和结果错误", () => {
+  const adapter = new ClaudeAdapter();
+
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tool-read" },
+            {
+              type: "tool_result",
+              tool_use_id: "tool-bash",
+              is_error: true,
+            },
+          ],
+        },
+      }),
+    ),
+    [
+      { type: "tool_end", toolUseId: "tool-read", failed: false },
+      { type: "tool_end", toolUseId: "tool-bash", failed: true },
+    ],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
       JSON.stringify({
         type: "result",
         result: "项目名是 agent-os",
         session_id: "claude-session",
+        duration_ms: 1_500,
+        num_turns: 2,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 3,
+        },
+        modelUsage: {
+          claude: { contextWindow: 200_000 },
+          fallback: { contextWindow: 128_000 },
+        },
       }),
     ),
-    {
-      type: "result",
-      answer: "项目名是 agent-os",
-      sessionId: "claude-session",
-    },
+    [
+      {
+        type: "result",
+        answer: "项目名是 agent-os",
+        sessionId: "claude-session",
+        stats: {
+          durationMs: 1_500,
+          turns: 2,
+          totalTokens: 38,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 20,
+          cacheCreationTokens: 3,
+          contextWindowTokens: 200_000,
+        },
+      },
+    ],
   );
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
       JSON.stringify({
         type: "result",
         is_error: true,
         result: "余额不足",
       }),
     ),
-    { type: "error", message: "余额不足" },
+    [{ type: "error", message: "余额不足" }],
   );
-  assert.equal(adapter.parseEvent("diagnostic"), undefined);
-  assert.equal(adapter.parseEvent(JSON.stringify({ type: "assistant" })), undefined);
+  assert.deepEqual(adapter.parseEvents("diagnostic"), []);
+  assert.deepEqual(
+    adapter.parseEvents(JSON.stringify({ type: "assistant" })),
+    [],
+  );
 });
 
-test("Codex 解析会话、最终回答和协议错误", () => {
+test("Codex 解析会话、命令进度、上下文和最终回答", () => {
   const adapter = new CodexAdapter();
 
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
       JSON.stringify({ type: "thread.started", thread_id: "codex-thread" }),
     ),
-    { type: "session", sessionId: "codex-thread" },
+    [{ type: "session", sessionId: "codex-thread" }],
   );
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.started",
+        item: {
+          id: "item-1",
+          type: "command_execution",
+          command: "pwsh.exe -Command Get-Location",
+          status: "in_progress",
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "item-1",
+        toolName: "command_execution",
+        label: "运行命令",
+        detail: "pwsh.exe -Command Get-Location",
+      },
+    ],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item-1",
+          type: "command_execution",
+          exit_code: 0,
+          status: "completed",
+        },
+      }),
+    ),
+    [{ type: "tool_end", toolUseId: "item-1", failed: false }],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
       JSON.stringify({
         type: "item.completed",
         item: { type: "agent_message", text: "项目名是 agent-os" },
       }),
     ),
-    { type: "result", answer: "项目名是 agent-os" },
+    [{ type: "result", answer: "项目名是 agent-os" }],
   );
   assert.deepEqual(
-    adapter.parseEvent(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "turn.completed",
+        usage: {
+          input_tokens: 76_260,
+          cached_input_tokens: 41_216,
+          output_tokens: 126,
+        },
+      }),
+    ),
+    [{ type: "context", usedTokens: 76_260 }],
+  );
+});
+
+test("Codex 标记命令失败并解析协议错误", () => {
+  const adapter = new CodexAdapter();
+
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.completed",
+        item: {
+          id: "item-failed",
+          type: "command_execution",
+          exit_code: 1,
+          status: "failed",
+        },
+      }),
+    ),
+    [{ type: "tool_end", toolUseId: "item-failed", failed: true }],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
       JSON.stringify({
         type: "turn.failed",
         error: { message: "模型不可用" },
       }),
     ),
-    { type: "error", message: "模型不可用" },
+    [{ type: "error", message: "模型不可用" }],
   );
-  assert.equal(adapter.parseEvent("not-json"), undefined);
+  assert.deepEqual(adapter.parseEvents("not-json"), []);
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.completed",
+        item: { id: "reasoning", type: "reasoning", text: "分析" },
+      }),
+    ),
+    [],
+  );
 });

@@ -22,23 +22,20 @@ class ScriptAdapter implements CliAdapter {
     return ["-e", this.script];
   }
 
-  parseEvent(line: string): CliEvent | undefined {
-    let event: Record<string, unknown>;
+  parseEvents(line: string): CliEvent[] {
+    let value: unknown;
     try {
-      event = JSON.parse(line) as Record<string, unknown>;
+      value = JSON.parse(line) as unknown;
     } catch {
-      return undefined;
+      return [];
     }
-    if (event.type === "session" && typeof event.sessionId === "string") {
-      return { type: "session", sessionId: event.sessionId };
-    }
-    if (event.type === "result" && typeof event.answer === "string") {
-      return { type: "result", answer: event.answer };
-    }
-    if (event.type === "error" && typeof event.message === "string") {
-      return { type: "error", message: event.message };
-    }
-    return undefined;
+    const events = Array.isArray(value) ? value : [value];
+    return events.filter(
+      (event): event is CliEvent =>
+        typeof event === "object" &&
+        event !== null &&
+        typeof (event as { type?: unknown }).type === "string",
+    );
   }
 }
 
@@ -102,7 +99,7 @@ test("传入会话 ID 时 Runner 使用适配器的续聊参数", async () => {
         `console.log(JSON.stringify({ type: "result", answer: "已续接" }));`,
       ];
     },
-    parseEvent: parser.parseEvent.bind(parser),
+    parseEvents: parser.parseEvents.bind(parser),
   };
 
   const result = await runCli({
@@ -124,6 +121,57 @@ test("协议事件明确报错时优先返回该错误", async () => {
       `console.log(JSON.stringify({ type: "error", message: "模型失败" }));`,
     ),
     /模型失败/,
+  );
+});
+
+test("按顺序分发一行中的多个事件并保留最终统计", async () => {
+  const observed: CliEvent[] = [];
+  const result = await runCli({
+    adapter: new ScriptAdapter(`
+      console.log(JSON.stringify([
+        { type: "context", usedTokens: 100 },
+        {
+          type: "tool_start",
+          toolUseId: "tool-1",
+          toolName: "Read",
+          label: "读取文件"
+        },
+        { type: "tool_end", toolUseId: "tool-1", failed: false },
+        {
+          type: "result",
+          answer: "完成",
+          stats: { durationMs: 500, turns: 1 }
+        }
+      ]));
+    `),
+    prompt: "测试",
+    cwd: process.cwd(),
+    onEvent: (event) => observed.push(event),
+  });
+
+  assert.deepEqual(
+    observed.map((event) => event.type),
+    ["context", "tool_start", "tool_end", "result"],
+  );
+  assert.deepEqual(result, {
+    answer: "完成",
+    stats: { durationMs: 500, turns: 1 },
+  });
+});
+
+test("事件观察者抛错时 Runner 稳定拒绝而不产生未捕获异常", async () => {
+  await assert.rejects(
+    runCli({
+      adapter: new ScriptAdapter(
+        `console.log(JSON.stringify({ type: "result", answer: "完成" }));`,
+      ),
+      prompt: "测试",
+      cwd: process.cwd(),
+      onEvent: () => {
+        throw new Error("观察者失败");
+      },
+    }),
+    /观察者失败/,
   );
 });
 
@@ -186,15 +234,15 @@ test("Windows 取消会终止 CLI 启动的整个进程树", async () => {
     process.stdout.write(JSON.stringify({ type: "descendant", pid: child.pid }) + "\\n");
     setInterval(() => {}, 1000);
   `);
-  const originalParseEvent = adapter.parseEvent.bind(adapter);
-  adapter.parseEvent = (line) => {
+  const originalParseEvents = adapter.parseEvents.bind(adapter);
+  adapter.parseEvents = (line) => {
     const event = JSON.parse(line) as { type?: string; pid?: number };
     if (event.type === "descendant") {
       descendantPid = event.pid;
       notifyDescendant?.();
-      return undefined;
+      return [];
     }
-    return originalParseEvent(line);
+    return originalParseEvents(line);
   };
   const running = runCli({
     adapter,

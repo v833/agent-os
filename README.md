@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，完成后更新任务卡片并把最终回答送回原话题。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，并在终端实时输出工具调用与上下文进度；完成后更新任务卡片并把最终回答送回原话题。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -123,10 +123,11 @@ Get-ChildItem -LiteralPath .\data\downloads
 1. 创建或复用当前话题的 Agent OS 会话，并切换为 `active`。
 2. 在原话题发送蓝色的“Codex 任务”或“Claude Code 任务”卡片。
 3. 后台启动真实 CLI 子进程，飞书长连接仍可处理 `/status` 和 `/close`。
-4. 按行解析 stdout 中的 JSONL；普通诊断噪音会被忽略。
-5. 成功时把原卡片更新为绿色 `100%`，再把最终回答回复到同一话题。
-6. 失败时把卡片更新为红色，并在同一话题回复具体错误。
-7. 最后清理运行记录，把未关闭的会话持久化为 `idle`。
+4. 按行解析 stdout 中的 JSONL；一行可产生多个统一事件，普通诊断噪音会被忽略。
+5. 工具、上下文事件实时汇总成稳定进度快照并打印到终端。
+6. 成功时把原卡片更新为绿色 `100%`，再把最终回答回复到同一话题。
+7. 失败时把卡片更新为红色，并在同一话题回复具体错误。
+8. 最后清理运行记录，把未关闭的会话持久化为 `idle`。
 
 终端会输出实际引擎和工作目录：
 
@@ -137,6 +138,27 @@ Get-ChildItem -LiteralPath .\data\downloads
 ```
 
 Claude Code 的 `session_id` 来自 `system/init` 或最终 `result` 事件；Codex 的会话标识来自 `thread.started.thread_id`，最终回答取最后一个 `item.completed` 的 `agent_message`。供应商事件先由各自适配器翻译，再交给通用 Runner 处理。
+
+### CLI 流式事件与终端进度
+
+适配器会把供应商 JSONL 统一为会话、工具开始、工具结束、上下文、最终结果和错误事件。Claude Code 同一条 `assistant` 消息中的上下文用量及多个 `tool_use` 都会保留；`tool_result` 通过调用 ID 与开始事件配对。最终结果还会保留耗时、轮次、输入/输出/缓存 Token 和模型上下文窗口等真实统计。
+
+Codex 使用 `item.started/item.completed` 中的 `command_execution` 记录命令开始和结束，用 `item.id` 配对，并从 `turn.completed.usage.input_tokens` 读取真实输入上下文。Codex 没有提供的 Claude 对应字段保持为空，不进行估算。
+
+高频事件由 `TaskProgressTracker` 汇总：它支持并行工具调用，记录耗时和失败状态，最多保留最近 12 条完成活动。当前阶段只把快照打印到终端，例如：
+
+```text
+[进度] 读取文件 detail=package.json tools=0/1 context=18432
+[进度] 正在分析执行结果 tools=1/1 context=18432
+```
+
+运行 `pnpm start` 后，在飞书新话题发送：
+
+```text
+@机器人 请读取 package.json 和 src/index.ts，总结项目的启动流程
+```
+
+终端应持续出现 `[进度]`，飞书中的简单任务卡片与最终回答仍按原链路工作，同一话题继续追问仍会续接原 CLI 会话。本节不实时刷新飞书卡片，卡片流式渲染与停止按钮属于后续实现。
 
 子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认最多执行 10 分钟；超时或 `/close` 取消时会终止 CLI 及其整棵子进程树。
 

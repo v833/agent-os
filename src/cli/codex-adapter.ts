@@ -10,6 +10,7 @@ interface CodexEvent {
   item?: unknown;
   error?: unknown;
   message?: unknown;
+  usage?: unknown;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -22,6 +23,21 @@ function errorMessage(value: unknown): string | undefined {
     return value.message;
   }
   return undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function shortText(value: unknown, maxLength = 72): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.length > maxLength
+    ? `${text.slice(0, maxLength - 1)}…`
+    : text;
 }
 
 function outputArgs(prompt: string): string[] {
@@ -43,16 +59,40 @@ export class CodexAdapter implements CliAdapter {
     return ["exec", "resume", sessionId, ...outputArgs(prompt)];
   }
 
+  /** 兼容旧的单事件调用；运行链路统一使用 parseEvents。 */
   parseEvent(line: string): CliEvent | undefined {
+    return this.parseEvents(line)[0];
+  }
+
+  parseEvents(line: string): CliEvent[] {
     let event: CodexEvent;
     try {
       event = JSON.parse(line) as CodexEvent;
     } catch {
-      return undefined;
+      return [];
     }
 
     if (event.type === "thread.started" && typeof event.thread_id === "string") {
-      return { type: "session", sessionId: event.thread_id };
+      return [{ type: "session", sessionId: event.thread_id }];
+    }
+
+    if (event.type === "item.started" && isObject(event.item)) {
+      if (
+        event.item.type === "command_execution" &&
+        typeof event.item.id === "string"
+      ) {
+        const detail = shortText(event.item.command);
+        return [
+          {
+            type: "tool_start",
+            toolUseId: event.item.id,
+            toolName: "command_execution",
+            label: "运行命令",
+            ...(detail ? { detail } : {}),
+          },
+        ];
+      }
+      return [];
     }
 
     if (event.type === "item.completed" && isObject(event.item)) {
@@ -60,16 +100,36 @@ export class CodexAdapter implements CliAdapter {
         event.item.type === "agent_message" &&
         typeof event.item.text === "string"
       ) {
-        return { type: "result", answer: event.item.text };
+        return [{ type: "result", answer: event.item.text }];
       }
-      return undefined;
+      if (
+        event.item.type === "command_execution" &&
+        typeof event.item.id === "string"
+      ) {
+        const exitCode = asNumber(event.item.exit_code);
+        return [
+          {
+            type: "tool_end",
+            toolUseId: event.item.id,
+            failed:
+              event.item.status === "failed" ||
+              (exitCode !== undefined && exitCode !== 0),
+          },
+        ];
+      }
+      return [];
+    }
+
+    if (event.type === "turn.completed" && isObject(event.usage)) {
+      const usedTokens = asNumber(event.usage.input_tokens);
+      return usedTokens === undefined ? [] : [{ type: "context", usedTokens }];
     }
 
     if (event.type === "turn.failed" || event.type === "error") {
       const message = errorMessage(event.error) ?? errorMessage(event.message);
-      return { type: "error", message: message || "Codex 执行失败" };
+      return [{ type: "error", message: message || "Codex 执行失败" }];
     }
 
-    return undefined;
+    return [];
   }
 }
