@@ -32,15 +32,17 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：会话路由、双 CLI 调度、流式进度日志、任务卡片和取消入口
+- `src/index.ts`：会话路由、双 CLI 调度、实时卡片编排、长答案续发和取消收尾
 - `src/core/session-manager.ts`：话题映射、状态机与持久化协调
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
 - `src/core/command-parser.ts`：`/status`、`/close`、`/help` 解析
 - `src/core/command-parser.test.ts`：会话命令解析测试
-- `src/core/task-progress.ts`：高频 CLI 事件的工具配对与稳定进度快照
-- `src/core/task-progress.test.ts`：并发工具、上下文、耗时和记录上限测试
+- `src/core/task-abort.ts`：任务发起人鉴权、运行实例隔离与停止信号
+- `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
+- `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
+- `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/cli/types.ts`：双 CLI 统一适配器、事件和运行结果契约
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
@@ -51,12 +53,12 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试
-- `src/im/lark.ts`：飞书收发、卡片回复/更新和消息资源下载
-- `src/im/lark.test.ts`：正文解析、响应头和扩展名测试
+- `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新和消息资源下载
+- `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
 - `src/im/message-parser.test.ts`：提及和资源解析测试
-- `src/im/card.ts`：任务卡片构建与两秒节流更新器
-- `src/im/card.test.ts`：卡片渲染、边界和节流行为测试
+- `src/im/card.ts`：任务生命周期卡片、长答案处理与一秒节流更新器
+- `src/im/card.test.ts`：四种卡片状态、长答案和节流并发测试
 - `README.md`：飞书配置、会话、卡片、提及和下载验证步骤
 
 ## 工程约定

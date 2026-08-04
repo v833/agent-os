@@ -6,8 +6,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { TaskProgressTracker } from "./task-progress.js";
 
-test("初始快照显示正在理解任务并包含窗口大小", () => {
-  const tracker = new TaskProgressTracker(() => 1_000, 200_000);
+test("初始快照显示正在理解任务并包含窗口大小和新会话标记", () => {
+  const tracker = new TaskProgressTracker(() => 1_000, 200_000, true);
 
   assert.deepEqual(tracker.snapshot(), {
     current: "正在理解任务",
@@ -16,6 +16,7 @@ test("初始快照显示正在理解任务并包含窗口大小", () => {
     completedCount: 0,
     activities: [],
     contextWindowTokens: 200_000,
+    startedNewSession: true,
   });
 });
 
@@ -24,6 +25,7 @@ test("按 ID 配对并发工具并记录上下文、耗时和失败状态", () =
   const tracker = new TaskProgressTracker(() => now);
 
   tracker.accept({ type: "context", usedTokens: 1_024 });
+  tracker.accept({ type: "context", usedTokens: 2_048 });
   now = 1_010;
   tracker.accept({
     type: "tool_start",
@@ -49,7 +51,8 @@ test("按 ID 配对并发工具并记录上下文、耗时和失败状态", () =
   assert.equal(firstDone.current, "运行命令");
   assert.equal(firstDone.completedCount, 1);
   assert.equal(firstDone.toolCount, 2);
-  assert.equal(firstDone.contextUsedTokens, 1_024);
+  assert.equal(firstDone.contextStartTokens, 1_024);
+  assert.equal(firstDone.contextUsedTokens, 2_048);
   assert.deepEqual(firstDone.activities[0], {
     toolName: "Read",
     label: "读取文件",

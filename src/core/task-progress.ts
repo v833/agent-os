@@ -21,7 +21,9 @@ export interface TaskProgressSnapshot {
   completedCount: number;
   activities: TaskActivity[];
   contextUsedTokens?: number;
+  contextStartTokens?: number;
   contextWindowTokens?: number;
+  startedNewSession?: boolean;
 }
 
 interface ActiveTool {
@@ -39,16 +41,20 @@ export class TaskProgressTracker {
   private toolCount = 0;
   private completedCount = 0;
   private contextUsedTokens: number | undefined;
+  private contextStartTokens: number | undefined;
 
   constructor(
     private readonly now: () => number = Date.now,
     private readonly contextWindowTokens?: number,
+    private readonly startedNewSession = false,
   ) {
     this.startedAt = now();
   }
 
   accept(event: CliEvent): TaskProgressSnapshot {
     if (event.type === "context") {
+      // 起点只记录一次，才能区分累计上下文与本轮实际增减。
+      this.contextStartTokens ??= event.usedTokens;
       this.contextUsedTokens = event.usedTokens;
     }
     if (event.type === "tool_start") {
@@ -93,9 +99,13 @@ export class TaskProgressTracker {
       ...(this.contextUsedTokens !== undefined
         ? { contextUsedTokens: this.contextUsedTokens }
         : {}),
+      ...(this.contextStartTokens !== undefined
+        ? { contextStartTokens: this.contextStartTokens }
+        : {}),
       ...(this.contextWindowTokens !== undefined
         ? { contextWindowTokens: this.contextWindowTokens }
         : {}),
+      ...(this.startedNewSession ? { startedNewSession: true } : {}),
     };
   }
 }

@@ -33,8 +33,8 @@
 
 新增 `src/core/task-abort.ts`：
 
-- `ActiveRun` 保存 `AbortController`、发起人 `ownerOpenId` 和可选 `cancelMode`。
-- `requestTaskAbort()` 只接受会话 ID 与飞书回调中的真实操作者 ID。
+- `ActiveRun` 保存 `AbortController`、发起人 `ownerOpenId`、每轮唯一 `runId` 和可选 `cancelMode`。
+- `requestTaskAbort()` 接受会话 ID、运行 ID 与飞书回调中的真实操作者 ID。
 - 返回 `stopped`、`already_stopping`、`not_found`、`forbidden` 四种稳定结果。
 - 只有发起人且任务仍在运行时才调用 `abort()`；旧卡片不会影响后来启动的任务。
 - 卡片按钮设置 `cancelMode="stop"`，`/close` 设置 `cancelMode="close"` 并关闭会话。

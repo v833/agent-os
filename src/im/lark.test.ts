@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   extractMessageText,
   getHeader,
+  parseCardAction,
   resourceExtension,
 } from "./lark.js";
 
@@ -61,4 +62,44 @@ test("文件优先保留原扩展名，图片按响应格式确定扩展名", ()
   assert.equal(resourceExtension("image", undefined, "image/webp"), "webp");
   assert.equal(resourceExtension("image", undefined, "application/octet-stream"), "img");
   assert.equal(resourceExtension("file", "无扩展名", "application/octet-stream"), "bin");
+});
+
+test("解析新版飞书卡片回调中的真实操作者、消息和按钮值", () => {
+  assert.deepEqual(
+    parseCardAction({
+      operator: { open_id: "ou_owner" },
+      context: { open_message_id: "om_card" },
+      action: {
+        value: {
+          action: "abort_task",
+          sessionId: "session-1",
+          runId: "run-1",
+        },
+      },
+    }),
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "om_card",
+      value: {
+        action: "abort_task",
+        sessionId: "session-1",
+        runId: "run-1",
+      },
+    },
+  );
+});
+
+test("兼容旧版卡片回调字段并把非对象 value 收敛为空对象", () => {
+  assert.deepEqual(
+    parseCardAction({
+      operator_id: { open_id: "ou_legacy" },
+      open_message_id: "om_legacy",
+      action: { value: "abort_task" },
+    }),
+    {
+      operatorOpenId: "ou_legacy",
+      messageId: "om_legacy",
+      value: {},
+    },
+  );
 });

@@ -1,6 +1,6 @@
 /**
- * 飞书平台适配器：WSClient 负责长连接收事件，Client 负责 REST 发消息、
- * 更新卡片和下载资源；对外只暴露 Agent OS 自己的干净消息模型。
+ * 飞书平台适配器：WSClient 负责长连接收消息与卡片动作，Client 负责 REST
+ * 回复、更新卡片和下载资源；对外只暴露 Agent OS 自己的干净事件模型。
  */
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { mkdir } from "node:fs/promises";
@@ -35,6 +35,24 @@ export interface BotOptions {
   appId: string;
   appSecret: string;
   onMessage: (message: IncomingMessage, bot: Bot) => Promise<void>;
+  onCardAction?: (
+    action: CardAction,
+  ) => Promise<CardActionResponse | undefined>;
+}
+
+/** 飞书卡片动作中业务层唯一需要信任的平台字段。 */
+export interface CardAction {
+  operatorOpenId: string;
+  messageId: string;
+  value: Record<string, unknown>;
+}
+
+export interface CardActionResponse {
+  toast?: {
+    type: "success" | "info" | "warning" | "error";
+    content: string;
+  };
+  card?: { type: "raw"; data: CardJson };
 }
 
 export interface Bot {
@@ -57,6 +75,36 @@ export interface Bot {
     saveDir: string,
     fileName?: string,
   ) => Promise<string>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** 兼容飞书卡片回调的新旧字段形态，并拒绝非对象按钮参数。 */
+export function parseCardAction(data: unknown): CardAction {
+  const root = isRecord(data) ? data : {};
+  const action = isRecord(root.action) ? root.action : {};
+  const operator = isRecord(root.operator) ? root.operator : {};
+  const legacyOperator = isRecord(root.operator_id) ? root.operator_id : {};
+  const context = isRecord(root.context) ? root.context : {};
+  const value = action.value;
+
+  return {
+    operatorOpenId:
+      typeof operator.open_id === "string"
+        ? operator.open_id
+        : typeof legacyOperator.open_id === "string"
+          ? legacyOperator.open_id
+          : "",
+    messageId:
+      typeof context.open_message_id === "string"
+        ? context.open_message_id
+        : typeof root.open_message_id === "string"
+          ? root.open_message_id
+          : "",
+    value: isRecord(value) ? value : {},
+  };
 }
 
 export function getHeader(headers: any, name: string): string {
@@ -125,7 +173,7 @@ export function extractMessageText(messageType: string, content: string): string
 }
 
 export function startBot(options: BotOptions): Bot {
-  const { appId, appSecret, onMessage } = options;
+  const { appId, appSecret, onMessage, onCardAction } = options;
   // Client 管“出站”：SDK 会自动维护 tenant token，无需业务层处理刷新。
   const client = new Lark.Client({ appId, appSecret });
 
@@ -176,8 +224,12 @@ export function startBot(options: BotOptions): Bot {
     },
   };
 
-  // EventDispatcher 管“分发”：这里只订阅收消息事件，后续事件继续集中注册。
+  // 两类长连接事件在平台边界归一化，核心层不依赖 SDK 的原始字段结构。
   const dispatcher = new Lark.EventDispatcher({}).register({
+    "card.action.trigger": async (data: unknown) => {
+      if (!onCardAction) return undefined;
+      return onCardAction(parseCardAction(data));
+    },
     "im.message.receive_v1": async (data) => {
       const message = data.message;
       // 在平台边界完成字段归一化，core 层不直接依赖飞书原始事件类型。
