@@ -36,15 +36,23 @@ test("同一群聊和话题复用同一个会话", async () => {
   assert.equal(manager.size, 1);
 });
 
-test("新会话使用配置的默认执行引擎", async () => {
-  const manager = new SessionManager({
-    createId: () => "session-claude",
-    defaultCliId: "claude",
-  });
+test("新会话使用 resolve 传入的执行引擎", async () => {
+  const manager = new SessionManager({ createId: () => "session-claude" });
 
-  const created = (await manager.resolve(address())).session;
+  const created = (await manager.resolve(address(), "claude")).session;
 
   assert.equal(created.cliId, "claude");
+});
+
+test("已有话题保持创建时的引擎，不接受后续请求覆盖", async () => {
+  const manager = new SessionManager({ createId: () => "session-codex" });
+
+  const created = await manager.resolve(address(), "codex");
+  const restored = await manager.resolve(address(), "claude");
+
+  assert.equal(created.session.cliId, "codex");
+  assert.equal(restored.isNew, false);
+  assert.equal(restored.session.cliId, "codex");
 });
 
 test("话题地址优先使用 threadId，其次 rootId，最后 messageId", async () => {

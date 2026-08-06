@@ -159,6 +159,38 @@ test("按顺序分发一行中的多个事件并保留最终统计", async () =>
   });
 });
 
+test("Codex 回答先到统计后到时合并为完整结果", async () => {
+  const result = await runScript(`
+    console.log(JSON.stringify({ type: "result", answer: "完成" }));
+    console.log(JSON.stringify({
+      type: "result",
+      answer: "",
+      stats: { inputTokens: 80, outputTokens: 20, totalTokens: 100 }
+    }));
+  `);
+
+  assert.deepEqual(result, {
+    answer: "完成",
+    stats: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+  });
+});
+
+test("Codex 统计先到回答后到时合并为完整结果", async () => {
+  const result = await runScript(`
+    console.log(JSON.stringify({
+      type: "result",
+      answer: "",
+      stats: { inputTokens: 40, outputTokens: 10, totalTokens: 50 }
+    }));
+    console.log(JSON.stringify({ type: "result", answer: "继续完成" }));
+  `);
+
+  assert.deepEqual(result, {
+    answer: "继续完成",
+    stats: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+  });
+});
+
 test("事件观察者抛错时 Runner 稳定拒绝而不产生未捕获异常", async () => {
   await assert.rejects(
     runCli({
@@ -200,10 +232,12 @@ test("AbortController 会终止子进程并返回稳定取消文案", async () =
 });
 
 test("超过时限会终止子进程并返回超时文案", async () => {
+  const startedAt = Date.now();
   await assert.rejects(
     runScript(`setInterval(() => {}, 1000);`, { timeoutMs: 20 }),
     /测试 CLI 执行超时/,
   );
+  assert.ok(Date.now() - startedAt < 3_000, "超时必须在终止宽限期内结束");
 });
 
 test("开始前已经取消时不会启动 CLI", async () => {

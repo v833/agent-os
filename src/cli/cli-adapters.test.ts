@@ -48,17 +48,17 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
   assert.deepEqual(adapter.buildArgs("你好"), [
     "exec",
     "--json",
-    "--full-auto",
+    "--sandbox",
+    "workspace-write",
     "--skip-git-repo-check",
     "你好",
   ]);
   assert.deepEqual(adapter.buildResumeArgs("继续", "codex-thread"), [
     "exec",
     "resume",
-    "codex-thread",
     "--json",
-    "--full-auto",
     "--skip-git-repo-check",
+    "codex-thread",
     "继续",
   ]);
 });
@@ -215,7 +215,7 @@ test("Claude Code 解析工具结果、最终统计和结果错误", () => {
   );
 });
 
-test("Codex 解析会话、命令进度、上下文和最终回答", () => {
+test("Codex 解析会话、四类工具、上下文、统计和最终回答", () => {
   const adapter = new CodexAdapter();
 
   assert.deepEqual(
@@ -240,7 +240,7 @@ test("Codex 解析会话、命令进度、上下文和最终回答", () => {
       {
         type: "tool_start",
         toolUseId: "item-1",
-        toolName: "command_execution",
+        toolName: "Bash",
         label: "运行命令",
         detail: "pwsh.exe -Command Get-Location",
       },
@@ -263,6 +263,66 @@ test("Codex 解析会话、命令进度、上下文和最终回答", () => {
   assert.deepEqual(
     adapter.parseEvents(
       JSON.stringify({
+        type: "item.started",
+        item: {
+          id: "item-file",
+          type: "file_change",
+          changes: [{ path: "src/index.ts" }],
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "item-file",
+        toolName: "Edit",
+        label: "修改文件",
+        detail: "src/index.ts",
+      },
+    ],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.started",
+        item: { id: "item-search", type: "web_search", query: "Codex CLI" },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "item-search",
+        toolName: "WebSearch",
+        label: "搜索资料",
+        detail: "Codex CLI",
+      },
+    ],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.started",
+        item: {
+          id: "item-mcp",
+          type: "mcp_tool_call",
+          server: "github",
+          tool: "get_issue",
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "item-mcp",
+        toolName: "MCP",
+        label: "调用外部工具",
+        detail: "github.get_issue",
+      },
+    ],
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
         type: "item.completed",
         item: { type: "agent_message", text: "项目名是 agent-os" },
       }),
@@ -280,7 +340,19 @@ test("Codex 解析会话、命令进度、上下文和最终回答", () => {
         },
       }),
     ),
-    [{ type: "context", usedTokens: 76_260 }],
+    [
+      { type: "context", usedTokens: 76_260 },
+      {
+        type: "result",
+        answer: "",
+        stats: {
+          totalTokens: 76_386,
+          inputTokens: 76_260,
+          outputTokens: 126,
+          cacheReadTokens: 41_216,
+        },
+      },
+    ],
   );
 });
 

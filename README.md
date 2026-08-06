@@ -36,6 +36,19 @@ codex --version
 claude --version
 ```
 
+Codex 尚未安装时执行：
+
+```powershell
+npm install -g @openai/codex
+codex
+```
+
+完成登录后，在项目目录验证非交互模式：
+
+```powershell
+codex exec --json --sandbox workspace-write --skip-git-repo-check "只回复：Codex 已就绪"
+```
+
 Claude Code 尚未安装时执行：
 
 ```powershell
@@ -43,23 +56,22 @@ npm install -g @anthropic-ai/claude-code
 claude
 ```
 
-首次运行 `claude` 时完成 Anthropic 登录。使用 DeepSeek 等兼容后端时，把供应商地址、认证令牌和模型配置保存在用户级 `~/.claude/settings.json`，不要写入项目或提交仓库。
+首次运行 `claude` 时完成 Anthropic 登录。使用兼容模型服务时，把供应商地址、认证令牌和模型配置保存在各 CLI 的用户级配置中，也可以使用 CC Switch 切换服务；不要把模型密钥写入项目或提交仓库。
 
 在 `.env` 中选择新话题默认使用的引擎和工作目录：
 
 ```dotenv
-CLI_ENGINE=codex
-CODEX_WORKDIR=C:\你的\项目\绝对路径
-CLAUDE_WORKDIR=C:\你的\项目\绝对路径
+DEFAULT_CLI=codex
+CLI_WORKDIR=C:\你的\项目\绝对路径
 ```
 
-- `CLI_ENGINE` 只能是 `codex` 或 `claude`，留空时默认使用 Codex。
-- 对应工作目录留空时使用 Agent OS 的启动目录。
+- `DEFAULT_CLI` 只能是 `codex` 或 `claude`，留空时默认使用 Codex。
+- `CLI_WORKDIR` 同时提供给两个 CLI，留空时使用 Agent OS 的启动目录；旧的 `CLAUDE_WORKDIR` 仍可作为回退值。
 - 工作目录决定 CLI 读取、修改和执行命令的项目，启动前必须确认路径正确。
-- CLI 的本地会话与工作目录绑定；建立会话后不要修改对应 `CODEX_WORKDIR` 或 `CLAUDE_WORKDIR`，否则恢复指针可能失效。
-- 已持久化话题继续使用自己的 `cliId`；切换 `CLI_ENGINE` 只影响之后创建的新话题。
+- CLI 的本地会话与工作目录绑定；建立会话后不要修改 `CLI_WORKDIR`，否则恢复指针可能失效。
+- 已持久化话题继续使用自己的 `cliId`；切换 `DEFAULT_CLI` 只影响之后创建的新话题。
 
-Codex 通过 `codex exec --json --full-auto --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
+Codex 通过 `codex exec --json --sandbox workspace-write --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件；同一话题追问使用 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
 ## 话题与提及验证
 
@@ -132,9 +144,11 @@ Get-ChildItem -LiteralPath .\data\downloads
 终端会输出实际引擎和工作目录：
 
 ```text
-[CLI] command=codex cwd=C:\你的\项目
+[CLI] default=codex
+[CLI] id=claude command=claude cwd=C:\你的\项目
+[CLI] id=codex command=codex cwd=C:\你的\项目
 [CLI] 启动 engine=codex cwd=C:\你的\项目
-[CLI] 完成 engine=codex session_id=019f...
+[CLI] codex 完成 session_id=019f...
 ```
 
 Claude Code 的 `session_id` 来自 `system/init` 或最终 `result` 事件；Codex 的会话标识来自 `thread.started.thread_id`，最终回答取最后一个 `item.completed` 的 `agent_message`。供应商事件先由各自适配器翻译，再交给通用 Runner 处理。
@@ -143,7 +157,7 @@ Claude Code 的 `session_id` 来自 `system/init` 或最终 `result` 事件；Co
 
 适配器会把供应商 JSONL 统一为会话、工具开始、工具结束、上下文、最终结果和错误事件。Claude Code 同一条 `assistant` 消息中的上下文用量及多个 `tool_use` 都会保留；`tool_result` 通过调用 ID 与开始事件配对。最终结果还会保留耗时、轮次、输入/输出/缓存 Token 和模型上下文窗口等真实统计。
 
-Codex 使用 `item.started/item.completed` 中的 `command_execution` 记录命令开始和结束，用 `item.id` 配对，并从 `turn.completed.usage.input_tokens` 读取真实输入上下文。Codex 没有提供的 Claude 对应字段保持为空，不进行估算。
+Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_change`、`web_search` 和 `mcp_tool_call` 展示命令、文件修改、搜索与外部工具轨迹，并用 `item.id` 配对。最终回答来自 `agent_message`，输入、输出、缓存输入和总 Token 来自随后到达的 `turn.completed`；Runner 会合并两条事件。Codex 没有提供的 Claude 对应字段保持为空，不进行估算。
 
 高频事件由 `TaskProgressTracker` 汇总：它支持并行工具调用，记录耗时、失败状态、本轮第一次和最新一次上下文，最多保留最近 12 条完成活动。快照仍会打印到终端，例如：
 
@@ -174,18 +188,21 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution` 记录命�
 
 Codex：
 
-1. 设置 `CLI_ENGINE=codex` 并运行 `pnpm start`。
+1. 设置 `DEFAULT_CLI=codex` 并运行 `pnpm start`。
 2. 新开飞书话题发送只读任务。
 3. 确认“Codex · 执行中”卡片实时更新，完成后变绿并显示真实回答。
 4. 终端应打印 Codex `session_id`。
+5. 同一话题继续追问，确认通过 `codex exec resume` 延续上下文。
 
 Claude Code：
 
 1. 先在同一终端手动执行一次 `claude -p "只回答 2" --output-format stream-json --verbose`，确认认证和模型后端可用。
-2. 设置 `CLI_ENGINE=claude`；watch 模式会因 `.env` 变化自动重启。
-3. 新开飞书话题发送只读任务，旧话题仍保留原执行引擎。
+2. 保持默认 Codex，在新话题发送 `/claude 检查 package.json 里的脚本`。
+3. 新话题应创建 Claude Code 会话，其他旧话题仍保留原执行引擎。
 4. 确认“Claude Code · 执行中”卡片实时更新，完成后变绿并显示真实回答。
 5. 终端应打印 Claude Code `session_id`。
+
+也可以在新话题用 `/codex <任务>` 显式选择 Codex。单独发送 `/codex` 或 `/claude` 会提示补充任务，不会启动进程；在已建立的 Codex 话题发送 `/claude <任务>`，或反向操作，系统会要求新开话题，避免混用两种 CLI 会话 ID。
 
 真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
 
@@ -224,7 +241,7 @@ creating → active → idle → active
 
 执行中的普通消息会收到“当前会话还在执行”的提示，不会启动第二段任务。
 
-当前默认执行引擎为 `codex`，会话类型同时支持 `claude`。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原群聊和话题恢复。
+当前默认执行引擎为 `codex`，会话类型同时支持 `claude`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原群聊和话题恢复。
 
 ## 会话持久化与重启恢复
 
@@ -275,11 +292,15 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 @机器人 /status
 /help
 /close
+/claude 检查 package.json
+/codex 查看当前目录结构
 ```
 
 - `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、话题 ID 和更新时间
-- `/help`：列出三条命令
+- `/help`：列出会话控制和双引擎选择命令
 - `/close`：关闭当前话题会话
+- `/claude <任务>`：新话题使用 Claude Code
+- `/codex <任务>`：新话题使用 Codex
 
 如果任务仍在执行，`/close` 会通过 `AbortController` 终止后台 CLI 子进程，并且不会写入绿色成功终态或回复最终答案。关闭后在同一话题发送普通消息，只会收到“请新开一个话题”的提醒。
 

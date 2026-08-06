@@ -4,12 +4,16 @@
  */
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { join, resolve as resolvePath } from "node:path";
-import { ClaudeAdapter } from "./cli/claude-adapter.js";
-import { CodexAdapter } from "./cli/codex-adapter.js";
+import { join } from "node:path";
+import {
+  getCliAdapter,
+  listCliAdapters,
+  parseCliId,
+  resolveCliWorkdir,
+} from "./cli/registry.js";
 import { runCli } from "./cli/runner.js";
-import type { CliAdapter, CliEvent, CliId } from "./cli/types.js";
-import { parseCommand } from "./core/command-parser.js";
+import type { CliAdapter } from "./cli/types.js";
+import { parseCliRequest, parseCommand } from "./core/command-parser.js";
 import { SessionManager, type Session } from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
 import { requestTaskAbort, type ActiveRun } from "./core/task-abort.js";
@@ -24,45 +28,32 @@ import {
 import { startBot } from "./im/lark.js";
 import {
   extractResourceKeys,
+  leadingMentionName,
   resolveMentions,
 } from "./im/message-parser.js";
 
 const appId = process.env.BOT_A_APP_ID;
 const appSecret = process.env.BOT_A_APP_SECRET;
-const configuredCliId = process.env.CLI_ENGINE?.trim().toLowerCase() || "codex";
 
 if (!appId || !appSecret) {
   console.error("缺少 BOT_A_APP_ID / BOT_A_APP_SECRET，请检查 .env");
   process.exit(1);
 }
-if (configuredCliId !== "codex" && configuredCliId !== "claude") {
-  console.error("CLI_ENGINE 只支持 codex 或 claude，请检查 .env");
-  process.exit(1);
-}
 
-const defaultCliId: CliId = configuredCliId;
-const cliWorkdirs: Record<CliId, string> = {
-  codex: resolvePath(process.env.CODEX_WORKDIR?.trim() || process.cwd()),
-  claude: resolvePath(process.env.CLAUDE_WORKDIR?.trim() || process.cwd()),
-};
-const CLI_LABELS: Record<CliId, string> = {
-  codex: "Codex",
-  claude: "Claude Code",
-};
-const cliAdapters: Record<CliId, CliAdapter> = {
-  codex: new CodexAdapter(),
-  claude: new ClaudeAdapter(),
-};
+const cliWorkdir = resolveCliWorkdir();
+const defaultCliId = parseCliId(process.env.DEFAULT_CLI);
 
 console.log("Agent OS 启动，正在建立飞书长连接…");
-console.log(
-  `[CLI] command=${defaultCliId} cwd=${cliWorkdirs[defaultCliId]}`,
-);
+console.log(`[CLI] default=${defaultCliId}`);
+for (const adapter of listCliAdapters()) {
+  console.log(
+    `[CLI] id=${adapter.id} command=${adapter.command} cwd=${cliWorkdir}`,
+  );
+}
 
 // 启动消息长连接前先恢复会话，避免恢复期间收到消息并创建重复映射。
 const sessions = await SessionManager.open({
   store: new JsonSessionStore(join("data", "sessions.json")),
-  defaultCliId,
 });
 console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
 // 每轮运行额外记录发起人和唯一 ID，供卡片按钮鉴权并隔离旧卡片。
@@ -71,18 +62,17 @@ const activeRuns = new Map<string, ActiveRun>();
 const contextWindows = new Map<string, number>();
 
 function executeCli(
-  cliId: CliId,
+  adapter: CliAdapter,
   prompt: string,
   cliSessionId: string | undefined,
   signal: AbortSignal,
-  onEvent?: (event: CliEvent) => void,
+  onEvent: Parameters<typeof runCli>[0]["onEvent"],
 ) {
-  const cwd = cliWorkdirs[cliId];
-  console.log(`[CLI] 启动 engine=${cliId} cwd=${cwd}`);
+  console.log(`[CLI] 启动 engine=${adapter.id} cwd=${cliWorkdir}`);
   return runCli({
-    adapter: cliAdapters[cliId],
+    adapter,
     prompt,
-    cwd,
+    cwd: cliWorkdir,
     sessionId: cliSessionId,
     signal,
     onEvent,
@@ -104,10 +94,11 @@ const STATUS_LABELS: Record<Session["status"], string> = {
 };
 
 function formatSessionStatus(session: Session): string {
+  const adapter = getCliAdapter(session.cliId);
   return [
     `会话：${session.id}`,
     `状态：${STATUS_LABELS[session.status]}`,
-    `执行引擎：${session.cliId}`,
+    `执行引擎：${adapter.displayName}`,
     `CLI 会话：${session.cliSessionId ?? "(尚未建立)"}`,
     `话题：${session.threadId}`,
     `更新时间：${session.updatedAt}`,
@@ -148,7 +139,24 @@ startBot({
   onMessage: async (message, bot) => {
     const resolved = resolveMentions(message.text, message.mentions);
     const hasThread = Boolean(message.threadId || message.rootId);
-    const { session, isNew } = await sessions.resolve(message);
+    const cliRequest = parseCliRequest(
+      resolved,
+      leadingMentionName(message.text, message.mentions),
+    );
+    if (cliRequest && !cliRequest.prompt) {
+      await bot.reply(
+        message.messageId,
+        `请在 /${cliRequest.cliId} 后面写下任务，例如：/${cliRequest.cliId} 检查项目状态`,
+        hasThread,
+      );
+      return;
+    }
+    const { session, isNew } = await sessions.resolve(
+      message,
+      cliRequest?.cliId ?? defaultCliId,
+    );
+    const cliAdapter = getCliAdapter(session.cliId);
+    const prompt = cliRequest?.prompt ?? resolved;
 
     console.log(
       `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,
@@ -162,15 +170,28 @@ startBot({
       `  [会话] ${isNew ? "新建" : "复用"} id=${session.id} status=${session.status}`,
     );
 
+    if (!isNew && cliRequest && cliRequest.cliId !== session.cliId) {
+      await bot.reply(
+        message.messageId,
+        `当前话题已经在使用 ${cliAdapter.displayName}。如需切换执行引擎，请新开一个话题。`,
+        hasThread,
+      );
+      return;
+    }
+
     const command = parseCommand(resolved);
 
     // 控制命令必须先于 active/closed 防御分支处理，否则执行中无法查询或关闭会话。
     if (command?.name === "help") {
       await bot.reply(
         message.messageId,
-        ["/status 查看当前会话", "/close 关闭当前会话", "/help 查看命令"].join(
-          "\n",
-        ),
+        [
+          "/status 查看当前会话",
+          "/close 关闭当前会话",
+          "/help 查看命令",
+          "/claude <任务> 新话题使用 Claude Code",
+          "/codex <任务> 新话题使用 Codex",
+        ].join("\n"),
         hasThread,
       );
       return;
@@ -241,8 +262,7 @@ startBot({
       runId: randomUUID(),
     };
     activeRuns.set(session.id, activeRun);
-    const cliLabel = CLI_LABELS[session.cliId];
-    const taskTitle = cliLabel;
+    const taskTitle = cliAdapter.displayName;
 
     const resources = extractResourceKeys(
       message.messageType,
@@ -346,8 +366,8 @@ startBot({
 
     // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
     void executeCli(
-      session.cliId,
-      resolved,
+      cliAdapter,
+      prompt,
       session.cliSessionId,
       run.signal,
       (event) => {
@@ -411,7 +431,7 @@ startBot({
           }
         }
         console.log(
-          `[CLI] 完成 engine=${session.cliId} session_id=${result.sessionId ?? "(无)"}`,
+          `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
         );
       })
       .catch(async (error) => {
@@ -421,7 +441,7 @@ startBot({
           return;
         }
         const errorMessage = (error as Error).message;
-        console.error(`[CLI] 执行失败 engine=${session.cliId}:`, errorMessage);
+        console.error(`[CLI] 执行失败 engine=${cliAdapter.id}:`, errorMessage);
         await cardUpdater.finish(
           buildTaskCard({
             title: taskTitle,

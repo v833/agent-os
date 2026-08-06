@@ -17,11 +17,9 @@
 Codex 为主路径：
 
 ```powershell
-codex exec --json "1加1等于几？只回答数字本身" | pnpm probe:cli
-codex exec resume <thread_id> --json "再加1呢？只回答数字本身" | pnpm probe:cli
+codex exec --json --sandbox workspace-write --skip-git-repo-check "1加1等于几？只回答数字本身" | pnpm probe:cli
+codex exec resume --json --skip-git-repo-check <thread_id> "再加1呢？只回答数字本身" | pnpm probe:cli
 ```
-
-如果不在 Git 仓库中运行，在 `codex exec` 后增加 `--skip-git-repo-check`。
 
 Claude Code：
 
@@ -37,17 +35,19 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
-- `src/core/command-parser.ts`：`/status`、`/close`、`/help` 解析
-- `src/core/command-parser.test.ts`：会话命令解析测试
+- `src/core/command-parser.ts`：会话控制命令与 `/claude`、`/codex` 引擎请求解析
+- `src/core/command-parser.test.ts`：会话命令、引擎选择和误识别边界测试
 - `src/core/task-abort.ts`：任务发起人鉴权、运行实例隔离与停止信号
 - `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/cli/types.ts`：双 CLI 统一适配器、事件和运行结果契约
+- `src/cli/registry.ts`：双引擎注册、查找与 `DEFAULT_CLI` 校验
+- `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
 - `src/cli/claude-adapter.ts`：Claude Code 多事件、工具、上下文与统计适配器
-- `src/cli/codex-adapter.ts`：Codex 多事件、命令进度与上下文适配器
+- `src/cli/codex-adapter.ts`：Codex 四类工具、上下文、答案与统计适配器
 - `src/cli/runner.test.ts`：子进程生命周期、事件分发、续聊和错误边界测试
 - `src/cli/cli-adapters.test.ts`：双 CLI 参数、多事件和协议解析测试
 - `src/cli-events.ts`：Codex/Claude 事件解析

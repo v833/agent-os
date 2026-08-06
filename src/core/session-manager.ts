@@ -35,7 +35,6 @@ export interface SessionManagerOptions {
   now?: () => Date;
   createId?: () => string;
   store?: SessionStore;
-  defaultCliId?: CliId;
 }
 
 // 所有合法状态迁移集中在这里，避免入口的不同分支各自修改状态。
@@ -62,13 +61,11 @@ export class SessionManager {
   private readonly now: () => Date;
   private readonly createId: () => string;
   private readonly store?: SessionStore;
-  private readonly defaultCliId: CliId;
 
   constructor(options: SessionManagerOptions = {}) {
     this.now = options.now ?? (() => new Date());
     this.createId = options.createId ?? randomUUID;
     this.store = options.store;
-    this.defaultCliId = options.defaultCliId ?? "codex";
   }
 
   /** 创建管理器并按原飞书话题键恢复已持久化的会话。 */
@@ -97,7 +94,11 @@ export class SessionManager {
     );
   }
 
-  async resolve(message: MessageAddress): Promise<ResolvedSession> {
+  /** 解析话题；传入的引擎只在首次创建时生效，已有会话绝不切换。 */
+  async resolve(
+    message: MessageAddress,
+    cliId: CliId = "codex",
+  ): Promise<ResolvedSession> {
     const threadId = topicIdOf(message);
     const key = sessionKey(message.chatId, threadId);
     const existing = this.sessions.get(key);
@@ -109,7 +110,7 @@ export class SessionManager {
       id: this.createId(),
       threadId,
       chatId: message.chatId,
-      cliId: this.defaultCliId,
+      cliId,
       status: "creating",
       createdAt: now,
       updatedAt: now,

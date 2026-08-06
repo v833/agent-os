@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   extractResourceKeys,
+  leadingMentionName,
   parseMentions,
   resolveMentions,
 } from "./message-parser.js";
@@ -28,6 +29,22 @@ test("还原所有重复出现的提及占位符", () => {
       { key: "@_user_2", name: "运营专家", openId: "ou_user" },
     ]),
     "@MyBot 看看 @运营专家，@MyBot 也确认一下",
+  );
+});
+
+test("从飞书原始占位符识别带空格的前导提及名称", () => {
+  const mentions = [
+    { key: "@_user_1", name: "Agent OS", openId: "ou_bot" },
+    { key: "@_user_2", name: "开发同学", openId: "ou_user" },
+  ];
+
+  assert.equal(
+    leadingMentionName("@_user_1 /claude 检查项目", mentions),
+    "Agent OS",
+  );
+  assert.equal(
+    leadingMentionName("请 @_user_1 检查项目", mentions),
+    undefined,
   );
 });
 

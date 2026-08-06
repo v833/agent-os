@@ -34,6 +34,19 @@ export function resolveMentions(text: string, mentions: Mention[]): string {
   return resolved.trim();
 }
 
+/** 根据原始占位符确定消息开头的提及，避免从可含空格的显示名猜边界。 */
+export function leadingMentionName(
+  text: string,
+  mentions: Mention[],
+): string | undefined {
+  const trimmed = text.trimStart();
+  const mention = mentions.find(({ key }) => {
+    if (!key || !trimmed.startsWith(key)) return false;
+    return /^\s/.test(trimmed.slice(key.length));
+  });
+  return mention?.name || undefined;
+}
+
 /** 从消息 content 中提取资源 key（image_key / file_key）。 */
 export function extractResourceKeys(
   messageType: string,
