@@ -333,6 +333,18 @@ startBot({
       contextWindows.get(session.id),
       !session.cliSessionId,
     );
+    let observedCliSessionId = session.cliSessionId;
+    let pendingCliSessionSave: Promise<void> | undefined;
+    const rememberCliSession = async (cliSessionId: string) => {
+      observedCliSessionId = cliSessionId;
+      if (sessions.get(session.id)?.cliSessionId === cliSessionId) {
+        await pendingCliSessionSave;
+        return;
+      }
+      const save = sessions.setCliSessionId(session.id, cliSessionId);
+      pendingCliSessionSave = save.then(() => undefined);
+      await pendingCliSessionSave;
+    };
     const cardUpdater = new ThrottledCardUpdater(async (card) => {
       try {
         await bot.updateCard(cardId, card);
@@ -378,6 +390,16 @@ startBot({
       session.cliSessionId,
       run.signal,
       (event) => {
+        if (event.type === "session") {
+          // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
+          void rememberCliSession(event.sessionId).catch((error) => {
+            console.error(
+              "[会话] 保存实时 CLI 会话 ID 失败:",
+              (error as Error).message,
+            );
+          });
+          return;
+        }
         if (
           event.type !== "tool_start" &&
           event.type !== "tool_end" &&
@@ -402,17 +424,10 @@ startBot({
     )
       .then(async (result) => {
         clearInterval(progressHeartbeat);
+        if (result.sessionId) {
+          await rememberCliSession(result.sessionId);
+        }
         // /close、按钮和子进程退出可能竞态；取消后只能写灰色终态。
-        if (run.signal.aborted) {
-          await finishCancelled();
-          return;
-        }
-        if (
-          result.sessionId &&
-          result.sessionId !== session.cliSessionId
-        ) {
-          await sessions.setCliSessionId(session.id, result.sessionId);
-        }
         if (run.signal.aborted) {
           await finishCancelled();
           return;
@@ -444,26 +459,24 @@ startBot({
       })
       .catch(async (error) => {
         clearInterval(progressHeartbeat);
-        if (run.signal.aborted) {
-          await finishCancelled();
-          return;
-        }
         const errorMessage = (error as Error).message;
         const failedCliSessionId =
-          error instanceof CliRunError ? error.sessionId : undefined;
-        if (
-          failedCliSessionId &&
-          failedCliSessionId !== sessions.get(session.id)?.cliSessionId
-        ) {
+          (error instanceof CliRunError ? error.sessionId : undefined) ??
+          observedCliSessionId;
+        if (failedCliSessionId) {
           try {
             // 进程虽失败，但已建立的线程仍可续接，不能等成功路径才保存。
-            await sessions.setCliSessionId(session.id, failedCliSessionId);
+            await rememberCliSession(failedCliSessionId);
           } catch (persistError) {
             console.error(
               "[会话] 保存失败任务的 CLI 会话 ID 失败:",
               (persistError as Error).message,
             );
           }
+        }
+        if (run.signal.aborted) {
+          await finishCancelled();
+          return;
         }
         console.error(`[CLI] 执行失败 engine=${cliAdapter.id}:`, errorMessage);
         await cardUpdater.finish(

@@ -246,6 +246,25 @@ test("AbortController 会终止子进程并返回稳定取消文案", async () =
   await assert.rejects(running, /测试 CLI 执行已取消/);
 });
 
+test("取消时保留已经观察到的 CLI 会话 ID", async () => {
+  const controller = new AbortController();
+  const running = runScript(
+    `
+      console.log(JSON.stringify({ type: "session", sessionId: "cancelled-session" }));
+      setInterval(() => {}, 1000);
+    `,
+    { signal: controller.signal },
+  );
+  setTimeout(() => controller.abort(), 20);
+
+  await assert.rejects(running, (error: unknown) => {
+    assert.ok(error instanceof CliRunError);
+    assert.equal(error.sessionId, "cancelled-session");
+    assert.match(error.message, /执行已取消/);
+    return true;
+  });
+});
+
 test("超过时限会终止子进程并返回超时文案", async () => {
   const startedAt = Date.now();
   await assert.rejects(
