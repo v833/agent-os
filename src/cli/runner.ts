@@ -7,7 +7,6 @@ import { createInterface } from "node:readline";
 import { resolveCliCommand } from "./command-resolver.js";
 import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const PROCESS_STOP_GRACE_MS = 2_000;
 
 export interface RunCliOptions {
@@ -16,6 +15,7 @@ export interface RunCliOptions {
   cwd: string;
   sessionId?: string;
   signal?: AbortSignal;
+  /** 可选执行时限；未传入时不自动超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
 }
@@ -72,7 +72,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     cwd,
     sessionId,
     signal,
-    timeoutMs = DEFAULT_TIMEOUT_MS,
+    timeoutMs,
     onEvent,
   } = options;
 
@@ -135,10 +135,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     // 覆盖 spawn 与监听器注册之间发生 abort 的极小竞态。
     if (signal?.aborted) stopForAbort();
 
-    timer = setTimeout(() => {
-      timedOut = true;
-      stopThenFail(new Error(`${adapter.displayName} 执行超时`));
-    }, timeoutMs);
+    // 默认不设执行时限；调用方显式传入 timeoutMs 时才启用自动终止。
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        stopThenFail(new Error(`${adapter.displayName} 执行超时`));
+      }, timeoutMs);
+    }
 
     lines.on("line", (line) => {
       try {
