@@ -15,6 +15,7 @@ import { CliRunError, runCli } from "./cli/runner.js";
 import type { CliAdapter } from "./cli/types.js";
 import { parseCliRequest, parseCommand } from "./core/command-parser.js";
 import {
+  isRetryRequest,
   resolveRetryPrompt,
   SessionManager,
   type Session,
@@ -260,7 +261,10 @@ startBot({
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     const prompt = resolveRetryPrompt(session, requestedPrompt);
-    await sessions.setRetryPrompt(session.id, prompt);
+    // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
+    if (!session.retryPrompt || !isRetryRequest(requestedPrompt)) {
+      await sessions.setRetryPrompt(session.id, prompt);
+    }
     await sessions.transition(session.id, "active");
     const run = new AbortController();
     const activeRun: ActiveRun = {
@@ -460,6 +464,10 @@ startBot({
       .catch(async (error) => {
         clearInterval(progressHeartbeat);
         const errorMessage = (error as Error).message;
+        const sessionUnavailable =
+          error instanceof CliRunError &&
+          Boolean(cliAdapter.isSessionUnavailable?.(errorMessage)) &&
+          Boolean(session.cliSessionId);
         const failedCliSessionId =
           (error instanceof CliRunError ? error.sessionId : undefined) ??
           observedCliSessionId;
@@ -474,6 +482,20 @@ startBot({
             );
           }
         }
+        if (sessionUnavailable) {
+          try {
+            // 续聊指针已失效；清掉后下一次“继续执行”才会按原任务新建会话。
+            await sessions.clearCliSessionId(session.id);
+            console.warn(
+              `[会话] CLI 会话已失效，将在下次重试时重新建立 engine=${cliAdapter.id}`,
+            );
+          } catch (persistError) {
+            console.error(
+              "[会话] 清除失效 CLI 会话 ID 失败:",
+              (persistError as Error).message,
+            );
+          }
+        }
         if (run.signal.aborted) {
           await finishCancelled();
           return;
@@ -483,7 +505,9 @@ startBot({
           buildTaskCard({
             title: taskTitle,
             status: "failed",
-            detail: "执行没有完成。你可以调整指令后，在当前话题里重试。",
+            detail: sessionUnavailable
+              ? "会话已失效。发送“继续执行”将重新建立会话并继续原任务。"
+              : "执行没有完成。你可以调整指令后，在当前话题里重试。",
             technicalDetail: errorMessage,
             progress: progress.snapshot(),
           }),

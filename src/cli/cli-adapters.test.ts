@@ -393,3 +393,22 @@ test("Codex 标记命令失败并解析协议错误", () => {
     [],
   );
 });
+
+test("适配器能识别失效的续聊会话并忽略普通模型错误", () => {
+  assert.equal(
+    new CodexAdapter().isSessionUnavailable("Could not find thread abc"),
+    true,
+  );
+  assert.equal(
+    new CodexAdapter().isSessionUnavailable("模型不可用"),
+    false,
+  );
+  assert.equal(
+    new ClaudeAdapter().isSessionUnavailable("No such session: abc"),
+    true,
+  );
+  assert.equal(
+    new ClaudeAdapter().isSessionUnavailable("rate limit exceeded"),
+    false,
+  );
+});

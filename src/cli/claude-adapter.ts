@@ -143,6 +143,19 @@ export class ClaudeAdapter implements CliAdapter {
     return ["--resume", sessionId, ...outputArgs(prompt)];
   }
 
+  isSessionUnavailable(message: string): boolean {
+    const text = message.toLowerCase();
+    return (
+      /(?:session|conversation)[^\n]*(?:not found|could not find|does not exist|expired|invalid|unknown)/.test(
+        text,
+      ) ||
+      /(?:not found|could not find|does not exist|expired|invalid|unknown)[^\n]*(?:session|conversation)/.test(
+        text,
+      ) ||
+      /no (?:such )?(?:session|conversation)\b/.test(text)
+    );
+  }
+
   /** 兼容旧的单事件调用；运行链路统一使用 parseEvents。 */
   parseEvent(line: string): CliEvent | undefined {
     return this.parseEvents(line)[0];

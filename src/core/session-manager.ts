@@ -58,10 +58,15 @@ function sessionKey(chatId: string, threadId: string): string {
 
 const RETRY_REQUEST = /^(?:继续(?:执行)?|重试|再试一次)[。！？!?]*$/;
 
+/** 判断用户是否在请求重试上一条未完成任务，而不是提交新任务。 */
+export function isRetryRequest(prompt: string): boolean {
+  return RETRY_REQUEST.test(prompt.trim());
+}
+
 /** CLI 尚未建立会话时，把明确的重试请求还原为上次失败的原始任务。 */
 export function resolveRetryPrompt(session: Session, prompt: string): string {
   if (session.cliSessionId || !session.retryPrompt) return prompt;
-  return RETRY_REQUEST.test(prompt.trim()) ? session.retryPrompt : prompt;
+  return isRetryRequest(prompt) ? session.retryPrompt : prompt;
 }
 
 /** 负责会话解析、查询和受约束的状态更新。 */
@@ -183,6 +188,30 @@ export class SessionManager {
       await this.persist();
     } catch (error) {
       // 恢复指针只有真正落盘后才可信，失败时同步撤销内存变化。
+      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
+      throw error;
+    }
+    return updated;
+  }
+
+  /** 清除已经失效的 CLI 恢复指针，让下一次重试可以重新建立会话。 */
+  async clearCliSessionId(sessionId: string): Promise<Session> {
+    const current = this.get(sessionId);
+    if (!current) throw new Error(`会话不存在: ${sessionId}`);
+    if (!current.cliSessionId) return current;
+
+    const { cliSessionId: _previousCliSessionId, ...withoutCliSessionId } =
+      current;
+    const updated: Session = {
+      ...withoutCliSessionId,
+      updatedAt: this.now().toISOString(),
+    };
+    const key = sessionKey(updated.chatId, updated.threadId);
+    this.sessions.set(key, updated);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 失效指针只有成功落盘后才能被真正清除，失败时保留旧值重试。
       if (this.sessions.get(key) === updated) this.sessions.set(key, current);
       throw error;
     }

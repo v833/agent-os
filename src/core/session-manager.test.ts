@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isRetryRequest,
   resolveRetryPrompt,
   SessionManager,
   type Session,
@@ -145,6 +146,21 @@ test("CLI 未建立会话时明确重试会重放失败任务", async () => {
 
   const resumable = await manager.setCliSessionId(created.id, "codex-thread");
   assert.equal(resolveRetryPrompt(resumable, "继续执行"), "继续执行");
+  assert.equal(isRetryRequest("继续执行。"), true);
+  assert.equal(isRetryRequest("继续检查这个文件"), false);
+});
+
+test("失效 CLI 会话指针可以清除并保留待重试任务", async () => {
+  const manager = new SessionManager({ createId: () => "session-1" });
+  const created = (await manager.resolve(address())).session;
+  await manager.setRetryPrompt(created.id, "原始任务");
+  await manager.setCliSessionId(created.id, "expired-thread");
+
+  const cleared = await manager.clearCliSessionId(created.id);
+
+  assert.equal(cleared.cliSessionId, undefined);
+  assert.equal(cleared.retryPrompt, "原始任务");
+  assert.equal(resolveRetryPrompt(cleared, "继续执行"), "原始任务");
 });
 
 test("成功后可以清除待重试指令", async () => {

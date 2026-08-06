@@ -44,6 +44,8 @@ export interface CliAdapter {
   buildArgs(prompt: string): string[];
   buildResumeArgs(prompt: string, sessionId: string): string[];
   parseEvents(line: string): CliEvent[];
+  /** 判断失败信息是否明确表示恢复指针已经失效。 */
+  isSessionUnavailable?(message: string): boolean;
 }
 
 /** CLI 一轮执行完成后返回给会话层的统一结果。 */
