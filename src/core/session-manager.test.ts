@@ -4,7 +4,11 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { SessionManager, type Session } from "./session-manager.js";
+import {
+  resolveRetryPrompt,
+  SessionManager,
+  type Session,
+} from "./session-manager.js";
 import type { SessionStore } from "./session-store.js";
 
 function address(overrides: Partial<{
@@ -130,6 +134,38 @@ test("CLI 会话 ID 拒绝空值和不存在的 Agent OS 会话", async () => {
   assert.equal(manager.get(created.id)?.cliSessionId, undefined);
 });
 
+test("CLI 未建立会话时明确重试会重放失败任务", async () => {
+  const manager = new SessionManager({ createId: () => "session-1" });
+  const created = (await manager.resolve(address())).session;
+  const pending = await manager.setRetryPrompt(created.id, "检查最新调用错误");
+
+  assert.equal(resolveRetryPrompt(pending, "继续执行"), "检查最新调用错误");
+  assert.equal(resolveRetryPrompt(pending, "重试。"), "检查最新调用错误");
+  assert.equal(resolveRetryPrompt(pending, "执行另一个任务"), "执行另一个任务");
+
+  const resumable = await manager.setCliSessionId(created.id, "codex-thread");
+  assert.equal(resolveRetryPrompt(resumable, "继续执行"), "继续执行");
+});
+
+test("成功后可以清除待重试指令", async () => {
+  const manager = new SessionManager({ createId: () => "session-1" });
+  const created = (await manager.resolve(address())).session;
+
+  await manager.setRetryPrompt(created.id, "原始任务");
+  const cleared = await manager.setRetryPrompt(created.id, undefined);
+
+  assert.equal(cleared.retryPrompt, undefined);
+  assert.equal("retryPrompt" in cleared, false);
+  await assert.rejects(
+    manager.setRetryPrompt(created.id, "  "),
+    /待重试指令不能为空/,
+  );
+  await assert.rejects(
+    manager.setRetryPrompt("missing", "原始任务"),
+    /会话不存在/,
+  );
+});
+
 test("打开管理器时恢复原话题和会话 ID", async () => {
   const restored: Session = {
     id: "session-restored",
@@ -155,7 +191,7 @@ test("打开管理器时恢复原话题和会话 ID", async () => {
   assert.equal(resolved.session.cliSessionId, "codex-thread");
 });
 
-test("保存失败时回滚新建会话、状态变化和 CLI 会话 ID", async () => {
+test("保存失败时回滚新建会话、状态变化和恢复信息", async () => {
   let failSave = true;
   let sequence = 0;
   const store: SessionStore = {
@@ -184,4 +220,10 @@ test("保存失败时回滚新建会话、状态变化和 CLI 会话 ID", async 
     /disk full/,
   );
   assert.equal(manager.get(created.id)?.cliSessionId, undefined);
+
+  await assert.rejects(
+    manager.setRetryPrompt(created.id, "原始任务"),
+    /disk full/,
+  );
+  assert.equal(manager.get(created.id)?.retryPrompt, undefined);
 });

@@ -4,7 +4,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runCli } from "./runner.js";
+import { CliRunError, runCli } from "./runner.js";
 import type { CliAdapter, CliEvent } from "./types.js";
 
 class ScriptAdapter implements CliAdapter {
@@ -121,6 +121,21 @@ test("协议事件明确报错时优先返回该错误", async () => {
       `console.log(JSON.stringify({ type: "error", message: "模型失败" }));`,
     ),
     /模型失败/,
+  );
+});
+
+test("失败时保留已经观察到的 CLI 会话 ID", async () => {
+  await assert.rejects(
+    runScript(`
+      console.log(JSON.stringify({ type: "session", sessionId: "recoverable" }));
+      console.log(JSON.stringify({ type: "error", message: "服务不可用" }));
+    `),
+    (error: unknown) => {
+      assert.ok(error instanceof CliRunError);
+      assert.equal(error.message, "服务不可用");
+      assert.equal(error.sessionId, "recoverable");
+      return true;
+    },
   );
 });
 

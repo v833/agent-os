@@ -14,6 +14,7 @@ export interface Session {
   chatId: string;
   cliId: CliId;
   cliSessionId?: string;
+  retryPrompt?: string;
   status: SessionStatus;
   createdAt: string;
   updatedAt: string;
@@ -53,6 +54,14 @@ function topicIdOf(message: MessageAddress): string {
 function sessionKey(chatId: string, threadId: string): string {
   // threadId 只在群聊上下文内有意义，加入 chatId 避免跨群碰撞。
   return `${chatId}:${threadId}`;
+}
+
+const RETRY_REQUEST = /^(?:继续(?:执行)?|重试|再试一次)[。！？!?]*$/;
+
+/** CLI 尚未建立会话时，把明确的重试请求还原为上次失败的原始任务。 */
+export function resolveRetryPrompt(session: Session, prompt: string): string {
+  if (session.cliSessionId || !session.retryPrompt) return prompt;
+  return RETRY_REQUEST.test(prompt.trim()) ? session.retryPrompt : prompt;
 }
 
 /** 负责会话解析、查询和受约束的状态更新。 */
@@ -174,6 +183,36 @@ export class SessionManager {
       await this.persist();
     } catch (error) {
       // 恢复指针只有真正落盘后才可信，失败时同步撤销内存变化。
+      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
+      throw error;
+    }
+    return updated;
+  }
+
+  /** 保存尚未成功完成的任务指令，供 CLI 未返回会话 ID 时重新发起。 */
+  async setRetryPrompt(
+    sessionId: string,
+    retryPrompt: string | undefined,
+  ): Promise<Session> {
+    const current = this.get(sessionId);
+    if (!current) throw new Error(`会话不存在: ${sessionId}`);
+    if (retryPrompt !== undefined && !retryPrompt.trim()) {
+      throw new Error("待重试指令不能为空");
+    }
+
+    const { retryPrompt: _previousRetryPrompt, ...withoutRetryPrompt } = current;
+    const updated: Session = {
+      ...(retryPrompt === undefined
+        ? withoutRetryPrompt
+        : { ...current, retryPrompt }),
+      updatedAt: this.now().toISOString(),
+    };
+    const key = sessionKey(updated.chatId, updated.threadId);
+    this.sessions.set(key, updated);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 失败任务的恢复文本也必须以磁盘为准，保存失败时同步撤销内存变化。
       if (this.sessions.get(key) === updated) this.sessions.set(key, current);
       throw error;
     }

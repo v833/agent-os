@@ -21,6 +21,8 @@ const SessionSchema = z.object({
   cliId: z.enum(["codex", "claude"]),
   // 旧快照没有恢复指针，首次成功执行后才会写入，因此必须保持可选。
   cliSessionId: z.string().min(1).optional(),
+  // 旧快照没有待重试指令；任务启动前写入，成功后删除。
+  retryPrompt: z.string().min(1).optional(),
   status: z.enum(["creating", "active", "idle", "closed"]),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

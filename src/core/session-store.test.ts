@@ -35,10 +35,10 @@ test("会话文件不存在时按首次启动返回空列表", async (t) => {
   assert.deepEqual(await store.load(), []);
 });
 
-test("保存后可以完整恢复 Codex 和 Claude 会话", async (t) => {
+test("保存后可以完整恢复 Codex 和 Claude 会话及待重试指令", async (t) => {
   const { filePath, store } = await temporaryStore(t);
   const sessions = [
-    session(),
+    session({ retryPrompt: "检查最新调用错误" }),
     session({
       id: "session-2",
       threadId: "omt_claude",

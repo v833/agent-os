@@ -11,10 +11,14 @@ import {
   parseCliId,
   resolveCliWorkdir,
 } from "./cli/registry.js";
-import { runCli } from "./cli/runner.js";
+import { CliRunError, runCli } from "./cli/runner.js";
 import type { CliAdapter } from "./cli/types.js";
 import { parseCliRequest, parseCommand } from "./core/command-parser.js";
-import { SessionManager, type Session } from "./core/session-manager.js";
+import {
+  resolveRetryPrompt,
+  SessionManager,
+  type Session,
+} from "./core/session-manager.js";
 import { JsonSessionStore } from "./core/session-store.js";
 import { requestTaskAbort, type ActiveRun } from "./core/task-abort.js";
 import { TaskProgressTracker } from "./core/task-progress.js";
@@ -156,7 +160,7 @@ startBot({
       cliRequest?.cliId ?? defaultCliId,
     );
     const cliAdapter = getCliAdapter(session.cliId);
-    const prompt = cliRequest?.prompt ?? resolved;
+    const requestedPrompt = cliRequest?.prompt ?? resolved;
 
     console.log(
       `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,
@@ -254,6 +258,9 @@ startBot({
       return;
     }
 
+    // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
+    const prompt = resolveRetryPrompt(session, requestedPrompt);
+    await sessions.setRetryPrompt(session.id, prompt);
     await sessions.transition(session.id, "active");
     const run = new AbortController();
     const activeRun: ActiveRun = {
@@ -413,6 +420,7 @@ startBot({
         if (result.stats?.contextWindowTokens) {
           contextWindows.set(session.id, result.stats.contextWindowTokens);
         }
+        await sessions.setRetryPrompt(session.id, undefined);
         await cardUpdater.finish(
           buildTaskCard({
             title: taskTitle,
@@ -441,6 +449,22 @@ startBot({
           return;
         }
         const errorMessage = (error as Error).message;
+        const failedCliSessionId =
+          error instanceof CliRunError ? error.sessionId : undefined;
+        if (
+          failedCliSessionId &&
+          failedCliSessionId !== sessions.get(session.id)?.cliSessionId
+        ) {
+          try {
+            // 进程虽失败，但已建立的线程仍可续接，不能等成功路径才保存。
+            await sessions.setCliSessionId(session.id, failedCliSessionId);
+          } catch (persistError) {
+            console.error(
+              "[会话] 保存失败任务的 CLI 会话 ID 失败:",
+              (persistError as Error).message,
+            );
+          }
+        }
         console.error(`[CLI] 执行失败 engine=${cliAdapter.id}:`, errorMessage);
         await cardUpdater.finish(
           buildTaskCard({

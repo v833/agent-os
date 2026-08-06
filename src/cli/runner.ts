@@ -20,6 +20,18 @@ export interface RunCliOptions {
   onEvent?: (event: CliEvent) => void;
 }
 
+/** CLI 失败信息；若进程已返回会话 ID，调用方仍可持久化并续聊。 */
+export class CliRunError extends Error {
+  constructor(
+    message: string,
+    readonly sessionId?: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "CliRunError";
+  }
+}
+
 function stopProcessTree(child: ChildProcess): Promise<void> {
   if (!child.pid || child.exitCode !== null) return Promise.resolve();
 
@@ -118,7 +130,11 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(error);
+      reject(
+        observedSessionId
+          ? new CliRunError(error.message, observedSessionId, { cause: error })
+          : error,
+      );
     };
     const stopOnce = () => {
       stopPromise ??= stopProcessTree(child);
