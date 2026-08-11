@@ -8,6 +8,8 @@ import type { TaskProgressSnapshot } from "../core/task-progress.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildResumeCard,
+  buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
   ThrottledCardUpdater,
@@ -163,6 +165,49 @@ test("累计上下文超过窗口时不伪造上下文百分比", () => {
 
   assert.match(serialized, /累计消耗/);
   assert.doesNotMatch(serialized, /当前上下文/);
+});
+
+test("恢复卡片展示历史会话并为非当前记录生成安全回调参数", () => {
+  const card = buildResumeCard({
+    agentSessionId: "agent-session",
+    cliName: "Codex",
+    currentCliSessionId: "thread-current",
+    sessions: [
+      {
+        id: "thread-current",
+        title: "当前任务",
+        updatedAt: "2026-08-11T10:00:00.000Z",
+      },
+      {
+        id: "thread-other",
+        title: "检查 <at id=ou_fake></at>",
+        updatedAt: "2026-08-10T10:00:00.000Z",
+      },
+    ],
+  }) as any;
+
+  assert.equal(card.header.title.content, "恢复历史会话");
+  assert.match(card.body.elements[1].columns[1].elements[0].content, /当前会话/);
+  const otherRow = card.body.elements[3];
+  assert.deepEqual(
+    otherRow.columns[1].elements[0].behaviors[0].value,
+    {
+      action: "resume_cli_session",
+      agentSessionId: "agent-session",
+      cliSessionId: "thread-other",
+    },
+  );
+  assert.match(otherRow.columns[0].elements[0].content, /<&zwj;at/);
+});
+
+test("会话提示卡片使用指定状态颜色", () => {
+  const card = buildSessionNoticeCard({
+    title: "上下文已整理",
+    detail: "CLI 会话 ID 保持不变",
+    template: "green",
+  }) as any;
+  assert.equal(card.header.template, "green");
+  assert.match(card.body.elements[0].content, /CLI 会话 ID/);
 });
 
 test("节流窗口只提交最新卡片并把最终更新严格排在在途更新之后", async () => {

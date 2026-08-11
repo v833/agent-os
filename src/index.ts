@@ -1,6 +1,6 @@
 /**
  * Agent OS 进程入口：把飞书消息接入会话模型、控制命令、资源下载、
- * 真实 CLI 调度和任务卡片，并维护“每台 bot 在一个飞书话题对应一个会话”。
+ * 原生会话管理、真实 CLI 调度和任务卡片，并维护“每台 bot 在一个飞书话题对应一个会话”。
  */
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
@@ -11,6 +11,8 @@ import {
 } from "./cli/registry.js";
 import { CliRunError, runCli } from "./cli/runner.js";
 import type { CliAdapter } from "./cli/types.js";
+import { compactCliSession } from "./cli/native-compact.js";
+import { listNativeCliSessions } from "./cli/native-sessions.js";
 import { parseCliRequest, parseCommand } from "./core/command-parser.js";
 import {
   buildBotPrompt,
@@ -33,6 +35,8 @@ import {
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildResumeCard,
+  buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
   ThrottledCardUpdater,
@@ -133,6 +137,66 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     appId: config.appId,
     appSecret: config.appSecret,
     onCardAction: async (action) => {
+    if (action.value.action === "resume_cli_session") {
+      const agentSessionId =
+        typeof action.value.agentSessionId === "string"
+          ? action.value.agentSessionId
+          : "";
+      const cliSessionId =
+        typeof action.value.cliSessionId === "string"
+          ? action.value.cliSessionId
+          : "";
+      const session = sessions.get(agentSessionId);
+      if (!session || session.botId !== config.id || !cliSessionId) {
+        return { toast: { type: "error", content: "这条会话记录已经失效。" } };
+      }
+      if (session.status === "active") {
+        return {
+          toast: { type: "warning", content: "当前任务结束后才能切换会话。" },
+        };
+      }
+      if (session.status === "closed") {
+        return {
+          toast: { type: "warning", content: "当前话题的会话已经关闭。" },
+        };
+      }
+      try {
+        const sessionAdapter = getCliAdapter(session.cliId);
+        const nativeSessions = await listNativeCliSessions({
+          adapter: sessionAdapter,
+          cwd: session.workspaceDir,
+        });
+        if (!nativeSessions.some((item) => item.id === cliSessionId)) {
+          return {
+            toast: {
+              type: "error",
+              content: "这个 CLI 会话已经不在当前工作目录中。",
+            },
+          };
+        }
+        const updated = await sessions.setCliSessionId(
+          session.id,
+          cliSessionId,
+        );
+        return {
+          toast: { type: "success", content: "已切换到选中的历史会话。" },
+          card: {
+            type: "raw",
+            data: buildResumeCard({
+              agentSessionId: updated.id,
+              cliName: sessionAdapter.displayName,
+              currentCliSessionId: updated.cliSessionId,
+              sessions: nativeSessions,
+            }),
+          },
+        };
+      } catch (error) {
+        return {
+          toast: { type: "error", content: (error as Error).message },
+        };
+      }
+    }
+
     if (action.value.action !== "abort_task") return undefined;
     const sessionId =
       typeof action.value.sessionId === "string" ? action.value.sessionId : "";
@@ -217,6 +281,9 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         message.messageId,
         [
           "/status 查看当前会话",
+          "/new 开启一个全新的 CLI 会话",
+          "/resume 选择当前工作目录中的 CLI 会话",
+          "/compact [要求] 使用当前引擎原生整理上下文",
           "/cd 查看当前工作目录",
           "/cd <目录> 切换当前话题的工作目录",
           "/close 关闭当前会话",
@@ -227,6 +294,108 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         hasThread,
       );
       return;
+    }
+
+    if (command?.name === "new") {
+      if (session.status === "active") {
+        await bot.reply(
+          message.messageId,
+          "当前任务结束后才能新建会话。",
+          hasThread,
+        );
+        return;
+      }
+      if (session.status === "closed") {
+        await bot.reply(
+          message.messageId,
+          "当前话题的会话已经关闭。",
+          hasThread,
+        );
+        return;
+      }
+      await sessions.clearCliSessionId(session.id);
+      await bot.replyCard(
+        message.messageId,
+        buildSessionNoticeCard({
+          title: "新会话已就绪",
+          template: "green",
+          detail: `下一条任务会由 ${cliAdapter.displayName} 开启全新的 CLI 会话。\n\n旧会话仍然保留，可以随时用 \`/resume\` 找回来。`,
+        }),
+        hasThread,
+      );
+      return;
+    }
+
+    if (command?.name === "resume") {
+      if (session.status === "active") {
+        await bot.reply(
+          message.messageId,
+          "当前任务结束后才能切换会话。",
+          hasThread,
+        );
+        return;
+      }
+      if (session.status === "closed") {
+        await bot.reply(
+          message.messageId,
+          "当前话题的会话已经关闭。",
+          hasThread,
+        );
+        return;
+      }
+      try {
+        const nativeSessions = await listNativeCliSessions({
+          adapter: cliAdapter,
+          cwd: session.workspaceDir,
+        });
+        await bot.replyCard(
+          message.messageId,
+          buildResumeCard({
+            agentSessionId: session.id,
+            cliName: cliAdapter.displayName,
+            currentCliSessionId: session.cliSessionId,
+            sessions: nativeSessions,
+          }),
+          hasThread,
+        );
+      } catch (error) {
+        await bot.reply(
+          message.messageId,
+          `无法读取 ${cliAdapter.displayName} 会话：${(error as Error).message}`,
+          hasThread,
+        );
+      }
+      return;
+    }
+
+    const isCompacting = command?.name === "compact";
+    const compactInstructions =
+      command && command.name === "compact" ? command.instructions : undefined;
+    if (isCompacting) {
+      if (session.status === "active") {
+        await bot.reply(
+          message.messageId,
+          "当前任务结束后才能整理上下文。",
+          hasThread,
+        );
+        return;
+      }
+      if (session.status === "closed") {
+        await bot.reply(
+          message.messageId,
+          "当前话题的会话已经关闭。",
+          hasThread,
+        );
+        return;
+      }
+      if (!session.cliSessionId) {
+        await bot.reply(
+          message.messageId,
+          "当前还没有可整理的 CLI 会话。先完成一次任务，再使用 /compact。",
+          hasThread,
+        );
+        return;
+      }
     }
 
     if (command?.name === "status") {
@@ -335,7 +504,10 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       resolveRetryPrompt(session, requestedPrompt),
     );
     // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
-    if (!session.retryPrompt || !isRetryRequest(requestedPrompt)) {
+    if (
+      !isCompacting &&
+      (!session.retryPrompt || !isRetryRequest(requestedPrompt))
+    ) {
       await sessions.setRetryPrompt(session.id, requestedPrompt);
     }
     await sessions.transition(session.id, "active");
@@ -346,7 +518,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       runId: randomUUID(),
     };
     activeRuns.set(session.id, activeRun);
-    const taskTitle = cliAdapter.displayName;
+    const taskTitle = isCompacting ? "整理上下文" : cliAdapter.displayName;
 
     const resources = extractResourceKeys(
       message.messageType,
@@ -383,7 +555,11 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         buildTaskCard({
           title: taskTitle,
           status: "running",
-          detail: "正在理解任务",
+          detail: isCompacting
+            ? cliAdapter.id === "codex" && compactInstructions
+              ? "Codex 正在使用原生默认策略整理上下文"
+              : `正在调用 ${cliAdapter.displayName} 原生上下文整理`
+            : "正在理解任务",
           abortSessionId: session.id,
           abortRunId: activeRun.runId,
         }),
@@ -435,8 +611,10 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         buildTaskCard({
           title: taskTitle,
           status: "running",
-          detail: snapshot.current,
-          progress: snapshot,
+          detail: isCompacting
+            ? `正在调用 ${cliAdapter.displayName} 原生上下文整理`
+            : snapshot.current,
+          ...(!isCompacting ? { progress: snapshot } : {}),
           abortSessionId: session.id,
           abortRunId: activeRun.runId,
         }),
@@ -451,8 +629,10 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           detail:
             activeRun.cancelMode === "close"
               ? "本次任务已停止，当前会话已经关闭。"
-              : "本次任务已停止。你可以继续在当前话题里提问。",
-          progress: progress.snapshot(),
+              : isCompacting
+                ? "整理已停止，当前 CLI 会话没有改变。"
+                : "本次任务已停止。你可以继续在当前话题里提问。",
+          ...(!isCompacting ? { progress: progress.snapshot() } : {}),
         }),
       );
     };
@@ -461,48 +641,62 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     progressHeartbeat.unref();
 
     // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
-    void executeCli(
-      cliAdapter,
-      prompt,
-      session.workspaceDir,
-      session.cliSessionId,
-      run.signal,
-      (event) => {
-        if (event.type === "session") {
-          // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
-          void rememberCliSession(event.sessionId).catch((error) => {
-            console.error(
-              "[会话] 保存实时 CLI 会话 ID 失败:",
-              (error as Error).message,
-            );
-          });
-          return;
-        }
-        if (
-          event.type !== "tool_start" &&
-          event.type !== "tool_end" &&
-          event.type !== "context"
-        ) {
-          return;
-        }
+    const execution = isCompacting
+      ? compactCliSession({
+          adapter: cliAdapter,
+          sessionId: session.cliSessionId!,
+          cwd: session.workspaceDir,
+          instructions: compactInstructions,
+          signal: run.signal,
+        }).then((result) => ({
+          answer: result.message ?? "",
+          sessionId: result.sessionId,
+          stats: undefined,
+        }))
+      : executeCli(
+          cliAdapter,
+          prompt,
+          session.workspaceDir,
+          session.cliSessionId,
+          run.signal,
+          (event) => {
+            if (event.type === "session") {
+              // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
+              void rememberCliSession(event.sessionId).catch((error) => {
+                console.error(
+                  "[会话] 保存实时 CLI 会话 ID 失败:",
+                  (error as Error).message,
+                );
+              });
+              return;
+            }
+            if (
+              event.type !== "tool_start" &&
+              event.type !== "tool_end" &&
+              event.type !== "context"
+            ) {
+              return;
+            }
 
-        const snapshot = progress.accept(event);
-        const currentDetail = snapshot.currentDetail
-          ? ` detail=${snapshot.currentDetail}`
-          : "";
-        const context =
-          snapshot.contextUsedTokens === undefined
-            ? ""
-            : ` context=${snapshot.contextUsedTokens}`;
-        console.log(
-          `[进度] ${snapshot.current}${currentDetail} tools=${snapshot.completedCount}/${snapshot.toolCount}${context}`,
+            const snapshot = progress.accept(event);
+            const currentDetail = snapshot.currentDetail
+              ? ` detail=${snapshot.currentDetail}`
+              : "";
+            const context =
+              snapshot.contextUsedTokens === undefined
+                ? ""
+                : ` context=${snapshot.contextUsedTokens}`;
+            console.log(
+              `[进度] ${snapshot.current}${currentDetail} tools=${snapshot.completedCount}/${snapshot.toolCount}${context}`,
+            );
+            renderProgress(snapshot);
+          },
         );
-        renderProgress(snapshot);
-      },
-    )
+
+    void execution
       .then(async (result) => {
         clearInterval(progressHeartbeat);
-        if (result.sessionId) {
+        if (!isCompacting && result.sessionId) {
           await rememberCliSession(result.sessionId);
         }
         // /close、按钮和子进程退出可能竞态；取消后只能写灰色终态。
@@ -510,22 +704,35 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           await finishCancelled();
           return;
         }
-        if (result.stats?.contextWindowTokens) {
+        if (!isCompacting && result.stats?.contextWindowTokens) {
           contextWindows.set(session.id, result.stats.contextWindowTokens);
         }
-        await sessions.setRetryPrompt(session.id, undefined);
+        if (!isCompacting) {
+          await sessions.setRetryPrompt(session.id, undefined);
+        }
         await cardUpdater.finish(
-          buildTaskCard({
-            title: taskTitle,
-            status: "success",
-            detail: "执行完成",
-            progress: progress.snapshot(),
-            answer: result.answer,
-            stats: result.stats,
-            recipientOpenId: message.senderOpenId,
-          }),
+          isCompacting
+            ? buildSessionNoticeCard({
+                title: result.answer ? "暂时无需整理" : "上下文已整理",
+                template: result.answer ? "grey" : "green",
+                detail:
+                  result.answer ||
+                  [
+                    `${cliAdapter.displayName} 已在当前 CLI 会话内完成原生压缩。`,
+                    "CLI 会话 ID 保持不变，下一条任务会继续使用整理后的上下文。",
+                  ].join("\n\n"),
+              })
+            : buildTaskCard({
+                title: taskTitle,
+                status: "success",
+                detail: "执行完成",
+                progress: progress.snapshot(),
+                answer: result.answer,
+                stats: result.stats,
+                recipientOpenId: message.senderOpenId,
+              }),
         );
-        if (answerNeedsContinuation(result.answer)) {
+        if (!isCompacting && answerNeedsContinuation(result.answer)) {
           for (const chunk of splitLongText(answerContinuation(result.answer))) {
             if (run.signal.aborted) break;
             await bot.reply(message.messageId, chunk, hasThread);
@@ -545,7 +752,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         const failedCliSessionId =
           (error instanceof CliRunError ? error.sessionId : undefined) ??
           observedCliSessionId;
-        if (failedCliSessionId) {
+        if (!isCompacting && failedCliSessionId) {
           try {
             // 进程虽失败，但已建立的线程仍可续接，不能等成功路径才保存。
             await rememberCliSession(failedCliSessionId);
@@ -579,11 +786,13 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           buildTaskCard({
             title: taskTitle,
             status: "failed",
-            detail: sessionUnavailable
-              ? "会话已失效。发送“继续执行”将重新建立会话并继续原任务。"
-              : "执行没有完成。你可以调整指令后，在当前话题里重试。",
+            detail: isCompacting
+              ? "上下文整理失败，当前 CLI 会话没有改变。"
+              : sessionUnavailable
+                ? "会话已失效。发送“继续执行”将重新建立会话并继续原任务。"
+                : "执行没有完成。你可以调整指令后，在当前话题里重试。",
             technicalDetail: errorMessage,
-            progress: progress.snapshot(),
+            ...(!isCompacting ? { progress: progress.snapshot() } : {}),
           }),
         );
       })

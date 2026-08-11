@@ -210,45 +210,34 @@ export class SessionManager {
     sessionId: string,
     cliSessionId: string,
   ): Promise<Session> {
+    if (!cliSessionId) throw new Error("CLI 会话 ID 不能为空");
+    return this.updateCliSelection(sessionId, cliSessionId);
+  }
+
+  /** 清空当前话题选中的 CLI 会话，不删除引擎自身保存的历史记录。 */
+  async clearCliSessionId(sessionId: string): Promise<Session> {
+    return this.updateCliSelection(sessionId, undefined);
+  }
+
+  private async updateCliSelection(
+    sessionId: string,
+    cliSessionId: string | undefined,
+  ): Promise<Session> {
     const current = this.get(sessionId);
     if (!current) throw new Error(`会话不存在: ${sessionId}`);
-    if (!cliSessionId) throw new Error("CLI 会话 ID 不能为空");
 
-    const updated: Session = {
-      ...current,
-      cliSessionId,
-      updatedAt: this.now().toISOString(),
-    };
+    const updated: Session = cliSessionId
+      ? { ...current, cliSessionId, updatedAt: this.now().toISOString() }
+      : (() => {
+          const { cliSessionId: _previousCliSessionId, ...rest } = current;
+          return { ...rest, updatedAt: this.now().toISOString() };
+        })();
     const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
     this.sessions.set(key, updated);
     try {
       await this.persist();
     } catch (error) {
       // 恢复指针只有真正落盘后才可信，失败时同步撤销内存变化。
-      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
-      throw error;
-    }
-    return updated;
-  }
-
-  /** 清除已经失效的 CLI 恢复指针，让下一次重试可以重新建立会话。 */
-  async clearCliSessionId(sessionId: string): Promise<Session> {
-    const current = this.get(sessionId);
-    if (!current) throw new Error(`会话不存在: ${sessionId}`);
-    if (!current.cliSessionId) return current;
-
-    const { cliSessionId: _previousCliSessionId, ...withoutCliSessionId } =
-      current;
-    const updated: Session = {
-      ...withoutCliSessionId,
-      updatedAt: this.now().toISOString(),
-    };
-    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
-    this.sessions.set(key, updated);
-    try {
-      await this.persist();
-    } catch (error) {
-      // 失效指针只有成功落盘后才能被真正清除，失败时保留旧值重试。
       if (this.sessions.get(key) === updated) this.sessions.set(key, current);
       throw error;
     }

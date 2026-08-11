@@ -327,17 +327,33 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 @机器人 /status
 /help
 /close
+/new
+/resume
+/compact 保留接口约定，省略排查过程
 /claude 检查 package.json
 /codex 查看当前目录结构
 ```
 
 - `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
+- `/new`：清空当前话题绑定的 CLI 会话；旧会话仍由引擎保留
+- `/resume`：读取当前工作目录中的 Claude/Codex 原生会话并用卡片选择恢复
+- `/compact [要求]`：在当前 CLI 会话内调用引擎原生上下文整理；Claude 支持附加要求，Codex 使用默认策略
 - `/cd`：查看当前工作目录
 - `/cd <目录>`：切换当前话题的工作目录
 - `/help`：列出会话控制和双引擎选择命令
 - `/close`：关闭当前话题会话
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
+
+### 会话整理与历史恢复验收
+
+在一个已经完成过任务的话题中依次发送：
+
+1. `/new`：收到绿色“新会话已就绪”卡片；下一条任务会建立新 CLI 会话，旧记录仍可恢复。
+2. `/resume`：卡片只列出当前 `workspaceDir` 的原生会话，显示标题、更新时间和短 ID；点击“恢复”后当前记录标记为当前会话。
+3. `/compact 保留架构决定和待办事项`：蓝色卡片显示整理进度，完成后变为绿色；CLI 会话 ID 保持不变。短 Claude 会话会显示“暂时无需整理”。
+
+按钮回调会重新读取当前工作目录并校验 CLI 会话 ID，历史记录被删除或移出目录后不会被恢复。整理和恢复期间仍遵守单话题单任务状态，发起人可以使用停止按钮取消 compact。
 
 ### 工作目录验收
 

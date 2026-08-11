@@ -3,10 +3,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseCliRequest, parseCommand } from "./command-parser.js";
 
-test("识别三条会话命令和可选机器人提及", () => {
+test("识别会话控制命令和可选机器人提及", () => {
   assert.deepEqual(parseCommand("/status"), { name: "status" });
   assert.deepEqual(parseCommand("@MyBot /close"), { name: "close" });
   assert.deepEqual(parseCommand("@Agent OS /help  "), { name: "help" });
+  assert.deepEqual(parseCommand("/new"), { name: "new" });
+  assert.deepEqual(parseCommand("@Agent OS /resume"), { name: "resume" });
+  assert.deepEqual(parseCommand("/compact"), {
+    name: "compact",
+    instructions: undefined,
+  });
+  assert.deepEqual(parseCommand("/compact 保留接口约定，省略测试日志"), {
+    name: "compact",
+    instructions: "保留接口约定，省略测试日志",
+  });
 });
 
 test("解析 /cd 的查询、带空格路径和机器人提及", () => {

@@ -143,6 +143,17 @@ export class ClaudeAdapter implements CliAdapter {
     return ["--resume", sessionId, ...outputArgs(prompt)];
   }
 
+  buildCompactPlan(sessionId: string, instructions?: string) {
+    const command = instructions?.trim()
+      ? `/compact ${instructions.trim()}`
+      : "/compact";
+    return {
+      protocol: "claude-stream-json" as const,
+      command: this.command,
+      args: this.buildResumeArgs(command, sessionId),
+    };
+  }
+
   isSessionUnavailable(message: string): boolean {
     const text = message.toLowerCase();
     return (

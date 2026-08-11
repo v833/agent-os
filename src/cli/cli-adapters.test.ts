@@ -40,6 +40,19 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
     "stream-json",
     "--verbose",
   ]);
+  assert.deepEqual(adapter.buildCompactPlan("claude-session", "保留接口"), {
+    protocol: "claude-stream-json",
+    command: "claude",
+    args: [
+      "--resume",
+      "claude-session",
+      "-p",
+      "/compact 保留接口",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+    ],
+  });
 });
 
 test("Codex 首次对话和续聊参数符合 exec 协议", () => {
@@ -61,6 +74,12 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
     "codex-thread",
     "继续",
   ]);
+  assert.deepEqual(adapter.buildCompactPlan("codex-thread"), {
+    protocol: "codex-app-server",
+    command: "codex",
+    args: ["app-server", "--stdio"],
+    sessionId: "codex-thread",
+  });
 });
 
 test("Windows 下解析到可直接 spawn 的真实 CLI 入口", () => {

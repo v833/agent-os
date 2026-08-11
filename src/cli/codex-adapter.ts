@@ -140,6 +140,15 @@ export class CodexAdapter implements CliAdapter {
     ];
   }
 
+  buildCompactPlan(sessionId: string) {
+    return {
+      protocol: "codex-app-server" as const,
+      command: this.command,
+      args: ["app-server", "--stdio"],
+      sessionId,
+    };
+  }
+
   isSessionUnavailable(message: string): boolean {
     const text = message.toLowerCase();
     return (

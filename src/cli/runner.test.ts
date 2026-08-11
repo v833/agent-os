@@ -22,6 +22,15 @@ class ScriptAdapter implements CliAdapter {
     return ["-e", this.script];
   }
 
+  buildCompactPlan(sessionId: string) {
+    return {
+      protocol: "codex-app-server" as const,
+      command: this.command,
+      args: ["-e", this.script],
+      sessionId,
+    };
+  }
+
   parseEvents(line: string): CliEvent[] {
     let value: unknown;
     try {
@@ -98,6 +107,14 @@ test("传入会话 ID 时 Runner 使用适配器的续聊参数", async () => {
         "-e",
         `console.log(JSON.stringify({ type: "result", answer: "已续接" }));`,
       ];
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
     },
     parseEvents: parser.parseEvents.bind(parser),
   };

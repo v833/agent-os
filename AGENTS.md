@@ -39,8 +39,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
-- `src/core/command-parser.ts`：会话控制命令与 `/claude`、`/codex` 引擎请求解析
-- `src/core/command-parser.test.ts`：会话命令、引擎选择和误识别边界测试
+- `src/core/command-parser.ts`：会话控制命令（含 `/new`、`/resume`、`/compact`）与 `/claude`、`/codex` 引擎请求解析
+- `src/core/command-parser.test.ts`：会话命令、compact 参数、引擎选择和误识别边界测试
 - `src/core/task-abort.ts`：任务发起人鉴权、运行实例隔离与停止信号
 - `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
@@ -50,6 +50,10 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
+- `src/cli/native-sessions.ts`：读取 Claude JSONL 与 Codex app-server 的原生会话摘要
+- `src/cli/native-sessions.test.ts`：原生会话目录过滤、标题回退和排序测试
+- `src/cli/native-compact.ts`：驱动 Claude/Codex 原生上下文整理协议
+- `src/cli/native-compact.test.ts`：compact 完成、短会话和取消测试
 - `src/cli/claude-adapter.ts`：Claude Code 多事件、工具、上下文与统计适配器
 - `src/cli/codex-adapter.ts`：Codex 四类工具、上下文、答案与统计适配器
 - `src/cli/runner.test.ts`：子进程生命周期、事件分发、续聊和错误边界测试
@@ -61,8 +65,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
 - `src/im/message-parser.test.ts`：提及和资源解析测试
-- `src/im/card.ts`：任务生命周期卡片、长答案处理与一秒节流更新器
-- `src/im/card.test.ts`：四种卡片状态、长答案和节流并发测试
+- `src/im/card.ts`：任务生命周期卡片、历史会话恢复卡片、长答案处理与一秒节流更新器
+- `src/im/card.test.ts`：任务/会话卡片、长答案和节流并发测试
 - `README.md`：飞书配置、会话、卡片、提及和下载验证步骤
 
 ## 工程约定

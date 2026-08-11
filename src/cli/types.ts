@@ -17,6 +17,27 @@ export interface CliRunStats {
   contextWindowTokens?: number;
 }
 
+/** /resume 卡片使用的轻量原生会话摘要，不包含消息正文。 */
+export interface CliSessionSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+
+/** 描述某个 CLI 的原生上下文整理协议和启动参数。 */
+export type CliCompactPlan =
+  | {
+      protocol: "claude-stream-json";
+      command: string;
+      args: string[];
+    }
+  | {
+      protocol: "codex-app-server";
+      command: string;
+      args: string[];
+      sessionId: string;
+    };
+
 export type CliEvent =
   | { type: "session"; sessionId: string }
   | {
@@ -43,6 +64,7 @@ export interface CliAdapter {
   readonly displayName: string;
   buildArgs(prompt: string): string[];
   buildResumeArgs(prompt: string, sessionId: string): string[];
+  buildCompactPlan(sessionId: string, instructions?: string): CliCompactPlan;
   parseEvents(line: string): CliEvent[];
   /** 判断失败信息是否明确表示恢复指针已经失效。 */
   isSessionUnavailable?(message: string): boolean;
