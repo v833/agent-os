@@ -4,15 +4,20 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CliRunError, runCli } from "./runner.js";
+import { CliRunError, runCli, runCliWithTransientRetry } from "./runner.js";
 import type { CliAdapter, CliEvent } from "./types.js";
 
 class ScriptAdapter implements CliAdapter {
-  readonly id = "codex" as const;
+  readonly id: CliAdapter["id"];
   readonly command = process.execPath;
   readonly displayName = "测试 CLI";
 
-  constructor(private readonly script: string) {}
+  constructor(
+    private readonly script: string,
+    id: CliAdapter["id"] = "codex",
+  ) {
+    this.id = id;
+  }
 
   buildArgs(): string[] {
     return ["-e", this.script];
@@ -154,6 +159,106 @@ test("失败时保留已经观察到的 CLI 会话 ID", async () => {
       return true;
     },
   );
+});
+
+test("流式连接中断时自动重试并续接已建立的 CLI 会话", async () => {
+  let resumeCalls = 0;
+  const parser = new ScriptAdapter("");
+  const adapter: CliAdapter = {
+    id: "codex",
+    command: process.execPath,
+    displayName: "测试 CLI",
+    buildArgs() {
+      return [
+        "-e",
+        `
+          console.log(JSON.stringify({ type: "session", sessionId: "retry-session" }));
+          console.error("Reconnecting... 1/5 (stream disconnected before completion: Upstream request failed)");
+          process.exit(1);
+        `,
+      ];
+    },
+    buildResumeArgs(_prompt, sessionId) {
+      resumeCalls += 1;
+      assert.equal(sessionId, "retry-session");
+      return [
+        "-e",
+        `console.log(JSON.stringify({ type: "result", answer: "重试成功" }));`,
+      ];
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
+    },
+    parseEvents: parser.parseEvents.bind(parser),
+  };
+
+  const result = await runCliWithTransientRetry({
+    adapter,
+    prompt: "继续",
+    cwd: process.cwd(),
+  });
+
+  assert.deepEqual(result, {
+    answer: "重试成功",
+    sessionId: "retry-session",
+  });
+  assert.equal(resumeCalls, 1);
+});
+
+test("普通 CLI 错误不会触发自动重试", async () => {
+  let attempts = 0;
+  const adapter = new ScriptAdapter(
+    `
+      process.stderr.write("认证失败");
+      process.exit(3);
+    `,
+  );
+  const originalBuildArgs = adapter.buildArgs.bind(adapter);
+  adapter.buildArgs = (...args) => {
+    attempts += 1;
+    return originalBuildArgs(...args);
+  };
+
+  await assert.rejects(
+    runCliWithTransientRetry({
+      adapter,
+      prompt: "测试",
+      cwd: process.cwd(),
+    }),
+    /认证失败/,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("Claude 即使收到同样文案也不会触发 Codex 自动重试", async () => {
+  let attempts = 0;
+  const adapter = new ScriptAdapter(
+    `
+      process.stderr.write("stream disconnected before completion: Upstream request failed");
+      process.exit(3);
+    `,
+    "claude",
+  );
+  const originalBuildArgs = adapter.buildArgs.bind(adapter);
+  adapter.buildArgs = (...args) => {
+    attempts += 1;
+    return originalBuildArgs(...args);
+  };
+
+  await assert.rejects(
+    runCliWithTransientRetry({
+      adapter,
+      prompt: "测试",
+      cwd: process.cwd(),
+    }),
+    /stream disconnected before completion/,
+  );
+  assert.equal(attempts, 1);
 });
 
 test("按顺序分发一行中的多个事件并保留最终统计", async () => {

@@ -1,6 +1,6 @@
 /**
  * 通用 CLI Runner：安全启动适配器声明的无头进程，逐行消费统一事件，
- * 并集中处理超时、取消、Windows 进程树清理和唯一收尾。
+ * 并集中处理瞬时断流重试、超时、取消、Windows 进程树清理和唯一收尾。
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -8,6 +8,13 @@ import { resolveCliCommand } from "./command-resolver.js";
 import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
 const PROCESS_STOP_GRACE_MS = 2_000;
+const TRANSIENT_STREAM_RETRY_DELAYS_MS = [
+  1_000,
+  1_500,
+  2_000,
+  2_500,
+  3_000,
+] as const;
 
 export interface RunCliOptions {
   adapter: CliAdapter;
@@ -236,4 +243,77 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       });
     });
   });
+}
+
+function isTransientStreamDisconnect(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /stream disconnected before completion:\s*upstream request failed/i.test(
+    message,
+  );
+}
+
+function waitForRetry(
+  adapter: CliAdapter,
+  signal: AbortSignal | undefined,
+  delayMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, delayMs);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(new Error(`${adapter.displayName} 执行已取消`));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
+/**
+ * 对 Codex 流式连接的明确瞬时断流做有限重试；每次重试优先续接已建立的 CLI 会话。
+ * 其他 CLI 或错误保持一次执行语义，避免认证、权限或代码错误被静默重复执行。
+ */
+export async function runCliWithTransientRetry(
+  options: RunCliOptions,
+): Promise<CliRunResult> {
+  let currentSessionId = options.sessionId;
+
+  for (let retryIndex = 0; ; retryIndex += 1) {
+    try {
+      return await runCli({
+        ...options,
+        ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        onEvent: (event) => {
+          if (event.type === "session") currentSessionId = event.sessionId;
+          options.onEvent?.(event);
+        },
+      });
+    } catch (error) {
+      if (
+        options.adapter.id !== "codex" ||
+        !isTransientStreamDisconnect(error) ||
+        retryIndex >= TRANSIENT_STREAM_RETRY_DELAYS_MS.length ||
+        options.signal?.aborted
+      ) {
+        throw error;
+      }
+      if (error instanceof CliRunError && error.sessionId) {
+        currentSessionId = error.sessionId;
+      }
+
+      const delayMs = TRANSIENT_STREAM_RETRY_DELAYS_MS[retryIndex];
+      console.warn(
+        `[CLI] 检测到流式连接中断，将在 ${delayMs}ms 后重试 (${retryIndex + 1}/${TRANSIENT_STREAM_RETRY_DELAYS_MS.length})`,
+      );
+      await waitForRetry(options.adapter, options.signal, delayMs);
+    }
+  }
 }

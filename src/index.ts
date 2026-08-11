@@ -9,7 +9,7 @@ import {
   getCliAdapter,
   listCliAdapters,
 } from "./cli/registry.js";
-import { CliRunError, runCli } from "./cli/runner.js";
+import { CliRunError, runCliWithTransientRetry } from "./cli/runner.js";
 import type { CliAdapter } from "./cli/types.js";
 import { compactCliSession } from "./cli/native-compact.js";
 import { listNativeCliSessions } from "./cli/native-sessions.js";
@@ -111,10 +111,10 @@ function executeCli(
   workspaceDir: string,
   cliSessionId: string | undefined,
   signal: AbortSignal,
-  onEvent: Parameters<typeof runCli>[0]["onEvent"],
+  onEvent: Parameters<typeof runCliWithTransientRetry>[0]["onEvent"],
 ) {
   console.log(`[CLI] 启动 engine=${adapter.id} cwd=${workspaceDir}`);
-  return runCli({
+  return runCliWithTransientRetry({
     adapter,
     prompt,
     cwd: workspaceDir,

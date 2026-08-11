@@ -73,8 +73,7 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
     "exec",
     "resume",
     "--json",
-    "--sandbox",
-    "danger-full-access",
+    "--dangerously-bypass-approvals-and-sandbox",
     "--skip-git-repo-check",
     "codex-thread",
     "继续",
@@ -82,7 +81,7 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
   assert.deepEqual(adapter.buildCompactPlan("codex-thread"), {
     protocol: "codex-app-server",
     command: "codex",
-    args: ["app-server", "--stdio"],
+    args: ["app-server"],
     sessionId: "codex-thread",
   });
 });

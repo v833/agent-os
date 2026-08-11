@@ -224,6 +224,8 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 
 子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认不设执行时限；调用方显式传入 `timeoutMs` 时才会自动超时，或由 `/close` 取消并终止 CLI 及其整棵子进程树。
 
+Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 参数。首次 `codex exec` 使用 `--sandbox danger-full-access`；`codex exec resume` 使用 `--dangerously-bypass-approvals-and-sandbox`，因为续聊子命令不接受 `--sandbox`。Codex 返回 `stream disconnected before completion: Upstream request failed` 时，Runner 会把它视为瞬时流式断开，最多自动重试 5 次，依次等待 1 秒、1.5 秒、2 秒、2.5 秒、3 秒；已经建立 CLI 会话时优先使用续聊参数，没有会话 ID 时重新发起同一任务。Claude、认证、权限、会话失效和其他普通错误不会自动重试；用户在等待期间发送 `/close` 也会立即取消重试。
+
 ### 多 bot 与双引擎首通验收
 
 启动日志应先显示注册数量和每台 bot 的默认引擎，再分别出现连接成功：

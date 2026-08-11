@@ -149,7 +149,7 @@ function listCodexSessions(
     const executable = resolveCliCommand(options.adapter.command);
     const child = spawn(
       executable.command,
-      [...executable.argsPrefix, "app-server", "--stdio"],
+      [...executable.argsPrefix, "app-server"],
       {
         cwd: options.cwd,
         stdio: ["pipe", "pipe", "pipe"],

@@ -134,8 +134,7 @@ export class CodexAdapter implements CliAdapter {
       "exec",
       "resume",
       "--json",
-      "--sandbox",
-      "danger-full-access",
+      "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
       sessionId,
       prompt,
@@ -146,7 +145,7 @@ export class CodexAdapter implements CliAdapter {
     return {
       protocol: "codex-app-server" as const,
       command: this.command,
-      args: ["app-server", "--stdio"],
+      args: ["app-server"],
       sessionId,
     };
   }
