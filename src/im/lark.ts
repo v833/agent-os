@@ -27,6 +27,7 @@ export interface IncomingMessage {
   rawContent: string;
   rootId: string;
   threadId: string;
+  senderType: string;
   senderOpenId: string;
   mentions: Mention[];
 }
@@ -55,8 +56,15 @@ export interface CardActionResponse {
   card?: { type: "raw"; data: CardJson };
 }
 
+/** 飞书 bot 的稳定身份，供跨 bot 提及和结果通知使用。 */
+export interface BotIdentity {
+  openId: string;
+  name: string;
+}
+
 export interface Bot {
   client: Lark.Client;
+  getIdentity: () => Promise<BotIdentity>;
   reply: (
     messageId: string,
     text: string,
@@ -67,6 +75,12 @@ export interface Bot {
     card: CardJson,
     replyInThread?: boolean,
   ) => Promise<string | undefined>;
+  replyMention: (
+    messageId: string,
+    target: BotIdentity,
+    text: string,
+    replyInThread?: boolean,
+  ) => Promise<string | undefined>;
   updateCard: (messageId: string, card: CardJson) => Promise<void>;
   downloadResource: (
     messageId: string,
@@ -75,6 +89,39 @@ export interface Bot {
     saveDir: string,
     fileName?: string,
   ) => Promise<string>;
+}
+
+/** 构造飞书 post 消息的语言节点和二维内容数组，确保 @ 真正触达目标 bot。 */
+export function buildMentionPostContent(
+  target: BotIdentity,
+  text: string,
+): Record<string, unknown> {
+  return {
+    zh_cn: {
+      title: "",
+      content: [
+        [
+          {
+            tag: "at",
+            user_id: target.openId,
+            ...(target.name ? { user_name: target.name } : {}),
+          },
+          { tag: "text", text: ` ${text}` },
+        ],
+      ],
+    },
+  };
+}
+
+async function fetchBotIdentity(client: Lark.Client): Promise<BotIdentity> {
+  const response = await client.request({
+    url: "/open-apis/bot/v3/info",
+    method: "GET",
+  });
+  const bot = (response as { bot?: { open_id?: string; app_name?: string } })
+    .bot;
+  if (!bot?.open_id) throw new Error("飞书没有返回 bot open_id");
+  return { openId: bot.open_id, name: bot.app_name?.trim() || "Bot" };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,7 +208,11 @@ export function extractMessageText(messageType: string, content: string): string
   }
 
   if (messageType === "post") {
-    const paragraphs: PostElement[][] = parsed.content ?? [];
+    const localized = isRecord(parsed.zh_cn) ? parsed.zh_cn : undefined;
+    const paragraphs: PostElement[][] =
+      (Array.isArray(parsed.content)
+        ? parsed.content
+        : localized?.content) ?? [];
     return paragraphs
       .map((paragraph) => paragraph.map(renderPostElement).join(""))
       .filter(Boolean)
@@ -179,6 +230,9 @@ export function startBot(options: BotOptions): Bot {
 
   const bot: Bot = {
     client,
+    getIdentity() {
+      return fetchBotIdentity(client);
+    },
     async reply(messageId, text, replyInThread = false) {
       const response = await client.im.v1.message.reply({
         path: { message_id: messageId },
@@ -196,6 +250,17 @@ export function startBot(options: BotOptions): Bot {
         data: {
           msg_type: "interactive",
           content: JSON.stringify(card),
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+      return response.data?.message_id;
+    },
+    async replyMention(messageId, target, text, replyInThread = false) {
+      const response = await client.im.v1.message.reply({
+        path: { message_id: messageId },
+        data: {
+          msg_type: "post",
+          content: JSON.stringify(buildMentionPostContent(target, text)),
           ...(replyInThread ? { reply_in_thread: true } : {}),
         },
       });
@@ -242,6 +307,7 @@ export function startBot(options: BotOptions): Bot {
         rawContent: message.content,
         rootId: message.root_id ?? "",
         threadId: message.thread_id ?? "",
+        senderType: data.sender.sender_type ?? "",
         senderOpenId: data.sender.sender_id?.open_id ?? "",
         mentions: parseMentions(message.mentions),
       };

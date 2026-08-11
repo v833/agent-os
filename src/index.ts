@@ -1,10 +1,10 @@
 /**
  * Agent OS 进程入口：把飞书消息接入会话模型、控制命令、资源下载、
- * 原生会话管理、真实 CLI 调度和任务卡片，并维护“每台 bot 在一个飞书话题对应一个会话”。
+ * 原生会话管理、真实 CLI 调度、任务卡片和 bot 间同话题交接，并维护“每台 bot 在一个飞书话题对应一个会话”。
  */
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import {
   getCliAdapter,
   listCliAdapters,
@@ -25,6 +25,11 @@ import {
   SessionManager,
   type Session,
 } from "./core/session-manager.js";
+import {
+  CollaborationInbox,
+  collaborationTurnKey,
+  type CollaborationMessage,
+} from "./core/collaboration.js";
 import { JsonSessionStore } from "./core/session-store.js";
 import { requestTaskAbort, type ActiveRun } from "./core/task-abort.js";
 import { TaskProgressTracker } from "./core/task-progress.js";
@@ -36,12 +41,17 @@ import {
   answerContinuation,
   answerNeedsContinuation,
   buildResumeCard,
+  buildCollaborationCard,
   buildSessionNoticeCard,
   buildTaskCard,
   splitLongText,
   ThrottledCardUpdater,
 } from "./im/card.js";
-import { startBot } from "./im/lark.js";
+import {
+  startBot,
+  type Bot,
+  type BotIdentity,
+} from "./im/lark.js";
 import {
   extractResourceKeys,
   leadingMentionName,
@@ -71,6 +81,16 @@ const sessions = await SessionManager.open({
 const activeRuns = new Map<string, ActiveRun>();
 // Claude 的模型窗口通常到本轮结束才返回，按会话记忆后供下一轮实时展示。
 const contextWindows = new Map<string, number>();
+interface BotRuntime {
+  config: BotConfig;
+  bot: Bot;
+  identity: BotIdentity;
+}
+
+// 运行时身份用于真实 @，交接单只在当前进程内保存待领取任务。
+const botRuntimes = new Map<string, BotRuntime>();
+const processedCollaborationTurns = new Set<string>();
+const collaborationInbox = new CollaborationInbox();
 
 console.log("Agent OS 启动，正在建立飞书长连接…");
 console.log(
@@ -132,8 +152,89 @@ function formatSessionStatus(session: Session, botId: string): string {
   ].join("\n");
 }
 
+/** 登记交接单、发送说明卡片和真实提及；任一步出错都会撤销待领取记录。 */
+async function sendCollaborationMessage(options: {
+  senderConfig: BotConfig;
+  senderBot: Bot;
+  replyToMessageId: string;
+  targetBotId: string;
+  taskId: string;
+  workspaceDir: string;
+  prompt: string;
+}): Promise<void> {
+  const target = botRuntimes.get(options.targetBotId);
+  if (!target) {
+    throw new Error(`协作 bot 尚未就绪: ${options.targetBotId}`);
+  }
+
+  const collaboration: CollaborationMessage = {
+    dispatchId: randomUUID().replaceAll("-", "").slice(0, 12),
+    taskId: options.taskId,
+    fromBotId: options.senderConfig.id,
+    toBotId: options.targetBotId,
+    workspaceDir: options.workspaceDir,
+    prompt: options.prompt,
+  };
+  collaborationInbox.register(collaboration);
+  try {
+    const senderName =
+      botRuntimes.get(options.senderConfig.id)?.identity.name ??
+      options.senderConfig.id;
+    const cardMessageId = await options.senderBot.replyCard(
+      options.replyToMessageId,
+      buildCollaborationCard({
+        senderName,
+        targetName: target.identity.name,
+        workspaceName: basename(options.workspaceDir),
+        prompt: options.prompt,
+      }),
+      true,
+    );
+    if (!cardMessageId) {
+      throw new Error("飞书没有返回协作卡片 message_id");
+    }
+
+    const mentionMessageId = await options.senderBot.replyMention(
+      cardMessageId,
+      target.identity,
+      `新的代码审查任务（任务编号：${collaboration.dispatchId}），请查看上方卡片。`,
+      true,
+    );
+    if (!mentionMessageId) {
+      throw new Error("飞书没有返回协作通知 message_id");
+    }
+  } catch (error) {
+    collaborationInbox.consume(collaboration.dispatchId, collaboration.toBotId);
+    throw error;
+  }
+
+  console.log(
+    `[协作] task=${options.taskId} ${options.senderConfig.id} -> ${options.targetBotId}`,
+  );
+}
+
+/** 给来源 bot 或普通消息发起人发送完成提醒；通知失败不影响任务结果。 */
+async function sendResultNotification(options: {
+  bot: Bot;
+  replyToMessageId: string;
+  target: BotIdentity;
+  text: string;
+  replyInThread: boolean;
+}): Promise<void> {
+  try {
+    await options.bot.replyMention(
+      options.replyToMessageId,
+      options.target,
+      options.text,
+      options.replyInThread,
+    );
+  } catch (error) {
+    console.error("[通知] 结果通知发送失败:", (error as Error).message);
+  }
+}
+
 async function startConfiguredBot(config: BotConfig): Promise<void> {
-  startBot({
+  const startedBot = startBot({
     appId: config.appId,
     appSecret: config.appSecret,
     onCardAction: async (action) => {
@@ -226,6 +327,41 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     },
     onMessage: async (message, bot) => {
     const resolved = resolveMentions(message.text, message.mentions);
+    let senderRuntime: BotRuntime | undefined;
+    let collaboration: CollaborationMessage | undefined;
+    if (message.senderType === "app" || message.senderType === "bot") {
+      const currentRuntime = botRuntimes.get(config.id);
+      const mentionedCurrentBot = currentRuntime
+        ? message.mentions.some(
+            (mention) => mention.openId === currentRuntime.identity.openId,
+          )
+        : false;
+      const dispatchId = message.text.match(/任务编号：([a-f0-9]{12})/)?.[1];
+      const pending =
+        message.messageType === "post" &&
+        mentionedCurrentBot &&
+        dispatchId
+          ? collaborationInbox.consume(dispatchId, config.id)
+          : undefined;
+      if (!pending) {
+        console.log(
+          `[协作] 忽略非目标 bot 消息 sender=${message.senderOpenId} target=${config.id}`,
+        );
+        return;
+      }
+      senderRuntime = botRuntimes.get(pending.fromBotId);
+      if (!senderRuntime) {
+        console.log(`[协作] 找不到来源 bot: ${pending.fromBotId}`);
+        return;
+      }
+      const turnKey = collaborationTurnKey(pending);
+      if (processedCollaborationTurns.has(turnKey)) {
+        console.log(`[协作] 忽略重复消息 ${turnKey}`);
+        return;
+      }
+      processedCollaborationTurns.add(turnKey);
+      collaboration = pending;
+    }
     const hasThread = Boolean(message.threadId || message.rootId);
     const command = parseCommand(resolved);
     const cliRequest = parseCliRequest(
@@ -244,7 +380,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       message,
       cliRequest?.cliId ?? config.defaultCliId,
       config.id,
-      config.workspaceDir,
+      collaboration?.workspaceDir ?? config.workspaceDir,
     );
     let { session } = resolvedSession;
     const { isNew } = resolvedSession;
@@ -252,7 +388,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       session = await sessions.transition(session.id, "idle");
     }
     const cliAdapter = getCliAdapter(session.cliId);
-    const requestedPrompt = cliRequest?.prompt ?? resolved;
+    const requestedPrompt = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
 
     console.log(
       `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,
@@ -497,6 +633,17 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       return;
     }
 
+    if (
+      collaboration &&
+      session.workspaceDir !== collaboration.workspaceDir
+    ) {
+      await ensureWorkspaceDirectory(collaboration.workspaceDir);
+      session = await sessions.setWorkspaceDir(
+        session.id,
+        collaboration.workspaceDir,
+      );
+    }
+
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
     const prompt = buildBotPrompt(
@@ -729,7 +876,6 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
                 progress: progress.snapshot(),
                 answer: result.answer,
                 stats: result.stats,
-                recipientOpenId: message.senderOpenId,
               }),
         );
         if (!isCompacting && answerNeedsContinuation(result.answer)) {
@@ -741,6 +887,52 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         console.log(
           `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
         );
+        if (!collaboration) {
+          await sendResultNotification({
+            bot,
+            replyToMessageId: message.messageId,
+            target: { openId: message.senderOpenId, name: "" },
+            text: isCompacting
+              ? "上下文整理已完成，请查看上方结果。"
+              : "任务已完成，请查看上方结果。",
+            replyInThread: hasThread,
+          });
+        }
+        if (!isCompacting) {
+          try {
+            if (!collaboration && config.reviewBy) {
+              await sendCollaborationMessage({
+                senderConfig: config,
+                senderBot: bot,
+                replyToMessageId: message.messageId,
+                targetBotId: config.reviewBy,
+                taskId: randomUUID(),
+                workspaceDir: session.workspaceDir,
+                prompt: [
+                  "请独立检查当前工作目录中刚完成的实现。",
+                  `原始任务：${requestedPrompt}`,
+                  "请直接读取代码和改动，指出明确问题；没有问题时说明检查通过。",
+                ].join("\n\n"),
+              });
+            } else if (collaboration && senderRuntime) {
+              await sendResultNotification({
+                bot,
+                replyToMessageId: message.messageId,
+                target: senderRuntime.identity,
+                text: "代码审查已完成，请查看上方结果。",
+                replyInThread: hasThread,
+              });
+            }
+          } catch (error) {
+            const errorMessage = (error as Error).message;
+            console.error("[协作] 派发失败:", errorMessage);
+            await bot.reply(
+              message.messageId,
+              `协作派发失败：${errorMessage}`,
+              hasThread,
+            );
+          }
+        }
       })
       .catch(async (error) => {
         clearInterval(progressHeartbeat);
@@ -817,7 +1009,11 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       });
   },
   });
-  console.log(`[Bot ${config.id.toUpperCase()}] 已连接`);
+  const identity = await startedBot.getIdentity();
+  botRuntimes.set(config.id, { config, bot: startedBot, identity });
+  console.log(
+    `[Bot ${config.id.toUpperCase()}] 已连接 name=${identity.name} open_id=${identity.openId}`,
+  );
 }
 
 await Promise.all(botConfigs.map(startConfiguredBot));

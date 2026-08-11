@@ -70,7 +70,13 @@ export function extractResourceKeys(
 
   if (messageType === "post") {
     // 富文本图片藏在二维元素数组中；这里只收集资源，不把 img/at 混入正文。
-    const paragraphs: any[][] = parsed.content ?? [];
+    const localized =
+      typeof parsed.zh_cn === "object" && parsed.zh_cn !== null
+        ? parsed.zh_cn
+        : undefined;
+    const paragraphs: any[][] =
+      (Array.isArray(parsed.content) ? parsed.content : localized?.content) ??
+      [];
     for (const element of paragraphs.flat()) {
       if (element.tag === "img" && element.image_key) {
         resources.push({ type: "image", key: element.image_key });

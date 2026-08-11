@@ -25,6 +25,7 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
   const adapter = new ClaudeAdapter();
 
   assert.deepEqual(adapter.buildArgs("你好"), [
+    "--dangerously-skip-permissions",
     "-p",
     "你好",
     "--output-format",
@@ -34,6 +35,7 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
   assert.deepEqual(adapter.buildResumeArgs("继续", "claude-session"), [
     "--resume",
     "claude-session",
+    "--dangerously-skip-permissions",
     "-p",
     "继续",
     "--output-format",
@@ -46,6 +48,7 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
     args: [
       "--resume",
       "claude-session",
+      "--dangerously-skip-permissions",
       "-p",
       "/compact 保留接口",
       "--output-format",

@@ -20,7 +20,7 @@
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `enabled`。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `enabled`、`reviewBy`。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -31,7 +31,8 @@ Copy-Item config/bots.example.json config/bots.json
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
       "defaultCli": "claude",
       "workspace": ".",
-      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。"
+      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
+      "reviewBy": "reviewer"
     },
     {
       "id": "reviewer",
@@ -47,6 +48,8 @@ Copy-Item config/bots.example.json config/bots.json
 ```
 
 `appIdEnv` 和 `appSecretEnv` 指向 `.env` 中的真实凭证变量。停用 bot 时设置 `enabled: false`，它不会读取凭证或建立长连接；全部停用或配置字段错误时程序会在启动阶段退出。修改 `.env` 或 `config/*.json` 会触发 `pnpm start` 自动重启。群里 @哪台 bot，就由哪台 bot 接手，程序无需再次判断目标应用。
+
+`reviewBy` 填另一台已启用 bot 的 ID。开发 bot 的普通任务成功后，会在原话题发送审查卡片，再发送一条真正提及审查 bot 的富文本消息；审查 bot 会继承来源 bot 的工作目录并建立独立 CLI 会话。审查完成后只通知来源 bot，不会自动开启下一轮修改。目标不存在、未启用或指向自己时，程序会在启动阶段拒绝配置。
 
 ## 启动与验证
 
@@ -88,6 +91,8 @@ claude
 ```
 
 首次运行 `claude` 时完成 Anthropic 登录。使用兼容模型服务时，把供应商地址、认证令牌和模型配置保存在各 CLI 的用户级配置中，也可以使用 CC Switch 切换服务；不要把模型密钥写入项目或提交仓库。
+
+飞书无法展示 Claude Code 的交互式权限确认，因此 Agent OS 会以 `--dangerously-skip-permissions` 无人值守运行 Claude。只应把 bot 指向明确可信、可随时回退的工作目录。
 
 每台 bot 的默认工作目录和新话题默认引擎由 `config/bots.json` 决定：
 
@@ -226,8 +231,8 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 [配置] 已注册 2 个 bot，已恢复 0 个会话
 [Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
 [Bot REVIEWER] default_cli=codex workspace=C:\审查\项目
-[Bot DEVELOPER] 已连接
-[Bot REVIEWER] 已连接
+[Bot DEVELOPER] 已连接 name=开发助手 open_id=ou_developer
+[Bot REVIEWER] 已连接 name=审查助手 open_id=ou_reviewer
 ```
 
 分别新开两个话题，向开发助手和审查助手各发一条任务。开发助手应使用 Claude Code，审查助手应使用 Codex；同一话题分别 @ 两台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
@@ -237,6 +242,27 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
 
 CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下一轮会自动调用 Claude Code 的 `--resume <session_id>` 或 Codex 的 `exec resume <thread_id>`；新话题没有恢复指针，会从干净上下文开始。
+
+## 同话题任务交接
+
+配置 `reviewBy` 后，普通开发任务成功会按以下顺序交接：
+
+1. 开发 bot 更新原任务卡片为成功状态。
+2. Agent OS 在内存收件箱登记 `dispatchId`、来源/目标 bot、原话题 `taskId`、完整审查提示词和工作目录。
+3. 开发 bot 回复一张“代码审查已发起”卡片，再回复一条带任务编号的 `post` 消息，真实 `@` 审查 bot。
+4. 只有被提及且匹配任务编号的目标 bot 会领取交接单；领取后立即删除，重复事件不会再次执行。
+5. 审查 bot 在来源工作目录中启动自己的 CLI 会话，完成后在原话题发送“代码审查已完成”并提及来源 bot。
+
+卡片只负责展示项目、角色和审查说明，不能替代真实提及。交接单当前保存在内存中，服务在投递后重启会丢失尚未领取的任务；验证交接链路时不要重启服务。
+
+### 单向交接验收
+
+1. 将开发 bot 的 `reviewBy` 配为 `reviewer`，并让两台 bot 的 `workspace` 都指向同一个真实项目。
+2. 运行 `pnpm build`、`pnpm test` 后启动 `pnpm start`，日志应打印两台 bot 的 `name` 和 `open_id`。
+3. 在新话题发送 `@开发助手 阅读 TASK.md，完成里面的功能并运行验证。`。
+4. 开发任务完成后，应看到“代码审查已发起”卡片和一条新的 `@审查助手` 富文本消息。
+5. 审查 bot 应在同一项目中独立检查改动，完成后新发一条提醒开发 bot 的消息；它不会再次启动开发任务。
+6. 向非目标 bot 转发这条通知、删除任务编号或重复投递时，目标 bot 都不应启动 CLI。
 
 ### 多轮对话验收
 

@@ -125,8 +125,16 @@ function parseStats(event: ClaudeEvent): CliRunStats | undefined {
 }
 
 function outputArgs(prompt: string): string[] {
+  // 机器人无法展示交互式确认；仅在受信任且可回退的配置工作目录中使用。
   // 提示词保持为独立参数，不能与用户输入拼成一条 shell 命令。
-  return ["-p", prompt, "--output-format", "stream-json", "--verbose"];
+  return [
+    "--dangerously-skip-permissions",
+    "-p",
+    prompt,
+    "--output-format",
+    "stream-json",
+    "--verbose",
+  ];
 }
 
 /** 将 Claude Code 的命令行和 JSONL 协议适配为 Agent OS 公共事件。 */

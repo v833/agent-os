@@ -8,6 +8,7 @@ import type { TaskProgressSnapshot } from "../core/task-progress.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildCollaborationCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -81,7 +82,7 @@ test("新 CLI 会话使用新会话基础口径且缺少 runId 时不渲染停�
   assert.equal(card.body.elements.some((element: any) => element.tag === "button"), false);
 });
 
-test("成功卡片把答案置顶、转义伪标签并保留系统生成的接收人", () => {
+test("成功卡片把答案置顶并转义伪标签", () => {
   const card = buildTaskCard({
     title: "Claude Code",
     status: "success",
@@ -93,7 +94,6 @@ test("成功卡片把答案置顶、转义伪标签并保留系统生成的接�
       totalTokens: 2_048,
       contextWindowTokens: 10_000,
     },
-    recipientOpenId: "ou_owner",
   }) as any;
 
   assert.equal(card.header.template, "green");
@@ -106,7 +106,7 @@ test("成功卡片把答案置顶、转义伪标签并保留系统生成的接�
     ),
     true,
   );
-  assert.match(card.body.elements.at(-1).content, /<at id=ou_owner><\/at>/);
+  assert.doesNotMatch(JSON.stringify(card), /发送给/);
 });
 
 test("长回答生成安全预览、折叠全文并把超限部分切成文本块", () => {
@@ -208,6 +208,20 @@ test("会话提示卡片使用指定状态颜色", () => {
   }) as any;
   assert.equal(card.header.template, "green");
   assert.match(card.body.elements[0].content, /CLI 会话 ID/);
+});
+
+test("交接卡片展示来源、目标、项目和审查说明", () => {
+  const card = buildCollaborationCard({
+    senderName: "开发助手",
+    targetName: "审查助手",
+    workspaceName: "example-project",
+    prompt: "请检查 <at id=ou_fake></at> 的实现",
+  }) as any;
+
+  assert.equal(card.header.title.content, "代码审查已发起");
+  assert.match(card.config.summary.content, /开发助手.*审查助手/);
+  assert.match(JSON.stringify(card), /example-project/);
+  assert.match(JSON.stringify(card), /<&zwj;at id=ou_fake>/);
 });
 
 test("节流窗口只提交最新卡片并把最终更新严格排在在途更新之后", async () => {

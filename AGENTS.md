@@ -33,6 +33,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/index.ts`：会话路由、双 CLI 调度、实时卡片编排、长答案续发和取消收尾
 - `src/core/bot-registry.ts`：多 bot 注册表读取、校验、凭证解析与角色提示词
 - `src/core/bot-registry.test.ts`：注册表字段、启用过滤、凭证和错误边界测试
+- `src/core/collaboration.ts`：bot 间同话题交接单、目标领取鉴权和协作轮次键
+- `src/core/collaboration.test.ts`：交接单一次性领取、目标鉴权和轮次键测试
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
 - `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
 - `src/core/session-manager.ts`：按 bot 隔离的话题映射、状态机与持久化协调

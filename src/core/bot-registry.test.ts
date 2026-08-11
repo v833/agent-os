@@ -83,6 +83,62 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
   );
 });
 
+test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
+  const input = {
+    bots: [
+      {
+        id: "developer",
+        appIdEnv: "DEV_ID",
+        appSecretEnv: "DEV_SECRET",
+        defaultCli: "claude",
+        reviewBy: "reviewer",
+      },
+      {
+        id: "reviewer",
+        appIdEnv: "REVIEW_ID",
+        appSecretEnv: "REVIEW_SECRET",
+        defaultCli: "codex",
+      },
+    ],
+  };
+
+  const configs = parseBotConfigs(input, {
+    DEV_ID: "dev",
+    DEV_SECRET: "dev-secret",
+    REVIEW_ID: "review",
+    REVIEW_SECRET: "review-secret",
+  });
+  assert.equal(configs[0]?.reviewBy, "reviewer");
+
+  assert.throws(
+    () =>
+      parseBotConfigs(
+        {
+          bots: [
+            {
+              ...input.bots[0],
+              reviewBy: "missing",
+            },
+            { ...input.bots[1], enabled: false },
+          ],
+        },
+        {
+          DEV_ID: "dev",
+          DEV_SECRET: "dev-secret",
+        },
+      ),
+    /reviewBy 指向未启用的 bot: missing/,
+  );
+  assert.throws(
+    () =>
+      parseBotConfigs(
+        { bots: [{ ...input.bots[0], reviewBy: "developer" }] },
+        { DEV_ID: "dev", DEV_SECRET: "dev-secret" },
+      ),
+    /不能把自己配置为 reviewBy/,
+  );
+});
+
 test("解析 bot 工作目录并兼容旧环境变量回退", () => {
   const baseDirectory = join(process.cwd(), "test-base");
   assert.equal(

@@ -5,11 +5,32 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildMentionPostContent,
   extractMessageText,
   getHeader,
   parseCardAction,
   resourceExtension,
 } from "./lark.js";
+
+test("构造带语言节点的真实 bot 提及 post", () => {
+  assert.deepEqual(
+    buildMentionPostContent(
+      { openId: "ou_reviewer", name: "审查助手" },
+      "请查看上方卡片",
+    ),
+    {
+      zh_cn: {
+        title: "",
+        content: [
+          [
+            { tag: "at", user_id: "ou_reviewer", user_name: "审查助手" },
+            { tag: "text", text: " 请查看上方卡片" },
+          ],
+        ],
+      },
+    },
+  );
+});
 
 test("提取 text 消息正文", () => {
   assert.equal(
@@ -41,6 +62,21 @@ test("提取 post 消息中的提及、链接、代码、Markdown 和换行", ()
   assert.equal(
     extractMessageText("post", content),
     "@_user_1 请检查 文档\npnpm build\nconst answer = 42;\n**完成**",
+  );
+});
+
+test("提取飞书语言节点包裹的 post 消息", () => {
+  assert.equal(
+    extractMessageText(
+      "post",
+      JSON.stringify({
+        zh_cn: {
+          title: "",
+          content: [[{ tag: "text", text: "任务编号：abc123abc123" }]],
+        },
+      }),
+    ),
+    "任务编号：abc123abc123",
   );
 });
 
