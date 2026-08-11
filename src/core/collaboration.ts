@@ -1,5 +1,5 @@
 /**
- * 同话题协作交接模型：保存一次 bot 到 bot 的任务投递，并保证只有目标 bot
+ * 同话题协作交接模型：保存一次带轮次的 bot 到 bot 任务投递，并保证只有目标 bot
  * 能领取一次。它位于飞书消息与 CLI 执行之间，进程重启时不恢复内存中的待领取单。
  */
 
@@ -9,13 +9,17 @@ export interface CollaborationMessage {
   taskId: string;
   fromBotId: string;
   toBotId: string;
+  /** bot 之间的第几次交接，从 1 开始。 */
+  round: number;
+  /** 本次协作允许发生的最大交接次数。 */
+  maxRounds: number;
   workspaceDir: string;
   prompt: string;
 }
 
-/** 以整项任务和目标 bot 标识协作轮次，防止重复事件重复执行。 */
+/** 以任务、轮次和目标 bot 标识当前交接，防止重复事件重复执行。 */
 export function collaborationTurnKey(message: CollaborationMessage): string {
-  return `${message.taskId}:${message.toBotId}`;
+  return `${message.taskId}:${message.round}:${message.toBotId}`;
 }
 
 /** 进程内待领取交接单；领取成功立即删除，避免同一消息重复执行。 */

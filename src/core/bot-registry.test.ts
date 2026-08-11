@@ -41,6 +41,7 @@ test("解析启用 bot 的凭证、默认引擎和角色", () => {
       appSecret: "developer-secret",
       defaultCliId: "claude",
       systemPrompt: "主力开发助手",
+      collaborationMaxRounds: 2,
       workspaceDir: process.cwd(),
     },
   ]);
@@ -77,6 +78,7 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
         appSecret: "secret",
         defaultCliId: "codex",
         systemPrompt: "",
+        collaborationMaxRounds: 2,
         workspaceDir: process.cwd(),
       },
     ],
@@ -109,6 +111,7 @@ test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
     REVIEW_SECRET: "review-secret",
   });
   assert.equal(configs[0]?.reviewBy, "reviewer");
+  assert.equal(configs[0]?.collaborationMaxRounds, 2);
 
   assert.throws(
     () =>
@@ -179,6 +182,24 @@ test("拒绝重复和非法 bot ID", () => {
   assert.throws(
     () => parseBotConfigs(registry({ id: "Developer!" }), credentials),
     /bot id 只能使用小写字母/,
+  );
+});
+
+test("协作轮次限制在 1 到 4 之间并支持显式配置", () => {
+  assert.equal(
+    parseBotConfigs(registry({ collaborationMaxRounds: 4 }), credentials)[0]
+      ?.collaborationMaxRounds,
+    4,
+  );
+  assert.throws(
+    () =>
+      parseBotConfigs(registry({ collaborationMaxRounds: 0 }), credentials),
+    /expected number to be >=1/,
+  );
+  assert.throws(
+    () =>
+      parseBotConfigs(registry({ collaborationMaxRounds: 5 }), credentials),
+    /expected number to be <=4/,
   );
 });
 
