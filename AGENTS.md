@@ -31,7 +31,11 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 ## 模块地图
 
 - `src/index.ts`：会话路由、双 CLI 调度、实时卡片编排、长答案续发和取消收尾
-- `src/core/session-manager.ts`：话题映射、状态机与持久化协调
+- `src/core/bot-registry.ts`：多 bot 注册表读取、校验、凭证解析与角色提示词
+- `src/core/bot-registry.test.ts`：注册表字段、启用过滤、凭证和错误边界测试
+- `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
+- `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
+- `src/core/session-manager.ts`：按 bot 隔离的话题映射、状态机与持久化协调
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
@@ -42,7 +46,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/cli/types.ts`：双 CLI 统一适配器、事件和运行结果契约
-- `src/cli/registry.ts`：双引擎注册、查找与 `DEFAULT_CLI` 校验
+- `src/cli/registry.ts`：双引擎注册、查找与 CLI ID 校验
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理

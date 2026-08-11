@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -8,14 +8,45 @@
 2. 确认应用已启用机器人能力，并订阅 `im.message.receive_v1` 事件。
 3. 事件接收方式选择“使用长连接接收事件”。
 4. 创建一个话题群，在群设置的“群机器人”中加入该应用。
-5. 将 App ID 和 App Secret 写入本地 `.env`：
-
-```dotenv
-BOT_A_APP_ID=cli_你的AppID
-BOT_A_APP_SECRET=你的AppSecret
-```
+5. 为每台 bot 创建应用并把 App ID、App Secret 写入本地 `.env`。bot 的对应关系在 `config/bots.json` 中维护。
 
 `.env` 已被 Git 忽略，禁止提交真实凭证。
+
+## 多 bot 注册表
+
+先复制配置模板，再按本机 bot 填写配置：
+
+```powershell
+Copy-Item config/bots.example.json config/bots.json
+```
+
+`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `enabled`。示例文件可以提交，实际配置已被 Git 忽略：
+
+```json
+{
+  "bots": [
+    {
+      "id": "developer",
+      "appIdEnv": "FEISHU_DEVELOPER_APP_ID",
+      "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
+      "defaultCli": "claude",
+      "workspace": ".",
+      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。"
+    },
+    {
+      "id": "reviewer",
+      "appIdEnv": "FEISHU_REVIEWER_APP_ID",
+      "appSecretEnv": "FEISHU_REVIEWER_APP_SECRET",
+      "defaultCli": "codex",
+      "workspace": ".",
+      "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
+      "enabled": true
+    }
+  ]
+}
+```
+
+`appIdEnv` 和 `appSecretEnv` 指向 `.env` 中的真实凭证变量。停用 bot 时设置 `enabled: false`，它不会读取凭证或建立长连接；全部停用或配置字段错误时程序会在启动阶段退出。修改 `.env` 或 `config/*.json` 会触发 `pnpm start` 自动重启。群里 @哪台 bot，就由哪台 bot 接手，程序无需再次判断目标应用。
 
 ## 启动与验证
 
@@ -58,18 +89,21 @@ claude
 
 首次运行 `claude` 时完成 Anthropic 登录。使用兼容模型服务时，把供应商地址、认证令牌和模型配置保存在各 CLI 的用户级配置中，也可以使用 CC Switch 切换服务；不要把模型密钥写入项目或提交仓库。
 
-在 `.env` 中选择新话题默认使用的引擎和工作目录：
+每台 bot 的默认工作目录和新话题默认引擎由 `config/bots.json` 决定：
 
-```dotenv
-DEFAULT_CLI=codex
-CLI_WORKDIR=C:\你的\项目\绝对路径
+```json
+{
+  "id": "developer",
+  "defaultCli": "claude",
+  "workspace": "C:\\你的\\项目\\绝对路径"
+}
 ```
 
-- `DEFAULT_CLI` 只能是 `codex` 或 `claude`，留空时默认使用 Codex。
-- `CLI_WORKDIR` 同时提供给两个 CLI，留空时使用 Agent OS 的启动目录；旧的 `CLAUDE_WORKDIR` 仍可作为回退值。
-- 工作目录决定 CLI 读取、修改和执行命令的项目，启动前必须确认路径正确。
-- CLI 的本地会话与工作目录绑定；建立会话后不要修改 `CLI_WORKDIR`，否则恢复指针可能失效。
-- 已持久化话题继续使用自己的 `cliId`；切换 `DEFAULT_CLI` 只影响之后创建的新话题。
+- `workspace` 可以填写相对路径或绝对路径；相对路径从 Agent OS 启动目录解析，未填写时兼容读取 `CLI_WORKDIR`、`CLAUDE_WORKDIR`，最后回退当前目录。
+- 工作目录决定 CLI 读取、修改和执行命令的项目，启动时会检查路径存在且是文件夹。
+- 话题创建时复制 bot 的默认目录；同一 bot 的不同话题可以分别使用不同项目。
+- 在话题中发送 `/cd` 查看目录，发送 `/cd <目录>` 切换目录。相对路径以当前话题目录为基准，目录变化会清除旧 CLI 会话，下一条任务重新建立上下文。
+- 已持久化话题继续使用自己的 `cliId`；修改 bot 的 `defaultCli` 只影响之后创建的新话题。
 
 Codex 通过 `codex exec --json --sandbox workspace-write --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件；同一话题追问使用 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
@@ -144,9 +178,9 @@ Get-ChildItem -LiteralPath .\data\downloads
 终端会输出实际引擎和工作目录：
 
 ```text
-[CLI] default=codex
-[CLI] id=claude command=claude cwd=C:\你的\项目
-[CLI] id=codex command=codex cwd=C:\你的\项目
+[CLI] id=claude command=claude
+[CLI] id=codex command=codex
+[Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
 [CLI] 启动 engine=codex cwd=C:\你的\项目
 [CLI] codex 完成 session_id=019f...
 ```
@@ -184,25 +218,21 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 
 子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认不设执行时限；调用方显式传入 `timeoutMs` 时才会自动超时，或由 `/close` 取消并终止 CLI 及其整棵子进程树。
 
-### 双引擎首通验收
+### 多 bot 与双引擎首通验收
 
-Codex：
+启动日志应先显示注册数量和每台 bot 的默认引擎，再分别出现连接成功：
 
-1. 设置 `DEFAULT_CLI=codex` 并运行 `pnpm start`。
-2. 新开飞书话题发送只读任务。
-3. 确认“Codex · 执行中”卡片实时更新，完成后变绿并显示真实回答。
-4. 终端应打印 Codex `session_id`。
-5. 同一话题继续追问，确认通过 `codex exec resume` 延续上下文。
+```text
+[配置] 已注册 2 个 bot，已恢复 0 个会话
+[Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
+[Bot REVIEWER] default_cli=codex workspace=C:\审查\项目
+[Bot DEVELOPER] 已连接
+[Bot REVIEWER] 已连接
+```
 
-Claude Code：
+分别新开两个话题，向开发助手和审查助手各发一条任务。开发助手应使用 Claude Code，审查助手应使用 Codex；同一话题分别 @ 两台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
 
-1. 先在同一终端手动执行一次 `claude -p "只回答 2" --output-format stream-json --verbose`，确认认证和模型后端可用。
-2. 保持默认 Codex，在新话题发送 `/claude 检查 package.json 里的脚本`。
-3. 新话题应创建 Claude Code 会话，其他旧话题仍保留原执行引擎。
-4. 确认“Claude Code · 执行中”卡片实时更新，完成后变绿并显示真实回答。
-5. 终端应打印 Claude Code `session_id`。
-
-也可以在新话题用 `/codex <任务>` 显式选择 Codex。单独发送 `/codex` 或 `/claude` 会提示补充任务，不会启动进程；在已建立的 Codex 话题发送 `/claude <任务>`，或反向操作，系统会要求新开话题，避免混用两种 CLI 会话 ID。
+单独发送 `/codex` 或 `/claude` 会提示补充任务，不会启动进程；在已建立的话题发送与原引擎不同的前缀，系统会要求新开话题，避免混用两种 CLI 会话 ID。新话题仍可用 `/codex <任务>` 或 `/claude <任务>` 显式选择执行引擎。
 
 真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
 
@@ -225,12 +255,13 @@ CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下�
 threadId || rootId || messageId
 ```
 
-再与 `chatId` 组合为查找键。因此同一群聊、同一话题里的追问会复用相同会话；不同话题或不同群会创建新会话。普通群和单聊没有话题 ID 时，每条消息使用自身 `messageId` 创建会话。
+再与 `chatId` 和当前 `botId` 组合为查找键。因此同一 bot 在同一群聊、同一话题里的追问会复用相同会话；不同 bot、不同话题或不同群会创建独立会话。普通群和单聊没有话题 ID 时，每条消息使用自身 `messageId` 创建会话。
 
 会话状态流转：
 
 ```text
 creating → active → idle → active
+    └────→ idle（命令）
     └──────────────→ closed
 ```
 
@@ -241,7 +272,7 @@ creating → active → idle → active
 
 执行中的普通消息会收到“当前会话还在执行”的提示，不会启动第二段任务。
 
-当前默认执行引擎为 `codex`，会话类型同时支持 `claude`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原群聊和话题恢复。
+每台 bot 的默认执行引擎由注册表决定，会话类型同时支持 `claude` 和 `codex`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原 bot、群聊和话题恢复。
 
 ## 会话持久化与重启恢复
 
@@ -254,7 +285,7 @@ data/sessions.json
 文件不存在时按首次启动处理，日志会显示：
 
 ```text
-[会话] 已恢复 0 个会话
+[配置] 已注册 2 个 bot，已恢复 0 个会话
 ```
 
 每次创建会话、切换状态、更新 CLI 恢复指针或记录待重试任务时，`SessionManager` 都会保存完整快照。保存成功后内存和磁盘一起前进；首次创建保存失败会删除刚建立的内存会话，状态或恢复信息保存失败则回滚到原值。
@@ -262,6 +293,7 @@ data/sessions.json
 磁盘存储遵循以下规则：
 
 - 每条记录先经过 Zod 校验，坏记录会被过滤并从清理后的文件中移除。
+- 每条记录包含 `botId` 和绝对 `workspaceDir`；升级前缺少 `botId` 或 `workspaceDir` 的旧记录会按 bot 默认目录补齐，并在加载后自动重写为新结构。
 - 重启时仍为 `creating` 或 `active` 的会话恢复成 `idle`，因为旧任务进程已经不存在。
 - Codex 和 Claude 两种 `cliId` 都可以恢复。
 - 旧记录可以没有 `cliSessionId`；首次任务成功后写入，新记录的空字符串会被视为坏数据。
@@ -299,11 +331,25 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 /codex 查看当前目录结构
 ```
 
-- `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、话题 ID 和更新时间
+- `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
+- `/cd`：查看当前工作目录
+- `/cd <目录>`：切换当前话题的工作目录
 - `/help`：列出会话控制和双引擎选择命令
 - `/close`：关闭当前话题会话
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
+
+### 工作目录验收
+
+启动 `pnpm start` 后，在 bot 的新话题依次发送：
+
+```text
+@机器人 /cd
+@机器人 /cd ../another-project
+@机器人 /status
+```
+
+`/status` 应显示新的绝对工作目录，CLI 会话应为“尚未建立”；下一条任务会在新目录启动。另一个话题或另一台 bot 的 `/status` 应继续显示各自目录。对不存在的目录执行 `/cd` 时会提示错误，原目录不会改变；执行中的任务切换会被拒绝。
 
 如果任务仍在执行，`/close` 会通过 `AbortController` 终止后台 CLI 子进程，并且不会写入绿色成功终态或回复最终答案。关闭后在同一话题发送普通消息，只会收到“请新开一个话题”的提醒。
 

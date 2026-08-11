@@ -10,10 +10,13 @@ export type SessionStatus = "creating" | "active" | "idle" | "closed";
 
 export interface Session {
   id: string;
+  botId: string;
   threadId: string;
   chatId: string;
   cliId: CliId;
   cliSessionId?: string;
+  /** 当前话题启动 CLI 时使用的绝对工作目录。 */
+  workspaceDir: string;
   retryPrompt?: string;
   status: SessionStatus;
   createdAt: string;
@@ -40,7 +43,8 @@ export interface SessionManagerOptions {
 
 // 所有合法状态迁移集中在这里，避免入口的不同分支各自修改状态。
 const ALLOWED_TRANSITIONS: Record<SessionStatus, SessionStatus[]> = {
-  creating: ["active", "closed"],
+  // 命令类消息会创建会话但不启动 CLI，因此允许直接进入 idle。
+  creating: ["active", "idle", "closed"],
   active: ["idle", "closed"],
   idle: ["active", "closed"],
   closed: [],
@@ -51,9 +55,9 @@ function topicIdOf(message: MessageAddress): string {
   return message.threadId || message.rootId || message.messageId;
 }
 
-function sessionKey(chatId: string, threadId: string): string {
-  // threadId 只在群聊上下文内有意义，加入 chatId 避免跨群碰撞。
-  return `${chatId}:${threadId}`;
+function sessionKey(botId: string, chatId: string, threadId: string): string {
+  // botId 让同一话题被不同 bot 处理时拥有独立的 CLI 上下文。
+  return `${botId}:${chatId}:${threadId}`;
 }
 
 const RETRY_REQUEST = /^(?:继续(?:执行)?|重试|再试一次)[。！？!?]*$/;
@@ -82,7 +86,7 @@ export class SessionManager {
     this.store = options.store;
   }
 
-  /** 创建管理器并按原飞书话题键恢复已持久化的会话。 */
+  /** 创建管理器并按 bot、群聊和话题键恢复已持久化的会话。 */
   static async open(
     options: SessionManagerOptions = {},
   ): Promise<SessionManager> {
@@ -90,7 +94,7 @@ export class SessionManager {
     const restored = (await options.store?.load()) ?? [];
     for (const session of restored) {
       manager.sessions.set(
-        sessionKey(session.chatId, session.threadId),
+        sessionKey(session.botId, session.chatId, session.threadId),
         session,
       );
     }
@@ -108,13 +112,15 @@ export class SessionManager {
     );
   }
 
-  /** 解析话题；传入的引擎只在首次创建时生效，已有会话绝不切换。 */
+  /** 解析 bot 的话题会话；引擎和 bot ID 只在首次创建时生效。 */
   async resolve(
     message: MessageAddress,
-    cliId: CliId = "codex",
+    cliId: CliId = "claude",
+    botId = "default",
+    workspaceDir = process.cwd(),
   ): Promise<ResolvedSession> {
     const threadId = topicIdOf(message);
-    const key = sessionKey(message.chatId, threadId);
+    const key = sessionKey(botId, message.chatId, threadId);
     const existing = this.sessions.get(key);
     if (existing) return { session: existing, isNew: false };
 
@@ -122,9 +128,11 @@ export class SessionManager {
     const now = this.now().toISOString();
     const session: Session = {
       id: this.createId(),
+      botId,
       threadId,
       chatId: message.chatId,
       cliId,
+      workspaceDir,
       status: "creating",
       createdAt: now,
       updatedAt: now,
@@ -138,6 +146,35 @@ export class SessionManager {
       throw error;
     }
     return { session, isNew: true };
+  }
+
+  /** 切换话题工作目录；目录变化时清除旧 CLI 指针，避免跨项目续接上下文。 */
+  async setWorkspaceDir(
+    sessionId: string,
+    workspaceDir: string,
+  ): Promise<Session> {
+    const current = this.get(sessionId);
+    if (!current) throw new Error(`会话不存在: ${sessionId}`);
+    if (!workspaceDir) throw new Error("工作目录不能为空");
+    if (current.workspaceDir === workspaceDir) return current;
+
+    // Claude/Codex 的恢复 ID 绑定此前项目，切换目录后必须从干净会话开始。
+    const { cliSessionId: _previousCliSessionId, ...rest } = current;
+    const updated: Session = {
+      ...rest,
+      workspaceDir,
+      updatedAt: this.now().toISOString(),
+    };
+    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
+    this.sessions.set(key, updated);
+    try {
+      await this.persist();
+    } catch (error) {
+      // 目录切换和其他会话更新一样，只有成功落盘后才对外生效。
+      if (this.sessions.get(key) === updated) this.sessions.set(key, current);
+      throw error;
+    }
+    return updated;
   }
 
   async transition(
@@ -156,7 +193,7 @@ export class SessionManager {
       status: nextStatus,
       updatedAt: this.now().toISOString(),
     };
-    const key = sessionKey(updated.chatId, updated.threadId);
+    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
     this.sessions.set(key, updated);
     try {
       await this.persist();
@@ -182,7 +219,7 @@ export class SessionManager {
       cliSessionId,
       updatedAt: this.now().toISOString(),
     };
-    const key = sessionKey(updated.chatId, updated.threadId);
+    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
     this.sessions.set(key, updated);
     try {
       await this.persist();
@@ -206,7 +243,7 @@ export class SessionManager {
       ...withoutCliSessionId,
       updatedAt: this.now().toISOString(),
     };
-    const key = sessionKey(updated.chatId, updated.threadId);
+    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
     this.sessions.set(key, updated);
     try {
       await this.persist();
@@ -236,7 +273,7 @@ export class SessionManager {
         : { ...current, retryPrompt }),
       updatedAt: this.now().toISOString(),
     };
-    const key = sessionKey(updated.chatId, updated.threadId);
+    const key = sessionKey(updated.botId, updated.chatId, updated.threadId);
     this.sessions.set(key, updated);
     try {
       await this.persist();

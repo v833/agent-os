@@ -9,10 +9,23 @@ test("识别三条会话命令和可选机器人提及", () => {
   assert.deepEqual(parseCommand("@Agent OS /help  "), { name: "help" });
 });
 
+test("解析 /cd 的查询、带空格路径和机器人提及", () => {
+  assert.deepEqual(parseCommand("/cd"), { name: "cd", path: undefined });
+  assert.deepEqual(parseCommand("@Agent OS /cd ../another project  "), {
+    name: "cd",
+    path: "../another project",
+  });
+  assert.deepEqual(parseCommand("/cd C:\\work\\project"), {
+    name: "cd",
+    path: "C:\\work\\project",
+  });
+});
+
 test("普通文本和不支持的命令不会被误识别", () => {
   assert.equal(parseCommand("帮我运行 /status 看看"), undefined);
   assert.equal(parseCommand("/unknown"), undefined);
   assert.equal(parseCommand("status"), undefined);
+  assert.equal(parseCommand("帮我执行 /cd 检查项目"), undefined);
 });
 
 test("解析新话题显式指定的 CLI 与真实任务正文", () => {

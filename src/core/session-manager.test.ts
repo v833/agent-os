@@ -37,8 +37,29 @@ test("同一群聊和话题复用同一个会话", async () => {
   assert.equal(first.isNew, true);
   assert.equal(second.isNew, false);
   assert.equal(second.session.id, first.session.id);
-  assert.equal(first.session.cliId, "codex");
+  assert.equal(first.session.cliId, "claude");
+  assert.equal(first.session.botId, "default");
   assert.equal(manager.size, 1);
+});
+
+test("同一群聊和话题被不同 bot 处理时各自拥有独立会话", async () => {
+  let sequence = 0;
+  const manager = new SessionManager({ createId: () => `session-${++sequence}` });
+
+  const developer = await manager.resolve(address(), "claude", "developer");
+  const reviewer = await manager.resolve(address(), "codex", "reviewer");
+  const developerFollowUp = await manager.resolve(
+    address({ messageId: "om_follow_up" }),
+    "codex",
+    "developer",
+  );
+
+  assert.notEqual(developer.session.id, reviewer.session.id);
+  assert.equal(developer.session.botId, "developer");
+  assert.equal(reviewer.session.botId, "reviewer");
+  assert.equal(developerFollowUp.isNew, false);
+  assert.equal(developerFollowUp.session.id, developer.session.id);
+  assert.equal(manager.size, 2);
 });
 
 test("新会话使用 resolve 传入的执行引擎", async () => {
@@ -49,15 +70,44 @@ test("新会话使用 resolve 传入的执行引擎", async () => {
   assert.equal(created.cliId, "claude");
 });
 
+test("新会话保存工作目录，切换后清除旧 CLI 会话", async () => {
+  const manager = new SessionManager({ createId: () => "session-workspace" });
+  const created = (
+    await manager.resolve(address(), "codex", "developer", "C:\\projects\\one")
+  ).session;
+  await manager.setCliSessionId(created.id, "codex-thread");
+
+  const switched = await manager.setWorkspaceDir(
+    created.id,
+    "C:\\projects\\two",
+  );
+
+  assert.equal(switched.workspaceDir, "C:\\projects\\two");
+  assert.equal(switched.cliSessionId, undefined);
+  assert.equal(switched.status, "creating");
+  assert.equal(manager.get(created.id)?.workspaceDir, "C:\\projects\\two");
+});
+
 test("已有话题保持创建时的引擎，不接受后续请求覆盖", async () => {
   const manager = new SessionManager({ createId: () => "session-codex" });
 
-  const created = await manager.resolve(address(), "codex");
-  const restored = await manager.resolve(address(), "claude");
+  const created = await manager.resolve(
+    address(),
+    "codex",
+    "developer",
+    "C:\\projects\\original",
+  );
+  const restored = await manager.resolve(
+    address(),
+    "claude",
+    "developer",
+    "C:\\projects\\new-default",
+  );
 
   assert.equal(created.session.cliId, "codex");
   assert.equal(restored.isNew, false);
   assert.equal(restored.session.cliId, "codex");
+  assert.equal(restored.session.workspaceDir, "C:\\projects\\original");
 });
 
 test("话题地址优先使用 threadId，其次 rootId，最后 messageId", async () => {
@@ -185,10 +235,12 @@ test("成功后可以清除待重试指令", async () => {
 test("打开管理器时恢复原话题和会话 ID", async () => {
   const restored: Session = {
     id: "session-restored",
+    botId: "developer",
     threadId: "omt_thread",
     chatId: "oc_chat",
     cliId: "codex",
     cliSessionId: "codex-thread",
+    workspaceDir: "C:\\projects\\restored",
     status: "idle",
     createdAt: "2026-07-27T00:00:00.000Z",
     updatedAt: "2026-07-27T00:01:00.000Z",
@@ -199,12 +251,14 @@ test("打开管理器时恢复原话题和会话 ID", async () => {
   };
 
   const manager = await SessionManager.open({ store });
-  const resolved = await manager.resolve(address());
+  const resolved = await manager.resolve(address(), "claude", "developer");
 
   assert.equal(manager.size, 1);
   assert.equal(resolved.isNew, false);
   assert.equal(resolved.session.id, "session-restored");
   assert.equal(resolved.session.cliSessionId, "codex-thread");
+  assert.equal(resolved.session.botId, "developer");
+  assert.equal(resolved.session.workspaceDir, "C:\\projects\\restored");
 });
 
 test("保存失败时回滚新建会话、状态变化和恢复信息", async () => {
@@ -242,4 +296,10 @@ test("保存失败时回滚新建会话、状态变化和恢复信息", async ()
     /disk full/,
   );
   assert.equal(manager.get(created.id)?.retryPrompt, undefined);
+
+  await assert.rejects(
+    manager.setWorkspaceDir(created.id, "C:\\projects\\other"),
+    /disk full/,
+  );
+  assert.equal(manager.get(created.id)?.workspaceDir, process.cwd());
 });

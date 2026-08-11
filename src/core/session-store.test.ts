@@ -3,7 +3,7 @@
  * 中断状态恢复，以及并发保存时按调用顺序保留最终快照。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,9 +13,11 @@ import { JsonSessionStore } from "./session-store.js";
 function session(overrides: Partial<Session> = {}): Session {
   return {
     id: "session-1",
+    botId: "developer",
     threadId: "omt_thread",
     chatId: "oc_chat",
     cliId: "codex",
+    workspaceDir: process.cwd(),
     status: "idle",
     createdAt: "2026-07-27T00:00:00.000Z",
     updatedAt: "2026-07-27T00:01:00.000Z",
@@ -82,6 +84,62 @@ test("加载时过滤坏记录并把中断会话恢复为空闲", async (t) => {
   assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), restored);
 });
 
+test("加载旧快照时补入 legacy bot ID 并重写文件", async (t) => {
+  const { filePath, store } = await temporaryStore(t);
+  await mkdir(join(filePath, ".."), { recursive: true });
+  await writeFile(
+    filePath,
+    JSON.stringify([
+      {
+        id: "legacy-session",
+        threadId: "omt_legacy",
+        chatId: "oc_chat",
+        cliId: "claude",
+        status: "idle",
+        createdAt: "2026-07-27T00:00:00.000Z",
+        updatedAt: "2026-07-27T00:01:00.000Z",
+      },
+    ]),
+    "utf8",
+  );
+
+  const restored = await new JsonSessionStore(filePath, "developer", {
+    developer: "C:\\projects\\legacy",
+  }).load();
+
+  assert.equal(restored[0]?.botId, "developer");
+  assert.equal(restored[0]?.workspaceDir, "C:\\projects\\legacy");
+  assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), restored);
+});
+
+test("已有 bot ID 但缺工作目录的旧快照按 bot 默认目录迁移", async (t) => {
+  const { filePath } = await temporaryStore(t);
+  await mkdir(join(filePath, ".."), { recursive: true });
+  await writeFile(
+    filePath,
+    JSON.stringify([
+      {
+        id: "legacy-reviewer",
+        botId: "reviewer",
+        threadId: "omt_reviewer",
+        chatId: "oc_chat",
+        cliId: "codex",
+        status: "idle",
+        createdAt: "2026-07-27T00:00:00.000Z",
+        updatedAt: "2026-07-27T00:01:00.000Z",
+      },
+    ]),
+    "utf8",
+  );
+
+  const restored = await new JsonSessionStore(filePath, "developer", {
+    reviewer: "C:\\projects\\reviewer",
+  }).load();
+
+  assert.equal(restored[0]?.workspaceDir, "C:\\projects\\reviewer");
+  assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), restored);
+});
+
 test("顶层不是数组时拒绝加载会话文件", async (t) => {
   const { filePath, store } = await temporaryStore(t);
   await store.save([]);
@@ -126,18 +184,20 @@ test("模拟重启后原话题复用同一会话并恢复为空闲", async (t) =
     store,
     createId: () => "session-stable",
   });
-  const created = (await beforeRestart.resolve(message)).session;
+  const created = (await beforeRestart.resolve(message, "codex", "developer"))
+    .session;
   await beforeRestart.transition(created.id, "active");
   await beforeRestart.setCliSessionId(created.id, "codex-thread");
 
   // 新建管理器模拟进程重启；磁盘中的 active 不能在新进程里继续执行。
   const afterRestart = await SessionManager.open({
-    store: new JsonSessionStore(filePath),
+    store: new JsonSessionStore(filePath, "developer"),
   });
-  const restored = await afterRestart.resolve(message);
+  const restored = await afterRestart.resolve(message, "codex", "developer");
 
   assert.equal(restored.isNew, false);
   assert.equal(restored.session.id, "session-stable");
   assert.equal(restored.session.status, "idle");
   assert.equal(restored.session.cliSessionId, "codex-thread");
+  assert.equal(restored.session.botId, "developer");
 });

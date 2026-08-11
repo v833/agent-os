@@ -1,19 +1,22 @@
 /**
  * Agent OS 进程入口：把飞书消息接入会话模型、控制命令、资源下载、
- * 真实 CLI 调度和任务卡片，并维护“一个飞书话题对应一个会话”。
+ * 真实 CLI 调度和任务卡片，并维护“每台 bot 在一个飞书话题对应一个会话”。
  */
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   getCliAdapter,
   listCliAdapters,
-  parseCliId,
-  resolveCliWorkdir,
 } from "./cli/registry.js";
 import { CliRunError, runCli } from "./cli/runner.js";
 import type { CliAdapter } from "./cli/types.js";
 import { parseCliRequest, parseCommand } from "./core/command-parser.js";
+import {
+  buildBotPrompt,
+  loadBotConfigs,
+  type BotConfig,
+} from "./core/bot-registry.js";
 import {
   isRetryRequest,
   resolveRetryPrompt,
@@ -23,6 +26,10 @@ import {
 import { JsonSessionStore } from "./core/session-store.js";
 import { requestTaskAbort, type ActiveRun } from "./core/task-abort.js";
 import { TaskProgressTracker } from "./core/task-progress.js";
+import {
+  ensureWorkspaceDirectory,
+  resolveWorkspacePath,
+} from "./core/workspace.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
@@ -37,47 +44,56 @@ import {
   resolveMentions,
 } from "./im/message-parser.js";
 
-const appId = process.env.BOT_A_APP_ID;
-const appSecret = process.env.BOT_A_APP_SECRET;
-
-if (!appId || !appSecret) {
-  console.error("缺少 BOT_A_APP_ID / BOT_A_APP_SECRET，请检查 .env");
-  process.exit(1);
-}
-
-const cliWorkdir = resolveCliWorkdir();
-const defaultCliId = parseCliId(process.env.DEFAULT_CLI);
-
-console.log("Agent OS 启动，正在建立飞书长连接…");
-console.log(`[CLI] default=${defaultCliId}`);
-for (const adapter of listCliAdapters()) {
-  console.log(
-    `[CLI] id=${adapter.id} command=${adapter.command} cwd=${cliWorkdir}`,
-  );
-}
+const botConfigPath = resolve(
+  process.env.BOTS_CONFIG ?? join("config", "bots.json"),
+);
+const botConfigs = await loadBotConfigs(botConfigPath);
+await Promise.all(
+  botConfigs.map((config) => ensureWorkspaceDirectory(config.workspaceDir)),
+);
+const defaultWorkspaces = Object.fromEntries(
+  botConfigs.map((config) => [config.id, config.workspaceDir]),
+);
 
 // 启动消息长连接前先恢复会话，避免恢复期间收到消息并创建重复映射。
 const sessions = await SessionManager.open({
-  store: new JsonSessionStore(join("data", "sessions.json")),
+  store: new JsonSessionStore(
+    join("data", "sessions.json"),
+    botConfigs[0].id,
+    defaultWorkspaces,
+  ),
 });
-console.log(`[会话] 已恢复 ${sessions.size} 个会话`);
 // 每轮运行额外记录发起人和唯一 ID，供卡片按钮鉴权并隔离旧卡片。
 const activeRuns = new Map<string, ActiveRun>();
 // Claude 的模型窗口通常到本轮结束才返回，按会话记忆后供下一轮实时展示。
 const contextWindows = new Map<string, number>();
 
+console.log("Agent OS 启动，正在建立飞书长连接…");
+console.log(
+  `[配置] 已注册 ${botConfigs.length} 个 bot，已恢复 ${sessions.size} 个会话`,
+);
+for (const adapter of listCliAdapters()) {
+  console.log(`[CLI] id=${adapter.id} command=${adapter.command}`);
+}
+for (const config of botConfigs) {
+  console.log(
+    `[Bot ${config.id.toUpperCase()}] default_cli=${config.defaultCliId} workspace=${config.workspaceDir}`,
+  );
+}
+
 function executeCli(
   adapter: CliAdapter,
   prompt: string,
+  workspaceDir: string,
   cliSessionId: string | undefined,
   signal: AbortSignal,
   onEvent: Parameters<typeof runCli>[0]["onEvent"],
 ) {
-  console.log(`[CLI] 启动 engine=${adapter.id} cwd=${cliWorkdir}`);
+  console.log(`[CLI] 启动 engine=${adapter.id} cwd=${workspaceDir}`);
   return runCli({
     adapter,
     prompt,
-    cwd: cliWorkdir,
+    cwd: workspaceDir,
     sessionId: cliSessionId,
     signal,
     onEvent,
@@ -98,22 +114,25 @@ const STATUS_LABELS: Record<Session["status"], string> = {
   closed: "已关闭",
 };
 
-function formatSessionStatus(session: Session): string {
+function formatSessionStatus(session: Session, botId: string): string {
   const adapter = getCliAdapter(session.cliId);
   return [
+    `机器人：${botId}`,
     `会话：${session.id}`,
     `状态：${STATUS_LABELS[session.status]}`,
     `执行引擎：${adapter.displayName}`,
     `CLI 会话：${session.cliSessionId ?? "(尚未建立)"}`,
+    `工作目录：${session.workspaceDir}`,
     `话题：${session.threadId}`,
     `更新时间：${session.updatedAt}`,
   ].join("\n");
 }
 
-startBot({
-  appId,
-  appSecret,
-  onCardAction: async (action) => {
+async function startConfiguredBot(config: BotConfig): Promise<void> {
+  startBot({
+    appId: config.appId,
+    appSecret: config.appSecret,
+    onCardAction: async (action) => {
     if (action.value.action !== "abort_task") return undefined;
     const sessionId =
       typeof action.value.sessionId === "string" ? action.value.sessionId : "";
@@ -140,10 +159,11 @@ startBot({
       return { toast: { type: "info", content: "正在停止任务，请稍候。" } };
     }
     return { toast: { type: "success", content: "已发送停止指令。" } };
-  },
-  onMessage: async (message, bot) => {
+    },
+    onMessage: async (message, bot) => {
     const resolved = resolveMentions(message.text, message.mentions);
     const hasThread = Boolean(message.threadId || message.rootId);
+    const command = parseCommand(resolved);
     const cliRequest = parseCliRequest(
       resolved,
       leadingMentionName(message.text, message.mentions),
@@ -156,10 +176,17 @@ startBot({
       );
       return;
     }
-    const { session, isNew } = await sessions.resolve(
+    const resolvedSession = await sessions.resolve(
       message,
-      cliRequest?.cliId ?? defaultCliId,
+      cliRequest?.cliId ?? config.defaultCliId,
+      config.id,
+      config.workspaceDir,
     );
+    let { session } = resolvedSession;
+    const { isNew } = resolvedSession;
+    if (command && isNew && session.status === "creating") {
+      session = await sessions.transition(session.id, "idle");
+    }
     const cliAdapter = getCliAdapter(session.cliId);
     const requestedPrompt = cliRequest?.prompt ?? resolved;
 
@@ -184,14 +211,14 @@ startBot({
       return;
     }
 
-    const command = parseCommand(resolved);
-
     // 控制命令必须先于 active/closed 防御分支处理，否则执行中无法查询或关闭会话。
     if (command?.name === "help") {
       await bot.reply(
         message.messageId,
         [
           "/status 查看当前会话",
+          "/cd 查看当前工作目录",
+          "/cd <目录> 切换当前话题的工作目录",
           "/close 关闭当前会话",
           "/help 查看命令",
           "/claude <任务> 新话题使用 Claude Code",
@@ -205,9 +232,51 @@ startBot({
     if (command?.name === "status") {
       await bot.reply(
         message.messageId,
-        formatSessionStatus(session),
+        formatSessionStatus(session, config.id),
         hasThread,
       );
+      return;
+    }
+
+    if (command?.name === "cd") {
+      if (!command.path) {
+        await bot.reply(
+          message.messageId,
+          `当前工作目录：${session.workspaceDir}`,
+          hasThread,
+        );
+        return;
+      }
+      if (session.status === "active") {
+        await bot.reply(
+          message.messageId,
+          "当前任务仍在执行，结束后再切换工作目录。",
+          hasThread,
+        );
+        return;
+      }
+      try {
+        const workspaceDir = resolveWorkspacePath(
+          command.path,
+          session.workspaceDir,
+        );
+        await ensureWorkspaceDirectory(workspaceDir);
+        const changed = workspaceDir !== session.workspaceDir;
+        session = await sessions.setWorkspaceDir(session.id, workspaceDir);
+        await bot.reply(
+          message.messageId,
+          changed
+            ? `工作目录已切换到：${workspaceDir}\n下一条任务会在这里建立新的 CLI 会话。`
+            : `当前工作目录已经是：${workspaceDir}`,
+          hasThread,
+        );
+      } catch (error) {
+        await bot.reply(
+          message.messageId,
+          `无法切换工作目录：${(error as Error).message}`,
+          hasThread,
+        );
+      }
       return;
     }
 
@@ -260,10 +329,14 @@ startBot({
     }
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
-    const prompt = resolveRetryPrompt(session, requestedPrompt);
+    // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
+    const prompt = buildBotPrompt(
+      config.systemPrompt,
+      resolveRetryPrompt(session, requestedPrompt),
+    );
     // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
     if (!session.retryPrompt || !isRetryRequest(requestedPrompt)) {
-      await sessions.setRetryPrompt(session.id, prompt);
+      await sessions.setRetryPrompt(session.id, requestedPrompt);
     }
     await sessions.transition(session.id, "active");
     const run = new AbortController();
@@ -391,6 +464,7 @@ startBot({
     void executeCli(
       cliAdapter,
       prompt,
+      session.workspaceDir,
       session.cliSessionId,
       run.signal,
       (event) => {
@@ -533,4 +607,8 @@ startBot({
         console.error("[任务] 回传或收尾失败:", (error as Error).message);
       });
   },
-});
+  });
+  console.log(`[Bot ${config.id.toUpperCase()}] 已连接`);
+}
+
+await Promise.all(botConfigs.map(startConfiguredBot));

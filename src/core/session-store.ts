@@ -15,14 +15,17 @@ export interface SessionStore {
 
 const SessionSchema = z.object({
   id: z.string().min(1),
+  botId: z.string().min(1),
   threadId: z.string().min(1),
   chatId: z.string().min(1),
-  // 当前以 Codex 为默认引擎，同时保留已经接入的 Claude 会话类型。
+  // 会话快照同时支持 Codex 与 Claude；具体默认引擎由 bot 注册表决定。
   cliId: z.enum(["codex", "claude"]),
   // 旧快照没有恢复指针，首次成功执行后才会写入，因此必须保持可选。
   cliSessionId: z.string().min(1).optional(),
   // 旧快照没有待重试指令；任务启动前写入，成功后删除。
   retryPrompt: z.string().min(1).optional(),
+  // 旧快照可能缺少工作目录，读取时会按 bot 默认值迁移后再校验。
+  workspaceDir: z.string().min(1),
   status: z.enum(["creating", "active", "idle", "closed"]),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
@@ -37,12 +40,45 @@ function recoverInterruptedSession(session: Session): Session {
   return { ...session, status: "idle" };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** 给升级前快照补齐 bot 和工作目录，随后由 Zod 负责完整校验。 */
+function migrateLegacySession(
+  row: unknown,
+  legacyBotId: string,
+  defaultWorkspaces: Readonly<Record<string, string>>,
+): { candidate: unknown; migrated: boolean } {
+  if (!isRecord(row)) return { candidate: row, migrated: false };
+
+  const needsBotId = !("botId" in row);
+  const needsWorkspace = !("workspaceDir" in row);
+  if (!needsBotId && !needsWorkspace) {
+    return { candidate: row, migrated: false };
+  }
+
+  const candidate: Record<string, unknown> = { ...row };
+  if (needsBotId) candidate.botId = legacyBotId;
+  const botId =
+    typeof candidate.botId === "string" ? candidate.botId : legacyBotId;
+  if (needsWorkspace) {
+    candidate.workspaceDir = defaultWorkspaces[botId] ?? process.cwd();
+  }
+  return { candidate, migrated: true };
+}
+
 /** 使用 JSON 文件保存全部会话快照。 */
 export class JsonSessionStore implements SessionStore {
   // 多次状态变化可能同时触发保存，Promise 队列确保快照按调用顺序落盘。
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(private readonly filePath: string) {}
+  /** legacyBotId 指定升级前没有 botId 的旧记录归属；defaultWorkspaces 用于迁移旧目录。 */
+  constructor(
+    private readonly filePath: string,
+    private readonly legacyBotId = "default",
+    private readonly defaultWorkspaces: Readonly<Record<string, string>> = {},
+  ) {}
 
   async load(): Promise<Session[]> {
     let content: string;
@@ -61,12 +97,19 @@ export class JsonSessionStore implements SessionStore {
     const sessions: Session[] = [];
     let needsCleanup = false;
     for (const row of rows) {
-      const result = SessionSchema.safeParse(row);
+      const { candidate, migrated } = migrateLegacySession(
+        row,
+        this.legacyBotId,
+        this.defaultWorkspaces,
+      );
+      const result = SessionSchema.safeParse(candidate);
       if (!result.success) {
         // 单条坏记录不应阻止其他会话恢复，清理后的快照会覆盖原文件。
         needsCleanup = true;
         continue;
       }
+
+      if (migrated) needsCleanup = true;
 
       const recovered = recoverInterruptedSession(result.data);
       if (recovered.status !== result.data.status) needsCleanup = true;
