@@ -80,7 +80,7 @@ codex
 完成登录后，在项目目录验证非交互模式：
 
 ```powershell
-codex exec --json --sandbox workspace-write --skip-git-repo-check "只回复：Codex 已就绪"
+codex exec --json --sandbox danger-full-access --skip-git-repo-check "只回复：Codex 已就绪"
 ```
 
 Claude Code 尚未安装时执行：
@@ -110,7 +110,7 @@ claude
 - 在话题中发送 `/cd` 查看目录，发送 `/cd <目录>` 切换目录。相对路径以当前话题目录为基准，目录变化会清除旧 CLI 会话，下一条任务重新建立上下文。
 - 已持久化话题继续使用自己的 `cliId`；修改 bot 的 `defaultCli` 只影响之后创建的新话题。
 
-Codex 通过 `codex exec --json --sandbox workspace-write --skip-git-repo-check` 运行，允许在配置的工作目录内修改文件；同一话题追问使用 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
+Codex 通过 `codex exec --json --sandbox danger-full-access --skip-git-repo-check` 运行，拥有完整系统访问权限；同一话题追问使用带 `--sandbox danger-full-access` 的 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
 ## 话题与提及验证
 

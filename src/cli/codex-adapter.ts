@@ -123,7 +123,7 @@ export class CodexAdapter implements CliAdapter {
       "exec",
       "--json",
       "--sandbox",
-      "workspace-write",
+      "danger-full-access",
       "--skip-git-repo-check",
       prompt,
     ];
@@ -134,6 +134,8 @@ export class CodexAdapter implements CliAdapter {
       "exec",
       "resume",
       "--json",
+      "--sandbox",
+      "danger-full-access",
       "--skip-git-repo-check",
       sessionId,
       prompt,

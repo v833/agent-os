@@ -65,7 +65,7 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
     "exec",
     "--json",
     "--sandbox",
-    "workspace-write",
+    "danger-full-access",
     "--skip-git-repo-check",
     "你好",
   ]);
@@ -73,6 +73,8 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
     "exec",
     "resume",
     "--json",
+    "--sandbox",
+    "danger-full-access",
     "--skip-git-repo-check",
     "codex-thread",
     "继续",
