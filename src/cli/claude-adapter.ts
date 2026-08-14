@@ -1,8 +1,16 @@
 /**
- * Claude Code 协议适配器：负责首次/续聊参数和 stream-json 事件翻译，
- * 不参与子进程生命周期管理。
+ * Claude Code 协议适配器：负责首次/续聊参数、stream-json 事件翻译和
+ * 项目 JSONL 原生会话列表；不参与子进程生命周期管理。
  */
-import type { CliAdapter, CliEvent, CliRunStats } from "./types.js";
+import { createReadStream } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+import type { CliAdapter, CliEvent, CliRunStats, CliSessionSummary } from "./types.js";
+
+/** /resume 卡片最多展示的原生会话数量。 */
+const SESSION_LIMIT = 8;
 
 interface ClaudeEvent {
   type?: unknown;
@@ -137,6 +145,70 @@ function outputArgs(prompt: string): string[] {
   ];
 }
 
+function claudeUserPrompt(message: unknown): string | undefined {
+  if (!isRecord(message)) return undefined;
+  if (typeof message.content === "string") return shortText(message.content);
+  if (!Array.isArray(message.content)) return undefined;
+  const text = message.content
+    .filter(isRecord)
+    .filter((block) => block.type === "text")
+    .map((block) => (typeof block.text === "string" ? block.text : ""))
+    .join(" ");
+  return shortText(text);
+}
+
+/** Claude 按 cwd 落盘项目会话目录；特殊字符映射成连字符以便反向定位。 */
+function claudeProjectDirectory(configDir: string, cwd: string): string {
+  const key = cwd.replace(/[^A-Za-z0-9]/g, "-");
+  return join(configDir, "projects", key);
+}
+
+/** 从单个 JSONL 会话文件提取摘要，并精确校验其 cwd 与目标一致。 */
+async function readClaudeSession(
+  filePath: string,
+  expectedCwd: string,
+): Promise<CliSessionSummary | undefined> {
+  const lines = createInterface({ input: createReadStream(filePath) });
+  let sessionId: string | undefined;
+  let observedCwd: string | undefined;
+  let firstPrompt: string | undefined;
+  let lastPrompt: string | undefined;
+  let title: string | undefined;
+
+  try {
+    for await (const line of lines) {
+      let row: unknown;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!isRecord(row)) continue;
+      if (typeof row.sessionId === "string") sessionId = row.sessionId;
+      if (typeof row.session_id === "string") sessionId = row.session_id;
+      if (typeof row.cwd === "string") observedCwd = row.cwd;
+      if (row.type === "ai-title") title = shortText(row.aiTitle) ?? title;
+      if (row.type === "last-prompt") {
+        lastPrompt = shortText(row.lastPrompt) ?? lastPrompt;
+      }
+      if (row.type === "user" && !firstPrompt) {
+        firstPrompt = claudeUserPrompt(row.message);
+      }
+    }
+  } finally {
+    lines.close();
+  }
+
+  // Claude 的项目目录可能包含别的 cwd 的记录，必须再次精确过滤。
+  if (!sessionId || observedCwd !== expectedCwd) return undefined;
+  const metadata = await stat(filePath);
+  return {
+    id: sessionId,
+    title: title ?? lastPrompt ?? firstPrompt ?? "未命名会话",
+    updatedAt: metadata.mtime.toISOString(),
+  };
+}
+
 /** 将 Claude Code 的命令行和 JSONL 协议适配为 Agent OS 公共事件。 */
 export class ClaudeAdapter implements CliAdapter {
   readonly id = "claude" as const;
@@ -174,6 +246,30 @@ export class ClaudeAdapter implements CliAdapter {
       ) ||
       /no (?:such )?(?:session|conversation)\b/.test(text)
     );
+  }
+
+  /** 读取 Claude 当前项目目录下的 JSONL 原生会话，供 /resume 卡片展示。 */
+  async listNativeSessions(cwd: string): Promise<CliSessionSummary[]> {
+    const configDir =
+      process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+    const projectDir = claudeProjectDirectory(configDir, cwd);
+    let names: string[];
+    try {
+      names = await readdir(projectDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+
+    const sessions = await Promise.all(
+      names
+        .filter((name) => name.endsWith(".jsonl"))
+        .map((name) => readClaudeSession(join(projectDir, name), cwd)),
+    );
+    return sessions
+      .filter((session): session is CliSessionSummary => session !== undefined)
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .slice(0, SESSION_LIMIT);
   }
 
   /** 兼容旧的单事件调用；运行链路统一使用 parseEvents。 */

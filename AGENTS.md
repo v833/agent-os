@@ -3,6 +3,22 @@
 把飞书变成 AI 编程 CLI（Claude Code / Codex / DimAgent）的指挥台。
 一个话题对应一个任务；Agent 之间可以协作；定时任务可以主动触发工作。
 
+## 最重要的行为准则：一切皆为插件
+
+> 本项目所有设计与改动，必须把「一切皆为插件」作为最高优先级的准则，优先级高于其他任何工程约定。
+
+**核心思想**：Agent OS 的能力不是写死的，而是由插件装配而成——`cordis.yml` 声明启用哪些插件及参数，`src/plugins/loader.ts` 按声明挂载。能力通过 `ctx.<service>` 与类型化事件协作，而不是互相 import 具体实现。
+
+**落地要求**：
+
+1. **新增能力 = 新增插件**。任何新能力（服务、命令、执行引擎、平台接入、定时任务等）都必须写成独立插件：在 `loader.ts` 的 `pluginRegistry` 登记插件名，在 `cordis.yml` 声明启用及其参数。
+2. **协作靠服务与事件，不靠 import 实现**。插件之间通过 `ctx.<service>`（cli/sessions/tasks/cards/commands/collaboration…）和类型化事件（`bot/message`、`bot/card-action`、`task/result`…）解耦；共享契约统一在 `src/plugins/types.ts` 声明，禁止跨插件直接引用具体类实现。
+3. **下线 / 替换 / 调整能力 = 改 cordis.yml**。移除条目、设置 `disabled: true`、或替换实现插件（如换平台 = 换掉 lark 插件、换引擎 = 增删 engines/* 插件），不改核心代码。
+4. **禁止能力归属硬编码**。不要用 `if (xxx === "某引擎/某平台")` 之类的方式把一种能力写死给某个具体实现——如 ACP 接入是标准能力（`engines/acp` 插件 + 通用 `AcpAdapter`），任何引擎都能声明使用。
+5. **验收自检（反例）**：若改动需要直接 import 另一个具体模块的实现（类型导入除外）、需要给特定引擎/平台开特判分支、或新功能没有在 `cordis.yml` 中出现，即为违反本准则，应重构为插件化方案。
+
+**参考实现**：`src/plugins/loader.ts`（装配）、`src/plugins/types.ts`（契约）、`src/plugins/engines/*`（引擎插件）、`src/plugins/commands/*`（命令插件）、`src/cli/acp-adapter.ts` + `engines/acp`（标准 ACP 接入插件化范例）。
+
 ## 运行
 
 - `pnpm dev`：监听源码和 `.env` 变化并自动重启
@@ -30,7 +46,28 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 ## 模块地图
 
-- `src/index.ts`：会话路由、多引擎调度、实时卡片编排、长答案续发和取消收尾
+### 引导与插件装配（Cordis「一切皆为插件」）
+
+- `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
+- `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/sessions/cli/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
+- `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证）
+- `src/plugins/sessions.ts`：sessions 服务——把 SessionManager 与 JsonSessionStore 挂到 ctx.sessions
+- `src/plugins/cli.ts`：cli 服务——执行引擎注册表与调度（run/compact/原生会话）
+- `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
+- `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
+- `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
+- `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
+- `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
+- `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、命令派发与任务启动
+- `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
+- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/cd/close），通过 ctx.commands.register() 登记
+- `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
+- `src/plugins/host.test.ts`：最小 Agent OS 集成测试——事件路由、命令派发、任务生命周期、停止与协作交接
+
+### 核心与执行引擎（纯函数模块，供服务插件复用）
+
 - `src/core/bot-registry.ts`：多 bot 注册表读取、校验、凭证解析与角色提示词
 - `src/core/bot-registry.test.ts`：注册表字段、启用过滤、凭证和错误边界测试
 - `src/core/collaboration.ts`：bot 间同话题交接单、目标领取鉴权和协作轮次键
@@ -48,27 +85,31 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
-- `src/cli/registry.ts`：多引擎注册、查找与 CLI ID 校验
+- `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args 配置驱动）以标准接入方式登记，与具体供应商解耦
+- `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、展示名回退、compact 与失效会话识别测试
+- `src/cli/registry.ts`：多引擎注册表（registerCliAdapter 供引擎插件登记）、查找与 CLI ID 校验
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
-- `src/cli/acp-runner.ts`：ACP stdio 初始化、DimAgent 会话新建/恢复、事件翻译和取消收尾
+- `src/cli/acp-daemon.ts`：DimAgent ACP 常驻进程——单进程多会话并发、空闲回收、崩溃重连与软取消
+- `src/cli/acp-daemon.test.ts`：常驻复用、并发路由、空闲回收与崩溃重连测试
+- `src/cli/acp-runner.ts`：在 AcpDaemon 上执行一轮 ACP 的入口；无注入时创建临时 daemon 跑完即回收
 - `src/cli/acp-runner.test.ts`：ACP 握手、会话续接、工具通知与消息分片测试
 - `src/cli/process-tree.ts`：headless/ACP Runner 共用的跨平台子进程树清理
 - `src/cli/dimagent-adapter.ts`：DimAgent headless 参数、JSONL 事件与 ACP 启动入口
 - `src/cli/dimagent-adapter.test.ts`：DimAgent 两种接入模式、事件翻译和能力边界测试
-- `src/cli/native-sessions.ts`：读取 Claude JSONL 与 Codex app-server 的原生会话摘要；DimAgent 返回空列表
+- `src/cli/native-sessions.ts`：原生会话入口——按 adapter 声明的 listNativeSessions 分发，未声明即不支持；具体协议实现归属各引擎适配器
 - `src/cli/native-sessions.test.ts`：原生会话目录过滤、标题回退和排序测试
 - `src/cli/native-compact.ts`：驱动 Claude/Codex 原生上下文整理协议
 - `src/cli/native-compact.test.ts`：compact 完成、短会话和取消测试
-- `src/cli/claude-adapter.ts`：Claude Code 多事件、工具、上下文与统计适配器
-- `src/cli/codex-adapter.ts`：Codex 四类工具、上下文、答案与统计适配器
+- `src/cli/claude-adapter.ts`：Claude Code 多事件、工具、上下文、统计与项目 JSONL 原生会话适配器
+- `src/cli/codex-adapter.ts`：Codex 四类工具、上下文、答案、统计与 app-server 原生会话适配器
 - `src/cli/runner.test.ts`：子进程生命周期、事件分发、续聊和错误边界测试
 - `src/cli/cli-adapters.test.ts`：双 CLI 参数、多事件和协议解析测试
 - `src/cli-events.ts`：Codex/Claude/DimAgent 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试
-- `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新和消息资源下载
+- `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新、消息资源下载与结果提醒（sendResultNotification）
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
 - `src/im/message-parser.test.ts`：提及和资源解析测试
@@ -78,6 +119,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 ## 工程约定
 
+- **一切皆为插件是最高准则**（见文首章节）：新增能力做成插件并在 cordis.yml 声明，协作走 ctx 服务与事件，禁止能力归属硬编码。
 - 仅使用 ESM、Node.js 22+ 和 pnpm。
 - 源码放在 `src/`，运行数据放在 `data/`。
 - 凭证只放在 `.env`；禁止硬编码或提交凭证。
@@ -97,3 +139,21 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 ## 错题本
 
 > 踩坑后按“现象 → 原因 → 正确做法”追加一条，供未来的 Agent 和人参考。
+
+### 1. Cordis 插件 apply 里访问自己提供的服务抛 `cannot get property "x" without inject`
+
+- **现象**：服务插件在 `apply` 内 `ctx.plugin(XService)` 后直接 `ctx.x.value = ...`，运行时报 `cannot get property "x" without inject`，插件挂载失败。
+- **原因**：Cordis 的上下文代理要求插件必须先声明 `inject` 才能访问服务属性；提供方自己的 apply 没有也不应该 inject 自己。
+- **正确做法**：在 apply 里直接 `new XService(ctx)` 注册服务（构造器 `super(ctx, 'name')` 即完成登记），再用服务实例方法做异步初始化（如 `await service.load(config)`）。服务实例内部可以自由通过 `this.ctx.<其他服务>` 访问别的服务。
+
+### 2. `await ctx.plugin()` 不会等待 inject 依赖级联完成
+
+- **现象**：`await Promise.all([...挂载 fiber])` 返回后，深层依赖（如 router 依赖 tasks/collaboration，tasks 依赖 sessions/cli…）的插件 apply 还没执行，事件监听器尚未注册，发事件时路由丢失。
+- **原因**：`ctx.plugin()` 返回的 fiber 的 `then` 只调用 `fiber.await()`；对处于 PENDING（等待 inject 依赖）的 fiber，`await()` 因没有 inertia 会立即返回。
+- **正确做法**：loader 挂载全部插件后轮询 `ctx.registry`，等所有 fiber 进入 ACTIVE（或 FAILED 则抛出），并排除 loader 自身 fiber（它执行期间始终 LOADING）。见 `src/plugins/loader.ts` 的 `waitForAllActive`。
+
+### 3. ACP SDK 的 `connectWith` 每次建连、用完即关，无法常驻复用
+
+- **现象**：把 DimAgent 的 acp 接入从“每任务一个进程”改为“单常驻进程”时，沿用 `client().connectWith(stream, op)`，每轮仍会重新发送 initialize 且 op 完成后连接即关闭，进程虽常驻但连接每次都重建。
+- **原因**：SDK 的 `connectWith` 是 `connect` + `runUntil(op)` 的封装，`op` 结束后 `runUntil` 自动关闭连接；连接级 handler（requestPermission、session/update）也随连接销毁。
+- **正确做法**：用 `app.connect(stream)` 持久持有 `ClientConnection`，在 `connection.agent`（ClientContext）上多次 `request()`。同一连接的并发请求由 JSON-RPC id 匹配，session/update 通知在连接级 handler 里按 `sessionId` 路由到各轮收集器；取消改为发 `session/cancel` 通知做软取消，不能杀共享进程。见 `src/cli/acp-daemon.ts`。

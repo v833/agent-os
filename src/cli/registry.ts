@@ -1,61 +1,44 @@
 /**
- * CLI 注册表：集中登记 Agent OS 支持的执行引擎，并负责校验默认引擎配置，
- * 让消息入口只依赖统一适配器契约，不直接创建供应商实现。
+ * CLI 注册表：登记 Agent OS 支持的执行引擎。引擎插件通过 registerCliAdapter
+ * 把自己登记进统一注册表（“一切皆插件”：新增执行引擎 = 新增一个插件，
+ * 从 cordis.yml 移除引擎插件 = 引擎整体下线）。
  */
-import { ClaudeAdapter } from "./claude-adapter.js";
-import { CodexAdapter } from "./codex-adapter.js";
-import { DimagentAdapter } from "./dimagent-adapter.js";
-import { resolve as resolvePath } from "node:path";
 import type { CliAccessMode, CliAdapter, CliId } from "./types.js";
 
-const adapters: Record<CliId, CliAdapter> = {
-  claude: new ClaudeAdapter(),
-  codex: new CodexAdapter(),
-  dimagent: new DimagentAdapter(),
-};
-const dimagentAcpAdapter = new DimagentAdapter("acp");
+/** 引擎键同时区分 ID 与接入模式，让同一引擎的不同接入协议独立登记。 */
+function engineKey(id: CliId, accessMode: CliAccessMode): string {
+  return `${id}:${accessMode}`;
+}
+
+const registeredEngines = new Map<string, CliAdapter>();
+
+/** 引擎插件登记自己的适配器；相同 id+accessMode 重复登记会覆盖旧实现。 */
+export function registerCliAdapter(adapter: CliAdapter): void {
+  registeredEngines.set(
+    engineKey(adapter.id, adapter.accessMode ?? "headless"),
+    adapter,
+  );
+}
 
 /** 按持久化的引擎 ID 返回对应适配器。 */
 export function getCliAdapter(
   id: CliId,
   accessMode: CliAccessMode = "headless",
 ): CliAdapter {
-  if (accessMode === "acp") {
-    if (id !== "dimagent") {
-      throw new Error(`执行引擎 ${id} 不支持 ACP 接入模式`);
-    }
-    return dimagentAcpAdapter;
+  const adapter = registeredEngines.get(engineKey(id, accessMode));
+  if (!adapter) {
+    throw new Error(
+      `执行引擎 ${id} 不支持 ${accessMode === "acp" ? "ACP" : accessMode} 接入模式`,
+    );
   }
-  return adapters[id];
+  return adapter;
 }
 
-/** 返回全部已注册适配器，供启动日志和能力检查使用。 */
+/** 返回全部已注册适配器，供启动日志和能力检查使用；同一 ID 只保留首个实现。 */
 export function listCliAdapters(): CliAdapter[] {
-  return Object.values(adapters);
-}
-
-/** 解析 DEFAULT_CLI；用户未配置时按项目约定默认使用 Codex。 */
-export function parseCliId(value: string | undefined): CliId {
-  if (!value) return "codex";
-  if (value === "claude" || value === "codex" || value === "dimagent") {
-    return value;
+  const byId = new Map<CliId, CliAdapter>();
+  for (const adapter of registeredEngines.values()) {
+    if (!byId.has(adapter.id)) byId.set(adapter.id, adapter);
   }
-  throw new Error(
-    `不支持的 DEFAULT_CLI: ${value}，请填写 claude、codex 或 dimagent`,
-  );
-}
-
-interface CliWorkdirEnv {
-  CLI_WORKDIR?: string;
-  CLAUDE_WORKDIR?: string;
-}
-
-/** 解析统一工作目录；空的新配置不会屏蔽旧 Claude 工作目录。 */
-export function resolveCliWorkdir(
-  env: CliWorkdirEnv = process.env,
-  cwd = process.cwd(),
-): string {
-  return resolvePath(
-    env.CLI_WORKDIR?.trim() || env.CLAUDE_WORKDIR?.trim() || cwd,
-  );
+  return [...byId.values()];
 }

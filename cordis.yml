@@ -1,0 +1,34 @@
+# Agent OS 插件装配文件（一切皆为插件）
+# 这里声明启用哪些插件及其参数；移除条目或设置 disabled: true 即可下线对应能力。
+# 参考 deepseek-harness 的 cordis.yml 设计：能力由配置组装，而不是硬编码。
+plugins:
+  - name: config
+    config:
+      botsPath: config/bots.json
+  - name: sessions
+  - name: cli
+  - name: engines/claude
+  - name: engines/codex
+  - name: engines/dimagent
+  # 标准 ACP 接入：engines 列表可声明任意提供 ACP server 的 CLI。
+  # 移除本插件或 engines 列表即可整体下线 ACP 接入能力。
+  - name: engines/acp
+    config:
+      engines:
+        - id: dimagent
+          command: dim
+          args: [acp]
+          displayName: DimAgent
+  - name: lark
+  - name: cards
+  - name: commands
+  - name: commands/help
+  - name: commands/new
+  - name: commands/resume
+  - name: commands/compact
+  - name: commands/status
+  - name: commands/cd
+  - name: commands/close
+  - name: collaboration
+  - name: tasks
+  - name: router

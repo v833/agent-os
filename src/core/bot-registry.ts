@@ -33,7 +33,7 @@ const BotSchema = z.object({
     ),
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-  defaultCli: z.enum(["claude", "codex", "dimagent"]),
+  defaultCli: z.string().trim().min(1),
   accessMode: z.enum(["headless", "acp"]).optional(),
   // mode 作为短字段兼容；文档统一使用不易与 agent/plan 模式混淆的 accessMode。
   mode: z.enum(["headless", "acp"]).optional(),
@@ -79,11 +79,8 @@ export function parseBotConfigs(
         throw new Error(`bot ${bot.id} 的 accessMode 与 mode 配置冲突`);
       }
       const accessMode = bot.accessMode ?? bot.mode ?? "headless";
-      if (accessMode === "acp" && bot.defaultCli !== "dimagent") {
-        throw new Error(
-          `bot ${bot.id} 只有 defaultCli=dimagent 时才能使用 ACP 接入模式`,
-        );
-      }
+      // ACP 接入是标准能力：任何 defaultCli 都可声明使用，前提是该引擎已通过
+      // engines/acp 等插件注册对应接入模式（运行时由 cli 注册表校验并报错）。
       return {
         id: bot.id,
         appId,

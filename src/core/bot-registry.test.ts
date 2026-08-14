@@ -87,12 +87,13 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
   );
 });
 
-test("DimAgent 可选择 ACP，未配置接入模式时默认 headless", () => {
+test("任意引擎可选 ACP 接入模式，未配置时默认 headless", () => {
   assert.equal(
     parseBotConfigs(registry({ defaultCli: "dimagent" }), credentials)[0]
       ?.accessMode,
     "headless",
   );
+  // ACP 是标准接入能力：任何 defaultCli（含插件扩展的 ACP 引擎 id）都可声明。
   assert.equal(
     parseBotConfigs(
       registry({ defaultCli: "dimagent", accessMode: "acp" }),
@@ -102,14 +103,17 @@ test("DimAgent 可选择 ACP，未配置接入模式时默认 headless", () => {
   );
   assert.equal(
     parseBotConfigs(
-      registry({ defaultCli: "dimagent", mode: "acp" }),
+      registry({ defaultCli: "my-acp", mode: "acp" }),
       credentials,
     )[0]?.accessMode,
     "acp",
   );
-  assert.throws(
-    () => parseBotConfigs(registry({ accessMode: "acp" }), credentials),
-    /defaultCli=dimagent/,
+  assert.equal(
+    parseBotConfigs(
+      registry({ defaultCli: "my-acp", accessMode: "acp" }),
+      credentials,
+    )[0]?.defaultCliId,
+    "my-acp",
   );
   assert.throws(
     () =>

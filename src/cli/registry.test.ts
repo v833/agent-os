@@ -1,15 +1,29 @@
-/** CLI 注册表测试：确保入口只能从统一注册点选择引擎，并校验默认配置。 */
+/** CLI 注册表测试：确保入口只能从统一注册点选择引擎。 */
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import test from "node:test";
+import { ClaudeAdapter } from "./claude-adapter.js";
+import { CodexAdapter } from "./codex-adapter.js";
+import { DimagentAdapter } from "./dimagent-adapter.js";
+import { AcpAdapter } from "./acp-adapter.js";
 import {
   getCliAdapter,
   listCliAdapters,
-  parseCliId,
-  resolveCliWorkdir,
+  registerCliAdapter,
 } from "./registry.js";
 
 test("注册表按 ID 和接入模式返回执行适配器", () => {
+  // 引擎插件通过 registerCliAdapter 登记；测试先登记全部内置引擎。
+  registerCliAdapter(new ClaudeAdapter());
+  registerCliAdapter(new CodexAdapter());
+  registerCliAdapter(new DimagentAdapter());
+  registerCliAdapter(
+    new AcpAdapter({
+      id: "dimagent",
+      command: "dim",
+      args: ["acp"],
+      displayName: "DimAgent",
+    }),
+  );
   assert.equal(getCliAdapter("claude").displayName, "Claude Code");
   assert.equal(getCliAdapter("codex").displayName, "Codex");
   assert.equal(getCliAdapter("dimagent").accessMode, "headless");
@@ -19,38 +33,4 @@ test("注册表按 ID 和接入模式返回执行适配器", () => {
     listCliAdapters().map((adapter) => adapter.id),
     ["claude", "codex", "dimagent"],
   );
-});
-
-test("默认执行引擎为 Codex，并拒绝未知 DEFAULT_CLI", () => {
-  assert.equal(parseCliId(undefined), "codex");
-  assert.equal(parseCliId(""), "codex");
-  assert.equal(parseCliId("claude"), "claude");
-  assert.equal(parseCliId("codex"), "codex");
-  assert.equal(parseCliId("dimagent"), "dimagent");
-  assert.throws(
-    () => parseCliId("other"),
-    /DEFAULT_CLI.*claude.*codex.*dimagent/,
-  );
-});
-
-test("空 CLI_WORKDIR 继续回退旧工作目录", () => {
-  const cwd = join(process.cwd(), "current-project");
-  const legacy = join(process.cwd(), "legacy-project");
-  const preferred = join(process.cwd(), "preferred-project");
-
-  assert.equal(
-    resolveCliWorkdir(
-      { CLI_WORKDIR: "  ", CLAUDE_WORKDIR: ` ${legacy} ` },
-      cwd,
-    ),
-    legacy,
-  );
-  assert.equal(
-    resolveCliWorkdir(
-      { CLI_WORKDIR: preferred, CLAUDE_WORKDIR: legacy },
-      cwd,
-    ),
-    preferred,
-  );
-  assert.equal(resolveCliWorkdir({ CLI_WORKDIR: "" }, cwd), cwd);
 });

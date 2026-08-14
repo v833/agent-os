@@ -4,6 +4,7 @@
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import type { AcpDaemon } from "./acp-daemon.js";
 import { runAcp } from "./acp-runner.js";
 import { resolveCliCommand } from "./command-resolver.js";
 import { stopProcessTree } from "./process-tree.js";
@@ -26,6 +27,8 @@ export interface RunCliOptions {
   /** 可选执行时限；未传入时不自动超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
+  /** ACP 模式下的常驻进程；由调用方持有并负责生命周期与回收。 */
+  acpDaemon?: AcpDaemon;
 }
 
 /** CLI 失败信息；若进程已返回会话 ID，调用方仍可持久化并续聊。 */
@@ -57,7 +60,11 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
   }
 
   if (adapter.accessMode === "acp") {
-    return runAcp(options).catch((error) => {
+    // 常驻路径用调用方注入的 daemon；无注入时走临时 daemon（一轮后即回收）。
+    const promise = options.acpDaemon
+      ? options.acpDaemon.runTurn(options)
+      : runAcp(options);
+    return promise.catch((error) => {
       if (error instanceof CliRunError) throw error;
       const sessionId =
         error instanceof Error && "sessionId" in error &&
@@ -249,8 +256,9 @@ function waitForRetry(
 }
 
 /**
- * 对 Codex 流式连接的明确瞬时断流做有限重试；每次重试优先续接已建立的 CLI 会话。
- * 其他 CLI 或错误保持一次执行语义，避免认证、权限或代码错误被静默重复执行。
+ * 对声明了 retryOnDisconnect 的引擎（目前只有 Codex）的明确瞬时断流做有限重试；
+ * 每次重试优先续接已建立的 CLI 会话。其他 CLI 或错误保持一次执行语义，
+ * 避免认证、权限或代码错误被静默重复执行。
  */
 export async function runCliWithTransientRetry(
   options: RunCliOptions,
@@ -269,7 +277,7 @@ export async function runCliWithTransientRetry(
       });
     } catch (error) {
       if (
-        options.adapter.id !== "codex" ||
+        options.adapter.retryOnDisconnect !== true ||
         !isTransientStreamDisconnect(error) ||
         retryIndex >= TRANSIENT_STREAM_RETRY_DELAYS_MS.length ||
         options.signal?.aborted

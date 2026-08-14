@@ -1,0 +1,161 @@
+/**
+ * loader 装配测试：验证 cordis.yml 声明式装配、disabled 跳过、
+ * 未注册插件与缺失/非法配置的错误边界。
+ */
+import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { Context } from "cordis";
+import { apply as loaderApply, name as loaderName } from "./loader.js";
+
+const loader = { name: loaderName, apply: loaderApply };
+
+function yamlPath(path: string): string {
+  // YAML 普通标量中反斜杠有歧义，统一转成正斜杠保证 Windows 可解析。
+  return path.replaceAll("\\", "/");
+}
+
+/** 在临时目录里准备 bots.json 与 cordis.yml，运行后清理。 */
+async function withTempDir(
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = await mkdtemp(join(tmpdir(), "agent-os-loader-"));
+  try {
+    await fn(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function writeBotsConfig(dir: string): Promise<string> {
+  const botsPath = join(dir, "bots.json");
+  await writeFile(
+    botsPath,
+    JSON.stringify({
+      bots: [
+        {
+          id: "testbot",
+          appIdEnv: "TEST_APP_ID",
+          appSecretEnv: "TEST_APP_SECRET",
+          defaultCli: "codex",
+          workspace: ".",
+        },
+      ],
+    }),
+  );
+  return botsPath;
+}
+
+test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
+  await withTempDir(async (dir) => {
+    process.env.TEST_APP_ID = "cli_test";
+    process.env.TEST_APP_SECRET = "test_secret";
+    const botsPath = await writeBotsConfig(dir);
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(
+      ymlPath,
+      [
+        "plugins:",
+        `  - name: config`,
+        `    config:`,
+        `      botsPath: ${yamlPath(botsPath)}`,
+        `  - name: sessions`,
+        `    config:`,
+        `      storePath: ${yamlPath(join(dir, "sessions.json"))}`,
+        `  - name: cli`,
+        `  - name: engines/codex`,
+        `  - name: engines/acp`,
+        `  - name: cards`,
+        `  - name: commands`,
+        `  - name: commands/status`,
+        `  - name: tasks`,
+      ].join("\n"),
+    );
+
+    const root = new Context();
+    await root.plugin(loader, { path: ymlPath });
+
+    await root.inject(["config", "sessions", "cli", "commands", "tasks"], (ctx) => {
+      assert.equal(ctx.config.bots.length, 1);
+      assert.equal(ctx.config.bots[0].id, "testbot");
+      assert.equal(ctx.sessions.manager.size, 0);
+      assert.equal(ctx.cli.get("codex").id, "codex");
+      // engines/acp 插件注册标准 ACP 接入（默认提供 dimagent 的 ACP 引擎）。
+      assert.equal(ctx.cli.get("dimagent", "acp").accessMode, "acp");
+      assert.equal(ctx.commands.has("status"), true);
+      // 未在 cordis.yml 声明的命令不应被注册。
+      assert.equal(ctx.commands.has("help"), false);
+    });
+  });
+});
+
+test("loader 跳过 disabled 插件", async () => {
+  await withTempDir(async (dir) => {
+    process.env.TEST_APP_ID = "cli_test";
+    process.env.TEST_APP_SECRET = "test_secret";
+    const botsPath = await writeBotsConfig(dir);
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(
+      ymlPath,
+      [
+        "plugins:",
+        `  - name: config`,
+        `    config:`,
+        `      botsPath: ${yamlPath(botsPath)}`,
+        `  - name: cli`,
+        `  - name: cards`,
+        `  - name: commands`,
+        `  - name: commands/status`,
+        `  - name: commands/help`,
+        `    disabled: true`,
+      ].join("\n"),
+    );
+
+    const root = new Context();
+    await root.plugin(loader, { path: ymlPath });
+
+    await root.inject(["commands"], (ctx) => {
+      assert.equal(ctx.commands.has("status"), true);
+      assert.equal(ctx.commands.has("help"), false);
+    });
+  });
+});
+
+test("loader 拒绝引用未注册的插件", async () => {
+  await withTempDir(async (dir) => {
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(ymlPath, "plugins:\n  - name: no-such-plugin\n");
+
+    const root = new Context();
+    await assert.rejects(
+      async () => {
+        await root.plugin(loader, { path: ymlPath });
+      },
+      /未注册的插件: no-such-plugin/,
+    );
+  });
+});
+
+test("loader 找不到装配文件时报错", async () => {
+  const root = new Context();
+  await assert.rejects(
+    async () => {
+      await root.plugin(loader, { path: join(tmpdir(), "missing-cordis.yml") });
+    },
+    /找不到插件装配文件/,
+  );
+});
+
+test("loader 拒绝空插件列表", async () => {
+  await withTempDir(async (dir) => {
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(ymlPath, "plugins: []\n");
+
+    const root = new Context();
+    await assert.rejects(async () => {
+      await root.plugin(loader, { path: ymlPath });
+    });
+  });
+});

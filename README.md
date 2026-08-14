@@ -2,6 +2,44 @@
 
 当前阶段支持从飞书话题真实调度 Codex、Claude Code 或 DimAgent，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎、接入模式和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
+## Cordis 插件架构（一切皆为插件）
+
+插件化设计：运行中的 Agent OS 本质上是一个 Cordis 根 Context，平台、执行引擎、斜杠命令、会话、任务编排和 bot 协作都是挂载在它上面的插件，通过 `ctx.<service>` 与类型化事件协作，而不是互相导入具体实现。
+
+- **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
+- **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.collaboration`（bot 协作）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
+- **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，collaboration 插件监听并决定是否自动交接——协作是可选插件，移除后任务编排不受影响。
+- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/cd`、`/close`。新增执行引擎或斜杠命令 = 新增一个插件。
+
+默认 `cordis.yml` 内容：
+
+```yaml
+plugins:
+  - name: config
+    config:
+      botsPath: config/bots.json
+  - name: sessions
+  - name: cli
+  - name: engines/claude
+  - name: engines/codex
+  - name: engines/dimagent
+  - name: lark
+  - name: cards
+  - name: commands
+  - name: commands/help
+  - name: commands/new
+  - name: commands/resume
+  - name: commands/compact
+  - name: commands/status
+  - name: commands/cd
+  - name: commands/close
+  - name: collaboration
+  - name: tasks
+  - name: router
+```
+
+底层纯函数模块（`src/core/*`、`src/cli/*`、`src/im/*`）保持无框架依赖，由服务插件复用；`src/index.ts` 只是创建根 Context 并挂载 loader 的引导入口。
+
 ## 飞书开放平台配置
 
 1. 在[飞书开放平台](https://open.feishu.cn/)创建“飞书智能体应用”。
@@ -20,7 +58,7 @@
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；当前只有 DimAgent 支持 `acp`。`collaborationMaxRounds` 默认是 `2`，只能设置为 `1` 到 `4`。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `2`，只能设置为 `1` 到 `4`。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -148,12 +186,12 @@ bot 通过 `accessMode` 选择接入方式，未填写时默认 `headless`：
 ```
 
 - `headless`：每轮调用 `dim exec --json --policy full-access`，续聊使用 `dim exec resume <session-id>`。
-- `acp`：每轮启动 `dim acp` stdio server，完成 ACP 初始化后新建或恢复 session，再把消息分片、工具状态与 token 用量映射到实时卡片。
+- `acp`：由 `engines/acp` 插件以标准 ACP 协议接入——维护单个常驻 `dim acp` 进程，任务在同一进程上并发执行，新建或恢复 session 后把消息分片、工具状态与 token 用量映射到实时卡片；空闲自动回收、崩溃自动重连。
 - ACP 和 headless 都复用 `~/.dimcode/v2/` 中的 provider、模型、MCP 与凭据配置。
 - 飞书没有同步权限确认界面；ACP 遇到权限请求时会自动选择 `allow_always` 或 `allow_once`，与 headless 的 `full-access` 行为保持一致。只应配置可信且可回退的工作目录。
 - 同一话题会自动续接 DimAgent session；当前 `/resume` 不枚举 DimAgent 自身数据库中的历史会话，`/compact` 也暂不调用 DimAgent 原生整理协议。
 
-新话题可发送 `/dimagent <任务>` 显式选择 DimAgent；接入模式仍取该 bot 的 `accessMode` 配置。若给非 DimAgent 引擎配置 `acp`，程序会在启动阶段拒绝配置。
+新话题可发送 `/dimagent <任务>` 显式选择 DimAgent；接入模式仍取该 bot 的 `accessMode` 配置。`engines/acp` 插件通过 `cordis.yml` 的 `engines` 列表声明 ACP 引擎（`id`/`command`/`args`），因此任何提供 ACP server 的 CLI 都能以相同方式接入；未注册的引擎与接入模式组合会在运行时明确报错。
 
 ## 话题与提及验证
 
@@ -228,8 +266,8 @@ Get-ChildItem -LiteralPath .\data\downloads
 ```text
 [CLI] id=claude command=claude
 [CLI] id=codex command=codex
-[Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
-[CLI] 启动 engine=codex cwd=C:\你的\项目
+[Bot DEVELOPER] default_cli=claude access_mode=headless workspace=C:\你的\项目
+[CLI] 启动 engine=codex access_mode=headless cwd=C:\你的\项目
 [CLI] codex 完成 session_id=019f...
 ```
 
@@ -270,16 +308,20 @@ Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 
 
 ### 多 bot 与多引擎首通验收
 
-启动日志应先显示注册数量和每台 bot 的默认引擎，再分别出现连接成功：
+插件按 cordis.yml 依次装配，启动日志先显示注册数量和会话恢复，再打印 CLI 引擎与每台 bot 的默认配置，随后出现连接成功：
 
 ```text
-[配置] 已注册 3 个 bot，已恢复 0 个会话
-[Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
-[Bot REVIEWER] default_cli=codex workspace=C:\审查\项目
-[Bot ASSISTANT] default_cli=codex workspace=C:\你的\项目
+[配置] 已加载 3 个 bot 注册表
+[会话] 已恢复 0 个会话
 [Bot DEVELOPER] 已连接 name=开发助手 open_id=ou_developer
 [Bot REVIEWER] 已连接 name=审查助手 open_id=ou_reviewer
 [Bot ASSISTANT] 已连接 name=个人助理 open_id=ou_assistant
+[CLI] id=claude command=claude
+[CLI] id=codex command=codex
+[Bot DEVELOPER] default_cli=claude access_mode=headless workspace=C:\你的\项目
+[Bot REVIEWER] default_cli=codex access_mode=headless workspace=C:\审查\项目
+[Bot ASSISTANT] default_cli=codex access_mode=headless workspace=C:\你的\项目
+Agent OS 启动完成
 ```
 
 分别新开三个话题，向开发助手、审查助手和个人助理各发一条任务。开发助手应使用 Claude Code，审查助手和个人助理应使用 Codex；同一话题分别 @ 三台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
@@ -359,7 +401,8 @@ data/sessions.json
 文件不存在时按首次启动处理，日志会显示：
 
 ```text
-[配置] 已注册 2 个 bot，已恢复 0 个会话
+[配置] 已加载 2 个 bot 注册表
+[会话] 已恢复 0 个会话
 ```
 
 每次创建会话、切换状态、更新 CLI 恢复指针或记录待重试任务时，`SessionManager` 都会保存完整快照。保存成功后内存和磁盘一起前进；首次创建保存失败会删除刚建立的内存会话，状态或恢复信息保存失败则回滚到原值。

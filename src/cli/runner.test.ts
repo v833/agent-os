@@ -168,6 +168,8 @@ test("流式连接中断时自动重试并续接已建立的 CLI 会话", async 
     id: "codex",
     command: process.execPath,
     displayName: "测试 CLI",
+    // 模拟 Codex 声明支持瞬时断流重试。
+    retryOnDisconnect: true,
     buildArgs() {
       return [
         "-e",

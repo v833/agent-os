@@ -223,6 +223,26 @@ export function extractMessageText(messageType: string, content: string): string
   return "";
 }
 
+/** 给来源 bot 或普通消息发起人发送完成提醒；通知失败不影响任务结果。 */
+export async function sendResultNotification(options: {
+  bot: Bot;
+  replyToMessageId: string;
+  target: BotIdentity;
+  text: string;
+  replyInThread: boolean;
+}): Promise<void> {
+  try {
+    await options.bot.replyMention(
+      options.replyToMessageId,
+      options.target,
+      options.text,
+      options.replyInThread,
+    );
+  } catch (error) {
+    console.error("[通知] 结果通知发送失败:", (error as Error).message);
+  }
+}
+
 export function startBot(options: BotOptions): Bot {
   const { appId, appSecret, onMessage, onCardAction } = options;
   // Client 管“出站”：SDK 会自动维护 tenant token，无需业务层处理刷新。

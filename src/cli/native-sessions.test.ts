@@ -77,7 +77,7 @@ test("Claude 项目目录不存在时返回空列表", async () => {
 
 test("DimAgent 暂不提供原生会话列表", async () => {
   const sessions = await listNativeCliSessions({
-    adapter: new DimagentAdapter("acp"),
+    adapter: new DimagentAdapter(),
     cwd: process.cwd(),
   });
   assert.deepEqual(sessions, []);

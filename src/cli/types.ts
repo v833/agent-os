@@ -3,7 +3,8 @@
  * 让 Agent OS 的进程控制与具体供应商协议彼此独立。
  */
 
-export type CliId = "codex" | "claude" | "dimagent";
+/** 引擎标识；内置引擎保持字面量提示，同时允许插件注册任意扩展 id（如 ACP 引擎）。 */
+export type CliId = "codex" | "claude" | "dimagent" | (string & {});
 
 /** DimAgent 的接入协议；其他引擎目前只支持 headless。 */
 export type CliAccessMode = "headless" | "acp";
@@ -72,6 +73,12 @@ export interface CliAdapter {
   parseEvents(line: string): CliEvent[];
   /** 判断失败信息是否明确表示恢复指针已经失效。 */
   isSessionUnavailable?(message: string): boolean;
+  /** 列出该引擎在当前工作目录的原生会话，供 /resume 卡片展示；未实现表示不支持。 */
+  listNativeSessions?(cwd: string): Promise<CliSessionSummary[]>;
+  /** 是否对明确瞬时断流做有限重试（目前只有 Codex 声明）。 */
+  readonly retryOnDisconnect?: boolean;
+  /** 原生上下文整理的策略描述；缺省用通用文案。 */
+  readonly compactDetail?: string;
 }
 
 /** CLI 一轮执行完成后返回给会话层的统一结果。 */

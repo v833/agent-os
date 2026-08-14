@@ -92,7 +92,7 @@ test("加载时过滤坏记录并把中断会话恢复为空闲", async (t) => {
 });
 
 test("加载旧快照时补入 legacy bot ID 并重写文件", async (t) => {
-  const { filePath, store } = await temporaryStore(t);
+  const { filePath } = await temporaryStore(t);
   await mkdir(join(filePath, ".."), { recursive: true });
   await writeFile(
     filePath,

@@ -1,6 +1,6 @@
 /**
- * DimAgent 适配器：把 `dim exec --json` 的 headless 输出和 `dim acp` 的
- * Agent Client Protocol 入口接入 Agent OS；具体 ACP 请求由 acp-runner 负责。
+ * DimAgent 适配器：把 `dim exec --json` 的 headless 输出接入 Agent OS。
+ * DimAgent 的 ACP 接入由通用 AcpAdapter（engines/acp 插件）提供，不再内嵌于此。
  */
 import type {
   CliAccessMode,
@@ -102,21 +102,18 @@ function contentText(value: unknown): string | undefined {
   return text || undefined;
 }
 
-/** DimAgent 的 headless/ACP 两种入口共用同一适配器实例。 */
+/** DimAgent 的 headless 适配器；ACP 接入见 AcpAdapter。 */
 export class DimagentAdapter implements CliAdapter {
   readonly id = "dimagent" as const;
   readonly command = process.env.DIMAGENT_COMMAND?.trim() || "dim";
   readonly displayName = "DimAgent";
-
-  constructor(readonly accessMode: CliAccessMode = "headless") {}
+  readonly accessMode: CliAccessMode = "headless";
 
   buildArgs(prompt: string): string[] {
-    if (this.accessMode === "acp") return ["acp"];
     return ["exec", "--json", "--policy", "full-access", prompt];
   }
 
   buildResumeArgs(prompt: string, sessionId: string): string[] {
-    if (this.accessMode === "acp") return ["acp"];
     return ["exec", "resume", "--json", sessionId, prompt];
   }
 
@@ -125,7 +122,6 @@ export class DimagentAdapter implements CliAdapter {
   }
 
   parseEvents(line: string): CliEvent[] {
-    if (this.accessMode === "acp") return [];
     let event: DimagentEvent;
     try {
       event = JSON.parse(line) as DimagentEvent;

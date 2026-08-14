@@ -1,5 +1,5 @@
 /**
- * DimAgent 适配器测试：验证 headless/ACP 参数分流、会话续接、
+ * DimAgent 适配器测试：验证 headless 参数构造、会话续接、
  * JSONL 事件翻译和不支持原生 compact 的边界。
  */
 import assert from "node:assert/strict";
@@ -26,14 +26,6 @@ test("DimAgent 默认使用 headless，并把提示词作为独立参数", () =>
     "dim-session",
     "继续",
   ]);
-});
-
-test("DimAgent ACP 模式只启动 stdio server", () => {
-  const adapter = new DimagentAdapter("acp");
-
-  assert.deepEqual(adapter.buildArgs("不会进入启动参数"), ["acp"]);
-  assert.deepEqual(adapter.buildResumeArgs("继续", "dim-session"), ["acp"]);
-  assert.deepEqual(adapter.parseEvents('{"type":"result"}'), []);
 });
 
 test("DimAgent headless 解析会话、工具、回答和用量", () => {
