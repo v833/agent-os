@@ -70,6 +70,27 @@ test("新会话使用 resolve 传入的执行引擎", async () => {
   assert.equal(created.cliId, "claude");
 });
 
+test("新会话持久化接入模式，已有话题不受新默认值覆盖", async () => {
+  const manager = new SessionManager({ createId: () => "session-dimagent" });
+  const created = await manager.resolve(
+    address(),
+    "dimagent",
+    "developer",
+    process.cwd(),
+    "acp",
+  );
+  const existing = await manager.resolve(
+    address(),
+    "dimagent",
+    "developer",
+    process.cwd(),
+    "headless",
+  );
+
+  assert.equal(created.session.accessMode, "acp");
+  assert.equal(existing.session.accessMode, "acp");
+});
+
 test("新会话保存工作目录，切换后清除旧 CLI 会话", async () => {
   const manager = new SessionManager({ createId: () => "session-workspace" });
   const created = (

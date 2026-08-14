@@ -3,7 +3,7 @@
  * creating、active、idle、closed 的生命周期，并协调内存与磁盘状态。
  */
 import { randomUUID } from "node:crypto";
-import type { CliId } from "../cli/types.js";
+import type { CliAccessMode, CliId } from "../cli/types.js";
 import type { SessionStore } from "./session-store.js";
 
 export type SessionStatus = "creating" | "active" | "idle" | "closed";
@@ -14,6 +14,8 @@ export interface Session {
   threadId: string;
   chatId: string;
   cliId: CliId;
+  /** 旧快照没有该字段时按 headless 解释。 */
+  accessMode?: CliAccessMode;
   cliSessionId?: string;
   /** 当前话题启动 CLI 时使用的绝对工作目录。 */
   workspaceDir: string;
@@ -118,6 +120,7 @@ export class SessionManager {
     cliId: CliId = "claude",
     botId = "default",
     workspaceDir = process.cwd(),
+    accessMode: CliAccessMode = "headless",
   ): Promise<ResolvedSession> {
     const threadId = topicIdOf(message);
     const key = sessionKey(botId, message.chatId, threadId);
@@ -132,6 +135,7 @@ export class SessionManager {
       threadId,
       chatId: message.chatId,
       cliId,
+      accessMode,
       workspaceDir,
       status: "creating",
       createdAt: now,

@@ -117,6 +117,7 @@ export class CodexAdapter implements CliAdapter {
   readonly id = "codex" as const;
   readonly command = "codex";
   readonly displayName = "Codex";
+  readonly accessMode = "headless" as const;
 
   buildArgs(prompt: string): string[] {
     return [

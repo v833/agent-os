@@ -36,6 +36,10 @@ const WINDOWS_CLI_DEFINITIONS: Record<string, WindowsCliDefinition> = {
     ],
     windowsPackageEntryType: "executable",
   },
+  dim: {
+    windowsPackageEntry: ["node_modules", "dimcode", "bin", "dim.mjs"],
+    windowsPackageEntryType: "node",
+  },
 };
 
 function pathDirectories(): string[] {

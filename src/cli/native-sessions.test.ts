@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { ClaudeAdapter } from "./claude-adapter.js";
+import { DimagentAdapter } from "./dimagent-adapter.js";
 import { MastraAdapter } from "./mastra-adapter.js";
 import { listNativeCliSessions } from "./native-sessions.js";
 
@@ -78,6 +79,14 @@ test("Claude 项目目录不存在时返回空列表", async () => {
 test("Mastra 引擎没有原生会话列表，直接返回空", async () => {
   const sessions = await listNativeCliSessions({
     adapter: new MastraAdapter(),
+    cwd: process.cwd(),
+  });
+  assert.deepEqual(sessions, []);
+});
+
+test("DimAgent 暂不提供原生会话列表", async () => {
+  const sessions = await listNativeCliSessions({
+    adapter: new DimagentAdapter("acp"),
     cwd: process.cwd(),
   });
   assert.deepEqual(sessions, []);

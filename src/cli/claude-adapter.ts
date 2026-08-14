@@ -142,6 +142,7 @@ export class ClaudeAdapter implements CliAdapter {
   readonly id = "claude" as const;
   readonly command = "claude";
   readonly displayName = "Claude Code";
+  readonly accessMode = "headless" as const;
 
   buildArgs(prompt: string): string[] {
     return outputArgs(prompt);

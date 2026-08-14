@@ -101,8 +101,12 @@ for (const adapter of listCliAdapters()) {
 }
 for (const config of botConfigs) {
   console.log(
-    `[Bot ${config.id.toUpperCase()}] default_cli=${config.defaultCliId} workspace=${config.workspaceDir}`,
+    `[Bot ${config.id.toUpperCase()}] default_cli=${config.defaultCliId} access_mode=${config.accessMode} workspace=${config.workspaceDir}`,
   );
+}
+
+function getSessionAdapter(session: Session): CliAdapter {
+  return getCliAdapter(session.cliId, session.accessMode ?? "headless");
 }
 
 function executeCli(
@@ -113,7 +117,9 @@ function executeCli(
   signal: AbortSignal,
   onEvent: Parameters<typeof runCliWithTransientRetry>[0]["onEvent"],
 ) {
-  console.log(`[CLI] 启动 engine=${adapter.id} cwd=${workspaceDir}`);
+  console.log(
+    `[CLI] 启动 engine=${adapter.id} access_mode=${adapter.accessMode} cwd=${workspaceDir}`,
+  );
   return runCliWithTransientRetry({
     adapter,
     prompt,
@@ -139,12 +145,13 @@ const STATUS_LABELS: Record<Session["status"], string> = {
 };
 
 function formatSessionStatus(session: Session, botId: string): string {
-  const adapter = getCliAdapter(session.cliId);
+  const adapter = getSessionAdapter(session);
   return [
     `机器人：${botId}`,
     `会话：${session.id}`,
     `状态：${STATUS_LABELS[session.status]}`,
     `执行引擎：${adapter.displayName}`,
+    `接入模式：${adapter.accessMode}`,
     `CLI 会话：${session.cliSessionId ?? "(尚未建立)"}`,
     `工作目录：${session.workspaceDir}`,
     `话题：${session.threadId}`,
@@ -270,7 +277,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         };
       }
       try {
-        const sessionAdapter = getCliAdapter(session.cliId);
+        const sessionAdapter = getSessionAdapter(session);
         const nativeSessions = await listNativeCliSessions({
           adapter: sessionAdapter,
           cwd: session.workspaceDir,
@@ -384,18 +391,20 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
       );
       return;
     }
+    const selectedCliId = cliRequest?.cliId ?? config.defaultCliId;
     const resolvedSession = await sessions.resolve(
       message,
-      cliRequest?.cliId ?? config.defaultCliId,
+      selectedCliId,
       config.id,
       collaboration?.workspaceDir ?? config.workspaceDir,
+      selectedCliId === "dimagent" ? config.accessMode : "headless",
     );
     let { session } = resolvedSession;
     const { isNew } = resolvedSession;
     if (command && isNew && session.status === "creating") {
       session = await sessions.transition(session.id, "idle");
     }
-    const cliAdapter = getCliAdapter(session.cliId);
+    const cliAdapter = getSessionAdapter(session);
     const requestedPrompt = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
 
     console.log(
@@ -435,6 +444,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           "/claude <任务> 新话题使用 Claude Code",
           "/codex <任务> 新话题使用 Codex",
           "/mastra <任务> 新话题使用 Mastra Agent",
+          "/dimagent <任务> 新话题使用 DimAgent",
         ].join("\n"),
         hasThread,
       );
@@ -522,6 +532,14 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
         await bot.reply(
           message.messageId,
           "Mastra 引擎没有独立的会话上下文，不需要 /compact。直接发起新任务即可。",
+          hasThread,
+        );
+        return;
+      }
+      if (session.cliId === "dimagent") {
+        await bot.reply(
+          message.messageId,
+          "DimAgent 暂不支持从 Agent OS 调用原生 /compact，请直接发起整理任务。",
           hasThread,
         );
         return;

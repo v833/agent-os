@@ -1,9 +1,12 @@
 /**
- * CLI 适配层公共契约：统一 Codex 与 Claude Code 的参数构造和事件语义，
+ * CLI 适配层公共契约：统一 Codex、Claude Code、Mastra 与 DimAgent 的参数构造和事件语义，
  * 让 Agent OS 的进程控制与具体供应商协议彼此独立。
  */
 
-export type CliId = "codex" | "claude" | "mastra";
+export type CliId = "codex" | "claude" | "mastra" | "dimagent";
+
+/** DimAgent 的接入协议；其他引擎目前只支持 headless。 */
+export type CliAccessMode = "headless" | "acp";
 
 export interface CliRunStats {
   durationMs?: number;
@@ -62,6 +65,7 @@ export interface CliAdapter {
   readonly id: CliId;
   readonly command: string;
   readonly displayName: string;
+  readonly accessMode?: CliAccessMode;
   buildArgs(prompt: string): string[];
   buildResumeArgs(prompt: string, sessionId: string): string[];
   buildCompactPlan(sessionId: string, instructions?: string): CliCompactPlan;

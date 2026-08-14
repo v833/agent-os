@@ -37,7 +37,7 @@ test("会话文件不存在时按首次启动返回空列表", async (t) => {
   assert.deepEqual(await store.load(), []);
 });
 
-test("保存后可以完整恢复 Codex 和 Claude 会话及待重试指令", async (t) => {
+test("保存后可以完整恢复多引擎会话、接入模式及待重试指令", async (t) => {
   const { filePath, store } = await temporaryStore(t);
   const sessions = [
     session({ retryPrompt: "检查最新调用错误" }),
@@ -47,6 +47,13 @@ test("保存后可以完整恢复 Codex 和 Claude 会话及待重试指令", as
       cliId: "claude",
       cliSessionId: "claude-session",
       status: "closed",
+    }),
+    session({
+      id: "session-3",
+      threadId: "omt_dimagent",
+      cliId: "dimagent",
+      accessMode: "acp",
+      cliSessionId: "dimagent-session",
     }),
   ];
 

@@ -4,18 +4,30 @@
  */
 import { ClaudeAdapter } from "./claude-adapter.js";
 import { CodexAdapter } from "./codex-adapter.js";
+import { DimagentAdapter } from "./dimagent-adapter.js";
 import { MastraAdapter } from "./mastra-adapter.js";
 import { resolve as resolvePath } from "node:path";
-import type { CliAdapter, CliId } from "./types.js";
+import type { CliAccessMode, CliAdapter, CliId } from "./types.js";
 
 const adapters: Record<CliId, CliAdapter> = {
   claude: new ClaudeAdapter(),
   codex: new CodexAdapter(),
   mastra: new MastraAdapter(),
+  dimagent: new DimagentAdapter(),
 };
+const dimagentAcpAdapter = new DimagentAdapter("acp");
 
 /** 按持久化的引擎 ID 返回对应适配器。 */
-export function getCliAdapter(id: CliId): CliAdapter {
+export function getCliAdapter(
+  id: CliId,
+  accessMode: CliAccessMode = "headless",
+): CliAdapter {
+  if (accessMode === "acp") {
+    if (id !== "dimagent") {
+      throw new Error(`执行引擎 ${id} 不支持 ACP 接入模式`);
+    }
+    return dimagentAcpAdapter;
+  }
   return adapters[id];
 }
 
@@ -27,11 +39,11 @@ export function listCliAdapters(): CliAdapter[] {
 /** 解析 DEFAULT_CLI；用户未配置时按项目约定默认使用 Codex。 */
 export function parseCliId(value: string | undefined): CliId {
   if (!value) return "codex";
-  if (value === "claude" || value === "codex" || value === "mastra") {
+  if (value === "claude" || value === "codex" || value === "mastra" || value === "dimagent") {
     return value;
   }
   throw new Error(
-    `不支持的 DEFAULT_CLI: ${value}，请填写 claude、codex 或 mastra`,
+    `不支持的 DEFAULT_CLI: ${value}，请填写 claude、codex、mastra 或 dimagent`,
   );
 }
 

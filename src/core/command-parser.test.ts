@@ -62,6 +62,10 @@ test("解析新话题显式指定的 CLI 与真实任务正文", () => {
     cliId: "mastra",
     prompt: "翻译这段文案",
   });
+  assert.deepEqual(parseCliRequest("/dimagent 检查项目"), {
+    cliId: "dimagent",
+    prompt: "检查项目",
+  });
 });
 
 test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {

@@ -1,5 +1,5 @@
 /**
- * 飞书卡片渲染：把双 CLI 的统一事件快照和历史会话选择渲染成稳定视图，
+ * 飞书卡片渲染：把多引擎统一事件快照和历史会话选择渲染成稳定视图，
  * 并负责高频任务卡片更新的节流与串行化。
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";

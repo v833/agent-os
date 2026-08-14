@@ -1,13 +1,14 @@
 /**
- * 通用 CLI Runner：安全启动适配器声明的无头进程，逐行消费统一事件，
- * 并集中处理瞬时断流重试、超时、取消、Windows 进程树清理和唯一收尾。
+ * 通用 CLI Runner：按适配器接入模式调度 headless 或 ACP 进程，统一处理
+ * 流式事件、瞬时断流重试、超时、取消和唯一收尾。
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { runAcp } from "./acp-runner.js";
 import { resolveCliCommand } from "./command-resolver.js";
+import { stopProcessTree } from "./process-tree.js";
 import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
-const PROCESS_STOP_GRACE_MS = 2_000;
 const TRANSIENT_STREAM_RETRY_DELAYS_MS = [
   1_000,
   1_500,
@@ -39,50 +40,6 @@ export class CliRunError extends Error {
   }
 }
 
-function stopProcessTree(child: ChildProcess): Promise<void> {
-  if (!child.pid || child.exitCode !== null) return Promise.resolve();
-
-  return new Promise((resolve) => {
-    let finished = false;
-    let killer: ChildProcess | undefined;
-    const finish = () => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(graceTimer);
-      child.removeListener("close", finish);
-      resolve();
-    };
-    const fallback = () => {
-      if (child.exitCode !== null) return;
-      child.kill(process.platform === "win32" ? undefined : "SIGKILL");
-    };
-    // 平台终止命令也可能挂住；宽限期后直接杀父进程并释放 Runner。
-    const graceTimer = setTimeout(() => {
-      if (killer?.exitCode === null) killer.kill();
-      fallback();
-      finish();
-    }, PROCESS_STOP_GRACE_MS);
-    graceTimer.unref();
-    child.once("close", finish);
-
-    if (process.platform !== "win32") {
-      child.kill("SIGTERM");
-      return;
-    }
-
-    // CLI 还会启动工具子进程；taskkill /T 防止留下孤立后代。
-    killer = spawn(
-      "taskkill.exe",
-      ["/PID", String(child.pid), "/T", "/F"],
-      { stdio: "ignore", windowsHide: true },
-    );
-    killer.once("error", fallback);
-    killer.once("close", (code) => {
-      if (code !== 0) fallback();
-    });
-  });
-}
-
 /** 执行一次首次对话或续聊，并返回最终回答及执行引擎会话 ID。 */
 export function runCli(options: RunCliOptions): Promise<CliRunResult> {
   const {
@@ -97,6 +54,20 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
   if (signal?.aborted) {
     return Promise.reject(new Error(`${adapter.displayName} 执行已取消`));
+  }
+
+  if (adapter.accessMode === "acp") {
+    return runAcp(options).catch((error) => {
+      if (error instanceof CliRunError) throw error;
+      const sessionId =
+        error instanceof Error && "sessionId" in error &&
+        typeof error.sessionId === "string"
+          ? error.sessionId
+          : undefined;
+      throw sessionId
+        ? new CliRunError((error as Error).message, sessionId, { cause: error })
+        : error;
+    });
   }
 
   const executable = resolveCliCommand(adapter.command);

@@ -9,13 +9,16 @@ import {
   resolveCliWorkdir,
 } from "./registry.js";
 
-test("注册表按 ID 返回 Claude Code、Codex 与 Mastra 适配器", () => {
+test("注册表按 ID 和接入模式返回执行适配器", () => {
   assert.equal(getCliAdapter("claude").displayName, "Claude Code");
   assert.equal(getCliAdapter("codex").displayName, "Codex");
   assert.equal(getCliAdapter("mastra").displayName, "Mastra Agent");
+  assert.equal(getCliAdapter("dimagent").accessMode, "headless");
+  assert.equal(getCliAdapter("dimagent", "acp").accessMode, "acp");
+  assert.throws(() => getCliAdapter("codex", "acp"), /不支持 ACP/);
   assert.deepEqual(
     listCliAdapters().map((adapter) => adapter.id),
-    ["claude", "codex", "mastra"],
+    ["claude", "codex", "mastra", "dimagent"],
   );
 });
 
@@ -25,7 +28,11 @@ test("默认执行引擎为 Codex，并拒绝未知 DEFAULT_CLI", () => {
   assert.equal(parseCliId("claude"), "claude");
   assert.equal(parseCliId("codex"), "codex");
   assert.equal(parseCliId("mastra"), "mastra");
-  assert.throws(() => parseCliId("other"), /DEFAULT_CLI.*claude.*codex.*mastra/);
+  assert.equal(parseCliId("dimagent"), "dimagent");
+  assert.throws(
+    () => parseCliId("other"),
+    /DEFAULT_CLI.*claude.*codex.*mastra.*dimagent/,
+  );
 });
 
 test("空 CLI_WORKDIR 继续回退旧工作目录", () => {

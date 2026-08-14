@@ -18,8 +18,10 @@ const SessionSchema = z.object({
   botId: z.string().min(1),
   threadId: z.string().min(1),
   chatId: z.string().min(1),
-  // 会话快照同时支持 Codex、Claude 与 Mastra；具体默认引擎由 bot 注册表决定。
-  cliId: z.enum(["codex", "claude", "mastra"]),
+  // 会话快照支持全部执行引擎；具体默认引擎由 bot 注册表决定。
+  cliId: z.enum(["codex", "claude", "mastra", "dimagent"]),
+  // 旧快照全部来自 headless Runner，缺少字段时由调用层按 headless 解释。
+  accessMode: z.enum(["headless", "acp"]).optional(),
   // 旧快照没有恢复指针，首次成功执行后才会写入，因此必须保持可选。
   cliSessionId: z.string().min(1).optional(),
   // 旧快照没有待重试指令；任务启动前写入，成功后删除。

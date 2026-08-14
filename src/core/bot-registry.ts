@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
-import type { CliId } from "../cli/types.js";
+import type { CliAccessMode, CliId } from "../cli/types.js";
 import { resolveWorkspacePath } from "./workspace.js";
 
 /** 单台已启用 bot 的完整运行配置，不再包含间接的环境变量名。 */
@@ -13,6 +13,7 @@ export interface BotConfig {
   appId: string;
   appSecret: string;
   defaultCliId: CliId;
+  accessMode: CliAccessMode;
   systemPrompt: string;
   workspaceDir: string;
   /** 当前 bot 完成任务后接收审查任务的目标 bot。 */
@@ -32,7 +33,10 @@ const BotSchema = z.object({
     ),
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-  defaultCli: z.enum(["claude", "codex", "mastra"]),
+  defaultCli: z.enum(["claude", "codex", "mastra", "dimagent"]),
+  accessMode: z.enum(["headless", "acp"]).optional(),
+  // mode 作为短字段兼容；文档统一使用不易与 agent/plan 模式混淆的 accessMode。
+  mode: z.enum(["headless", "acp"]).optional(),
   workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(""),
   reviewBy: z
@@ -71,11 +75,21 @@ export function parseBotConfigs(
       if (!appSecret) {
         throw new Error(`bot ${bot.id} 缺少环境变量 ${bot.appSecretEnv}`);
       }
+      if (bot.accessMode && bot.mode && bot.accessMode !== bot.mode) {
+        throw new Error(`bot ${bot.id} 的 accessMode 与 mode 配置冲突`);
+      }
+      const accessMode = bot.accessMode ?? bot.mode ?? "headless";
+      if (accessMode === "acp" && bot.defaultCli !== "dimagent") {
+        throw new Error(
+          `bot ${bot.id} 只有 defaultCli=dimagent 时才能使用 ACP 接入模式`,
+        );
+      }
       return {
         id: bot.id,
         appId,
         appSecret,
         defaultCliId: bot.defaultCli,
+        accessMode,
         systemPrompt: bot.systemPrompt,
         ...(bot.reviewBy ? { reviewBy: bot.reviewBy } : {}),
         collaborationMaxRounds: bot.collaborationMaxRounds,

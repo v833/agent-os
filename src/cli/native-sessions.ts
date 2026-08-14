@@ -266,6 +266,10 @@ function listCodexSessions(
 export function listNativeCliSessions(
   options: ListNativeCliSessionsOptions,
 ): Promise<CliSessionSummary[]> {
+  // DimAgent 当前由自身数据库管理会话，暂不把目录映射到恢复卡片。
+  if (options.adapter.id === "dimagent") {
+    return Promise.resolve([]);
+  }
   // Mastra 不维护原生会话目录，/resume 对它显示为空列表即可。
   if (options.adapter.id === "mastra") return Promise.resolve([]);
   return options.adapter.id === "claude"

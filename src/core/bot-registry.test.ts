@@ -40,6 +40,7 @@ test("解析启用 bot 的凭证、默认引擎和角色", () => {
       appId: "cli_developer",
       appSecret: "developer-secret",
       defaultCliId: "claude",
+      accessMode: "headless",
       systemPrompt: "主力开发助手",
       collaborationMaxRounds: 2,
       workspaceDir: process.cwd(),
@@ -77,11 +78,50 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
         appId: "cli_reviewer",
         appSecret: "secret",
         defaultCliId: "codex",
+        accessMode: "headless",
         systemPrompt: "",
         collaborationMaxRounds: 2,
         workspaceDir: process.cwd(),
       },
     ],
+  );
+});
+
+test("DimAgent 可选择 ACP，未配置接入模式时默认 headless", () => {
+  assert.equal(
+    parseBotConfigs(registry({ defaultCli: "dimagent" }), credentials)[0]
+      ?.accessMode,
+    "headless",
+  );
+  assert.equal(
+    parseBotConfigs(
+      registry({ defaultCli: "dimagent", accessMode: "acp" }),
+      credentials,
+    )[0]?.accessMode,
+    "acp",
+  );
+  assert.equal(
+    parseBotConfigs(
+      registry({ defaultCli: "dimagent", mode: "acp" }),
+      credentials,
+    )[0]?.accessMode,
+    "acp",
+  );
+  assert.throws(
+    () => parseBotConfigs(registry({ accessMode: "acp" }), credentials),
+    /defaultCli=dimagent/,
+  );
+  assert.throws(
+    () =>
+      parseBotConfigs(
+        registry({
+          defaultCli: "dimagent",
+          accessMode: "acp",
+          mode: "headless",
+        }),
+        credentials,
+      ),
+    /配置冲突/,
   );
 });
 
