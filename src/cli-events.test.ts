@@ -79,6 +79,39 @@ test("解析 Claude Code 事件时间线", () => {
   );
 });
 
+test("解析 Mastra Agent 事件时间线", () => {
+  assert.deepEqual(
+    parseCliEventLine(
+      JSON.stringify({
+        type: "tool_start",
+        toolName: "run_command",
+        detail: "pnpm test",
+      }),
+    ),
+    ["调用工具: run_command detail=pnpm test"],
+  );
+  assert.deepEqual(
+    parseCliEventLine(
+      JSON.stringify({ type: "tool_end", toolUseId: "t1", failed: true }),
+    ),
+    ["工具结束 failed=true"],
+  );
+  assert.deepEqual(
+    parseCliEventLine(
+      JSON.stringify({
+        type: "result",
+        answer: "2",
+        stats: { inputTokens: 10, outputTokens: 3 },
+      }),
+    ),
+    ["最终回答: 2 tokens={\"inputTokens\":10,\"outputTokens\":3}"],
+  );
+  assert.deepEqual(
+    parseCliEventLine(JSON.stringify({ type: "error", message: "模型不可用" })),
+    ["错误: 模型不可用"],
+  );
+});
+
 test("忽略非 JSON 日志和不关心的事件", () => {
   assert.deepEqual(parseCliEventLine("network reconnecting"), []);
   assert.deepEqual(parseCliEventLine('{"type":"turn.started"}'), []);

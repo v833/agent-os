@@ -32,7 +32,7 @@ const BotSchema = z.object({
     ),
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-  defaultCli: z.enum(["claude", "codex"]),
+  defaultCli: z.enum(["claude", "codex", "mastra"]),
   workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(""),
   reviewBy: z

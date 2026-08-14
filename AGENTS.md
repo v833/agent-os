@@ -1,6 +1,6 @@
 # agent-os
 
-把飞书变成 AI 编程 CLI（Claude Code / Codex）的指挥台。
+把飞书变成 AI 编程 CLI（Claude Code / Codex / Mastra Agent）的指挥台。
 一个话题对应一个任务；Agent 之间可以协作；定时任务可以主动触发工作。
 
 ## 运行
@@ -10,7 +10,7 @@
 - `pnpm start:once`：不启用 watch，直接启动飞书机器人
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
 - `pnpm test`：运行 CLI、飞书消息、卡片与会话模型测试
-- `pnpm probe:cli`：从标准输入读取 Codex/Claude JSONL 并输出时间线
+- `pnpm probe:cli`：从标准输入读取 Codex/Claude/Mastra JSONL 并输出时间线
 
 ## CLI Headless 调试
 
@@ -28,6 +28,12 @@ claude -p "1加1等于几？只回答数字本身" --output-format stream-json -
 claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-format stream-json --verbose | pnpm probe:cli
 ```
 
+Mastra（需要 `.env` 配好 `MASTRA_MODEL` 与对应 API Key）：
+
+```powershell
+node node_modules/tsx/dist/cli.mjs src/agents/mastra-runner.ts "1加1等于几？只回答数字本身" | pnpm probe:cli
+```
+
 ## 模块地图
 
 - `src/index.ts`：会话路由、双 CLI 调度、实时卡片编排、长答案续发和取消收尾
@@ -41,25 +47,29 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
-- `src/core/command-parser.ts`：会话控制命令（含 `/new`、`/resume`、`/compact`）与 `/claude`、`/codex` 引擎请求解析
+- `src/core/command-parser.ts`：会话控制命令（含 `/new`、`/resume`、`/compact`）与 `/claude`、`/codex`、`/mastra` 引擎请求解析
 - `src/core/command-parser.test.ts`：会话命令、compact 参数、引擎选择和误识别边界测试
 - `src/core/task-abort.ts`：任务发起人鉴权、运行实例隔离与停止信号
 - `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
-- `src/cli/types.ts`：双 CLI 统一适配器、事件和运行结果契约
-- `src/cli/registry.ts`：双引擎注册、查找与 CLI ID 校验
+- `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
+- `src/cli/registry.ts`：多引擎注册、查找与 CLI ID 校验
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
-- `src/cli/native-sessions.ts`：读取 Claude JSONL 与 Codex app-server 的原生会话摘要
+- `src/cli/native-sessions.ts`：读取 Claude JSONL 与 Codex app-server 的原生会话摘要；Mastra 引擎返回空列表
 - `src/cli/native-sessions.test.ts`：原生会话目录过滤、标题回退和排序测试
 - `src/cli/native-compact.ts`：驱动 Claude/Codex 原生上下文整理协议
 - `src/cli/native-compact.test.ts`：compact 完成、短会话和取消测试
 - `src/cli/claude-adapter.ts`：Claude Code 多事件、工具、上下文与统计适配器
 - `src/cli/codex-adapter.ts`：Codex 四类工具、上下文、答案与统计适配器
+- `src/cli/mastra-adapter.ts`：Mastra 引擎参数构造、JSONL 事件翻译与不支持能力边界
+- `src/cli/mastra-adapter.test.ts`：Mastra 参数、事件翻译和错误边界测试
 - `src/cli/runner.test.ts`：子进程生命周期、事件分发、续聊和错误边界测试
 - `src/cli/cli-adapters.test.ts`：双 CLI 参数、多事件和协议解析测试
+- `src/agents/mastra-agent.ts`：Mastra Agent 工厂、模型路由配置与受限读写/命令工具
+- `src/agents/mastra-runner.ts`：Mastra 子进程入口，把工具流、文本与用量写成 JSONL 事件
 - `src/cli-events.ts`：Codex/Claude 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/cli-events.test.ts`：事件解析器测试

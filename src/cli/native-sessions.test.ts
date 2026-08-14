@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { ClaudeAdapter } from "./claude-adapter.js";
+import { MastraAdapter } from "./mastra-adapter.js";
 import { listNativeCliSessions } from "./native-sessions.js";
 
 test("读取 Claude 当前项目会话并过滤其他 cwd", async () => {
@@ -72,4 +73,12 @@ test("Claude 项目目录不存在时返回空列表", async () => {
     else process.env.CLAUDE_CONFIG_DIR = previousConfig;
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Mastra 引擎没有原生会话列表，直接返回空", async () => {
+  const sessions = await listNativeCliSessions({
+    adapter: new MastraAdapter(),
+    cwd: process.cwd(),
+  });
+  assert.deepEqual(sessions, []);
 });

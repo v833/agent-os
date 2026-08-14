@@ -434,6 +434,7 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
           "/help 查看命令",
           "/claude <任务> 新话题使用 Claude Code",
           "/codex <任务> 新话题使用 Codex",
+          "/mastra <任务> 新话题使用 Mastra Agent",
         ].join("\n"),
         hasThread,
       );
@@ -516,6 +517,15 @@ async function startConfiguredBot(config: BotConfig): Promise<void> {
     const compactInstructions =
       command && command.name === "compact" ? command.instructions : undefined;
     if (isCompacting) {
+      // Mastra 没有原生会话上下文，/compact 对它没有语义，直接提示。
+      if (session.cliId === "mastra") {
+        await bot.reply(
+          message.messageId,
+          "Mastra 引擎没有独立的会话上下文，不需要 /compact。直接发起新任务即可。",
+          hasThread,
+        );
+        return;
+      }
       if (session.status === "active") {
         await bot.reply(
           message.messageId,

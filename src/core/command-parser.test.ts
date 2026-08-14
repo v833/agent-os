@@ -58,6 +58,10 @@ test("解析新话题显式指定的 CLI 与真实任务正文", () => {
       prompt: "检查项目",
     },
   );
+  assert.deepEqual(parseCliRequest("/mastra 翻译这段文案"), {
+    cliId: "mastra",
+    prompt: "翻译这段文案",
+  });
 });
 
 test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {

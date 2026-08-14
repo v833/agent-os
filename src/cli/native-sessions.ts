@@ -266,6 +266,8 @@ function listCodexSessions(
 export function listNativeCliSessions(
   options: ListNativeCliSessionsOptions,
 ): Promise<CliSessionSummary[]> {
+  // Mastra 不维护原生会话目录，/resume 对它显示为空列表即可。
+  if (options.adapter.id === "mastra") return Promise.resolve([]);
   return options.adapter.id === "claude"
     ? listClaudeSessions(options)
     : listCodexSessions(options);

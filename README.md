@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex 或 Claude Code，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex、Claude Code 或 Mastra Agent，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -43,12 +43,23 @@ Copy-Item config/bots.example.json config/bots.json
       "workspace": ".",
       "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
       "enabled": true
+    },
+    {
+      "id": "assistant",
+      "appIdEnv": "FEISHU_ASSISTANT_APP_ID",
+      "appSecretEnv": "FEISHU_ASSISTANT_APP_SECRET",
+      "defaultCli": "codex",
+      "workspace": ".",
+      "systemPrompt": "你是个人助理，负责协助用户处理日常事务、信息整理、计划安排和执行跟进。",
+      "enabled": true
     }
   ]
 }
 ```
 
 `appIdEnv` 和 `appSecretEnv` 指向 `.env` 中的真实凭证变量。停用 bot 时设置 `enabled: false`，它不会读取凭证或建立长连接；全部停用或配置字段错误时程序会在启动阶段退出。修改 `.env` 或 `config/*.json` 会触发 `pnpm start` 自动重启。群里 @哪台 bot，就由哪台 bot 接手，程序无需再次判断目标应用。
+
+个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与开发 bot 的自动代码审查链。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
 
 `reviewBy` 填另一台已启用 bot 的 ID。开发 bot 的普通任务成功后，会在原话题发送审查卡片，再发送一条真正提及审查 bot 的富文本消息；审查 bot 会继承来源 bot 的工作目录并建立独立 CLI 会话。审查完成后，最终回答会登记为下一项协作任务，沿用同一个 `taskId` 并把 `round` 加一，再自动交回来源 bot。达到 `collaborationMaxRounds` 后只发送完成通知，不再继续派活，避免两个 bot 无限循环。目标不存在、未启用或指向自己时，程序会在启动阶段拒绝配置。
 
@@ -112,6 +123,21 @@ claude
 - 已持久化话题继续使用自己的 `cliId`；修改 bot 的 `defaultCli` 只影响之后创建的新话题。
 
 Codex 通过 `codex exec --json --sandbox danger-full-access --skip-git-repo-check` 运行，拥有完整系统访问权限；同一话题追问使用带 `--sandbox danger-full-access` 的 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
+
+### Mastra Agent（第三种执行引擎）
+
+`defaultCli` 填 `mastra` 的 bot，或在新话题发送 `/mastra <任务>`，会由 Mastra 框架在独立子进程中运行，无需安装 Codex/Claude 的本地 CLI 环境。模型使用 Mastra 模型路由，在 `.env` 中配置：
+
+```dotenv
+# 模型路由：<provider>/<model>，key 使用对应 provider 的标准环境变量
+MASTRA_MODEL=openai/gpt-5.6-sol
+# 可选：Agent 的系统提示词；未配置时使用内置默认角色
+MASTRA_SYSTEM_PROMPT=
+```
+
+模型路由支持 170+ 家 provider：OpenAI 需要 `OPENAI_API_KEY`，Anthropic 需要 `ANTHROPIC_API_KEY`，DeepSeek 需要 `DEEPSEEK_API_KEY`，阿里通义需要 `DASHSCOPE_API_KEY` 等。缺少配置时错误会直接显示在飞书卡片上，不会静默换模型。
+
+Mastra Agent 内置三个工具：`read_file`、`write_file`（只能访问话题工作目录内的路径）和 `run_command`（在工作目录执行 shell 命令，默认 5 分钟超时）。与 Codex/Claude 不同，Mastra 不保存原生会话：同一话题不会自动续接上下文，`/resume` 对它显示空列表，`/compact` 会提示引擎不支持。
 
 ## 话题与提及验证
 
@@ -226,19 +252,21 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 
 Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 参数。首次 `codex exec` 使用 `--sandbox danger-full-access`；`codex exec resume` 使用 `--dangerously-bypass-approvals-and-sandbox`，因为续聊子命令不接受 `--sandbox`。Codex 返回 `stream disconnected before completion: Upstream request failed` 时，Runner 会把它视为瞬时流式断开，最多自动重试 5 次，依次等待 1 秒、1.5 秒、2 秒、2.5 秒、3 秒；已经建立 CLI 会话时优先使用续聊参数，没有会话 ID 时重新发起同一任务。Claude、认证、权限、会话失效和其他普通错误不会自动重试；用户在等待期间发送 `/close` 也会立即取消重试。
 
-### 多 bot 与双引擎首通验收
+### 多 bot 与多引擎首通验收
 
 启动日志应先显示注册数量和每台 bot 的默认引擎，再分别出现连接成功：
 
 ```text
-[配置] 已注册 2 个 bot，已恢复 0 个会话
+[配置] 已注册 3 个 bot，已恢复 0 个会话
 [Bot DEVELOPER] default_cli=claude workspace=C:\你的\项目
 [Bot REVIEWER] default_cli=codex workspace=C:\审查\项目
+[Bot ASSISTANT] default_cli=codex workspace=C:\你的\项目
 [Bot DEVELOPER] 已连接 name=开发助手 open_id=ou_developer
 [Bot REVIEWER] 已连接 name=审查助手 open_id=ou_reviewer
+[Bot ASSISTANT] 已连接 name=个人助理 open_id=ou_assistant
 ```
 
-分别新开两个话题，向开发助手和审查助手各发一条任务。开发助手应使用 Claude Code，审查助手应使用 Codex；同一话题分别 @ 两台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
+分别新开三个话题，向开发助手、审查助手和个人助理各发一条任务。开发助手应使用 Claude Code，审查助手和个人助理应使用 Codex；同一话题分别 @ 三台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
 
 单独发送 `/codex` 或 `/claude` 会提示补充任务，不会启动进程；在已建立的话题发送与原引擎不同的前缀，系统会要求新开话题，避免混用两种 CLI 会话 ID。新话题仍可用 `/codex <任务>` 或 `/claude <任务>` 显式选择执行引擎。
 
@@ -302,7 +330,7 @@ creating → active → idle → active
 
 执行中的普通消息会收到“当前会话还在执行”的提示，不会启动第二段任务。
 
-每台 bot 的默认执行引擎由注册表决定，会话类型同时支持 `claude` 和 `codex`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原 bot、群聊和话题恢复。
+每台 bot 的默认执行引擎由注册表决定，会话类型同时支持 `claude`、`codex` 和 `mastra`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原 bot、群聊和话题恢复。
 
 ## 会话持久化与重启恢复
 
@@ -325,7 +353,7 @@ data/sessions.json
 - 每条记录先经过 Zod 校验，坏记录会被过滤并从清理后的文件中移除。
 - 每条记录包含 `botId` 和绝对 `workspaceDir`；升级前缺少 `botId` 或 `workspaceDir` 的旧记录会按 bot 默认目录补齐，并在加载后自动重写为新结构。
 - 重启时仍为 `creating` 或 `active` 的会话恢复成 `idle`，因为旧任务进程已经不存在。
-- Codex 和 Claude 两种 `cliId` 都可以恢复。
+- Codex 和 Claude 两种 `cliId` 都可以恢复；Mastra 没有会话指针，不参与恢复。
 - 旧记录可以没有 `cliSessionId`；首次任务成功后写入，新记录的空字符串会被视为坏数据。
 - CLI 首次返回会话 ID 时会立即写入快照；即使任务随后被停止、超时或进程重启，下一条消息仍会优先尝试续接原会话。
 - 若 CLI 明确返回会话不存在或已失效，Agent OS 会清除旧指针；下一次“继续执行”会用原始任务重新建立会话，避免无限重试坏 ID。
@@ -362,6 +390,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 /compact 保留接口约定，省略排查过程
 /claude 检查 package.json
 /codex 查看当前目录结构
+/mastra 整理本周会议纪要
 ```
 
 - `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
@@ -370,10 +399,11 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/compact [要求]`：在当前 CLI 会话内调用引擎原生上下文整理；Claude 支持附加要求，Codex 使用默认策略
 - `/cd`：查看当前工作目录
 - `/cd <目录>`：切换当前话题的工作目录
-- `/help`：列出会话控制和双引擎选择命令
+- `/help`：列出会话控制和引擎选择命令
 - `/close`：关闭当前话题会话
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
+- `/mastra <任务>`：新话题使用 Mastra Agent（无会话恢复，`/resume`、`/compact` 不可用）
 
 ### 会话整理与历史恢复验收
 

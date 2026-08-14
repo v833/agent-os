@@ -61,10 +61,36 @@ export function formatCliEvent(event: unknown): string[] {
     }
 
     case "result":
+      // Mastra 引擎的 result 直接携带最终回答与用量；Claude 的 result 携带账单与正文。
+      if (typeof event.answer === "string") {
+        const stats = isObject(event.stats) ? event.stats : {};
+        const hasTokens =
+          typeof stats.inputTokens === "number" ||
+          typeof stats.outputTokens === "number";
+        return [
+          `最终回答: ${event.answer}${hasTokens ? ` tokens=${JSON.stringify(stats)}` : ""}`,
+        ];
+      }
       return [
-        `完成 turns=${value(event.num_turns)} 耗时=${value(event.duration_ms)}ms 成本=$${value(event.total_cost_usd)}`,
+        `完成 turns=${value(event.num_turns)} 耗时=${value(event.duration_ms)}ms 成本=${"$"}${value(event.total_cost_usd)}`,
         `最终回答: ${value(event.result)}`,
       ];
+
+    // ── Mastra Agent ──
+    case "tool_start":
+      return [
+        `调用工具: ${value(event.toolName)}${
+          typeof event.detail === "string" && event.detail
+            ? ` detail=${event.detail}`
+            : ""
+        }`,
+      ];
+
+    case "tool_end":
+      return [`工具结束 failed=${event.failed === true}`];
+
+    case "error":
+      return [`错误: ${typeof event.message === "string" ? event.message : "未知错误"}`];
 
     default:
       return [];

@@ -4,10 +4,10 @@
       "id": "developer",
       "appIdEnv": "FEISHU_DEVELOPER_APP_ID",
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
-      "defaultCli": "claude",
+      "defaultCli": "mastra",
       "workspace": ".",
       "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
-      "reviewBy": "reviewer",
+      "reviewBy": "",
       "collaborationMaxRounds": 2
     },
     {
@@ -18,6 +18,24 @@
       "workspace": ".",
       "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
       "enabled": true
+    },
+    {
+      "id": "assistant",
+      "appIdEnv": "FEISHU_ASSISTANT_APP_ID",
+      "appSecretEnv": "FEISHU_ASSISTANT_APP_SECRET",
+      "defaultCli": "mastra",
+      "workspace": ".",
+      "systemPrompt": "你是个人助理，负责协助用户处理日常事务、信息整理、计划安排和执行跟进。",
+      "enabled": true
+    },
+    {
+      "id": "researcher",
+      "appIdEnv": "FEISHU_RESEARCHER_APP_ID",
+      "appSecretEnv": "FEISHU_RESEARCHER_APP_SECRET",
+      "defaultCli": "mastra",
+      "workspace": ".",
+      "systemPrompt": "你是信息研究员，使用 Mastra 引擎完成资料整理、分析与文案写作任务。",
+      "enabled": false
     }
   ]
 }

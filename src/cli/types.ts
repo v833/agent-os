@@ -3,7 +3,7 @@
  * 让 Agent OS 的进程控制与具体供应商协议彼此独立。
  */
 
-export type CliId = "codex" | "claude";
+export type CliId = "codex" | "claude" | "mastra";
 
 export interface CliRunStats {
   durationMs?: number;
