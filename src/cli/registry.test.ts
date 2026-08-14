@@ -12,13 +12,12 @@ import {
 test("注册表按 ID 和接入模式返回执行适配器", () => {
   assert.equal(getCliAdapter("claude").displayName, "Claude Code");
   assert.equal(getCliAdapter("codex").displayName, "Codex");
-  assert.equal(getCliAdapter("mastra").displayName, "Mastra Agent");
   assert.equal(getCliAdapter("dimagent").accessMode, "headless");
   assert.equal(getCliAdapter("dimagent", "acp").accessMode, "acp");
   assert.throws(() => getCliAdapter("codex", "acp"), /不支持 ACP/);
   assert.deepEqual(
     listCliAdapters().map((adapter) => adapter.id),
-    ["claude", "codex", "mastra", "dimagent"],
+    ["claude", "codex", "dimagent"],
   );
 });
 
@@ -27,11 +26,10 @@ test("默认执行引擎为 Codex，并拒绝未知 DEFAULT_CLI", () => {
   assert.equal(parseCliId(""), "codex");
   assert.equal(parseCliId("claude"), "claude");
   assert.equal(parseCliId("codex"), "codex");
-  assert.equal(parseCliId("mastra"), "mastra");
   assert.equal(parseCliId("dimagent"), "dimagent");
   assert.throws(
     () => parseCliId("other"),
-    /DEFAULT_CLI.*claude.*codex.*mastra.*dimagent/,
+    /DEFAULT_CLI.*claude.*codex.*dimagent/,
   );
 });
 

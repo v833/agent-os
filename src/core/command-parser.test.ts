@@ -58,10 +58,6 @@ test("解析新话题显式指定的 CLI 与真实任务正文", () => {
       prompt: "检查项目",
     },
   );
-  assert.deepEqual(parseCliRequest("/mastra 翻译这段文案"), {
-    cliId: "mastra",
-    prompt: "翻译这段文案",
-  });
   assert.deepEqual(parseCliRequest("/dimagent 检查项目"), {
     cliId: "dimagent",
     prompt: "检查项目",

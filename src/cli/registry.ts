@@ -5,14 +5,12 @@
 import { ClaudeAdapter } from "./claude-adapter.js";
 import { CodexAdapter } from "./codex-adapter.js";
 import { DimagentAdapter } from "./dimagent-adapter.js";
-import { MastraAdapter } from "./mastra-adapter.js";
 import { resolve as resolvePath } from "node:path";
 import type { CliAccessMode, CliAdapter, CliId } from "./types.js";
 
 const adapters: Record<CliId, CliAdapter> = {
   claude: new ClaudeAdapter(),
   codex: new CodexAdapter(),
-  mastra: new MastraAdapter(),
   dimagent: new DimagentAdapter(),
 };
 const dimagentAcpAdapter = new DimagentAdapter("acp");
@@ -39,11 +37,11 @@ export function listCliAdapters(): CliAdapter[] {
 /** 解析 DEFAULT_CLI；用户未配置时按项目约定默认使用 Codex。 */
 export function parseCliId(value: string | undefined): CliId {
   if (!value) return "codex";
-  if (value === "claude" || value === "codex" || value === "mastra" || value === "dimagent") {
+  if (value === "claude" || value === "codex" || value === "dimagent") {
     return value;
   }
   throw new Error(
-    `不支持的 DEFAULT_CLI: ${value}，请填写 claude、codex、mastra 或 dimagent`,
+    `不支持的 DEFAULT_CLI: ${value}，请填写 claude、codex 或 dimagent`,
   );
 }
 

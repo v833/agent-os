@@ -33,7 +33,7 @@ const BotSchema = z.object({
     ),
   appIdEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
   appSecretEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
-  defaultCli: z.enum(["claude", "codex", "mastra", "dimagent"]),
+  defaultCli: z.enum(["claude", "codex", "dimagent"]),
   accessMode: z.enum(["headless", "acp"]).optional(),
   // mode 作为短字段兼容；文档统一使用不易与 agent/plan 模式混淆的 accessMode。
   mode: z.enum(["headless", "acp"]).optional(),

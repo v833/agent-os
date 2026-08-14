@@ -79,7 +79,7 @@ test("解析 Claude Code 事件时间线", () => {
   );
 });
 
-test("解析 Mastra Agent 事件时间线", () => {
+test("解析 DimAgent 事件时间线", () => {
   assert.deepEqual(
     parseCliEventLine(
       JSON.stringify({

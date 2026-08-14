@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex、Claude Code 或 Mastra Agent，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex、Claude Code 或 DimAgent，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎、接入模式和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## 飞书开放平台配置
 
@@ -20,7 +20,7 @@
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `enabled`、`reviewBy`、`collaborationMaxRounds`。`collaborationMaxRounds` 默认是 `2`，只能设置为 `1` 到 `4`。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；当前只有 DimAgent 支持 `acp`。`collaborationMaxRounds` 默认是 `2`，只能设置为 `1` 到 `4`。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -29,7 +29,8 @@ Copy-Item config/bots.example.json config/bots.json
       "id": "developer",
       "appIdEnv": "FEISHU_DEVELOPER_APP_ID",
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
-      "defaultCli": "claude",
+      "defaultCli": "dimagent",
+      "accessMode": "acp",
       "workspace": ".",
       "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
       "reviewBy": "reviewer",
@@ -124,20 +125,35 @@ claude
 
 Codex 通过 `codex exec --json --sandbox danger-full-access --skip-git-repo-check` 运行，拥有完整系统访问权限；同一话题追问使用带 `--sandbox danger-full-access` 的 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
-### Mastra Agent（第三种执行引擎）
+### DimAgent（headless / ACP）
 
-`defaultCli` 填 `mastra` 的 bot，或在新话题发送 `/mastra <任务>`，会由 Mastra 框架在独立子进程中运行，无需安装 Codex/Claude 的本地 CLI 环境。模型使用 Mastra 模型路由，在 `.env` 中配置：
+安装并先在交互界面完成 provider、模型和 MCP 配置：
 
-```dotenv
-# 模型路由：<provider>/<model>，key 使用对应 provider 的标准环境变量
-MASTRA_MODEL=openai/gpt-5.6-sol
-# 可选：Agent 的系统提示词；未配置时使用内置默认角色
-MASTRA_SYSTEM_PROMPT=
+```powershell
+npm install -g dimcode
+dim
 ```
 
-模型路由支持 170+ 家 provider：OpenAI 需要 `OPENAI_API_KEY`，Anthropic 需要 `ANTHROPIC_API_KEY`，DeepSeek 需要 `DEEPSEEK_API_KEY`，阿里通义需要 `DASHSCOPE_API_KEY` 等。缺少配置时错误会直接显示在飞书卡片上，不会静默换模型。
+DimAgent 的官方 CLI 入口是 `dim`；如果使用自定义命令名，可在 `.env` 中通过 `DIMAGENT_COMMAND` 覆盖。
 
-Mastra Agent 内置三个工具：`read_file`、`write_file`（只能访问话题工作目录内的路径）和 `run_command`（在工作目录执行 shell 命令，默认 5 分钟超时）。与 Codex/Claude 不同，Mastra 不保存原生会话：同一话题不会自动续接上下文，`/resume` 对它显示空列表，`/compact` 会提示引擎不支持。
+bot 通过 `accessMode` 选择接入方式，未填写时默认 `headless`：
+
+```json
+{
+  "id": "developer",
+  "defaultCli": "dimagent",
+  "accessMode": "acp",
+  "workspace": "."
+}
+```
+
+- `headless`：每轮调用 `dim exec --json --policy full-access`，续聊使用 `dim exec resume <session-id>`。
+- `acp`：每轮启动 `dim acp` stdio server，完成 ACP 初始化后新建或恢复 session，再把消息分片、工具状态与 token 用量映射到实时卡片。
+- ACP 和 headless 都复用 `~/.dimcode/v2/` 中的 provider、模型、MCP 与凭据配置。
+- 飞书没有同步权限确认界面；ACP 遇到权限请求时会自动选择 `allow_always` 或 `allow_once`，与 headless 的 `full-access` 行为保持一致。只应配置可信且可回退的工作目录。
+- 同一话题会自动续接 DimAgent session；当前 `/resume` 不枚举 DimAgent 自身数据库中的历史会话，`/compact` 也暂不调用 DimAgent 原生整理协议。
+
+新话题可发送 `/dimagent <任务>` 显式选择 DimAgent；接入模式仍取该 bot 的 `accessMode` 配置。若给非 DimAgent 引擎配置 `acp`，程序会在启动阶段拒绝配置。
 
 ## 话题与提及验证
 
@@ -268,7 +284,7 @@ Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 
 
 分别新开三个话题，向开发助手、审查助手和个人助理各发一条任务。开发助手应使用 Claude Code，审查助手和个人助理应使用 Codex；同一话题分别 @ 三台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
 
-单独发送 `/codex` 或 `/claude` 会提示补充任务，不会启动进程；在已建立的话题发送与原引擎不同的前缀，系统会要求新开话题，避免混用两种 CLI 会话 ID。新话题仍可用 `/codex <任务>` 或 `/claude <任务>` 显式选择执行引擎。
+单独发送 `/codex`、`/claude` 或 `/dimagent` 会提示补充任务，不会启动进程；在已建立的话题发送与原引擎不同的前缀，系统会要求新开话题，避免混用不同引擎的会话 ID。新话题可用对应的 `/<引擎> <任务>` 前缀显式选择执行引擎。
 
 真实任务运行期间发送 `/close`，`AbortController` 会终止对应子进程。会话保持 `closed`，不会再发送绿色成功卡片或最终回答。
 
@@ -330,7 +346,7 @@ creating → active → idle → active
 
 执行中的普通消息会收到“当前会话还在执行”的提示，不会启动第二段任务。
 
-每台 bot 的默认执行引擎由注册表决定，会话类型同时支持 `claude`、`codex` 和 `mastra`。引擎只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原 bot、群聊和话题恢复。
+每台 bot 的默认执行引擎和接入模式由注册表决定，会话类型支持 `claude`、`codex` 和 `dimagent`。引擎与接入模式只在话题首次创建会话时确定，之后的普通追问、显式引擎前缀和重启恢复都不能改变它。内存中的会话映射会同步保存到 `data/sessions.json`，程序重启后按原 bot、群聊和话题恢复；旧快照没有 `accessMode` 时按 `headless` 恢复。
 
 ## 会话持久化与重启恢复
 
@@ -353,7 +369,7 @@ data/sessions.json
 - 每条记录先经过 Zod 校验，坏记录会被过滤并从清理后的文件中移除。
 - 每条记录包含 `botId` 和绝对 `workspaceDir`；升级前缺少 `botId` 或 `workspaceDir` 的旧记录会按 bot 默认目录补齐，并在加载后自动重写为新结构。
 - 重启时仍为 `creating` 或 `active` 的会话恢复成 `idle`，因为旧任务进程已经不存在。
-- Codex 和 Claude 两种 `cliId` 都可以恢复；Mastra 没有会话指针，不参与恢复。
+- Codex、Claude 和 DimAgent 都可以保存恢复指针。
 - 旧记录可以没有 `cliSessionId`；首次任务成功后写入，新记录的空字符串会被视为坏数据。
 - CLI 首次返回会话 ID 时会立即写入快照；即使任务随后被停止、超时或进程重启，下一条消息仍会优先尝试续接原会话。
 - 若 CLI 明确返回会话不存在或已失效，Agent OS 会清除旧指针；下一次“继续执行”会用原始任务重新建立会话，避免无限重试坏 ID。
@@ -390,7 +406,6 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 /compact 保留接口约定，省略排查过程
 /claude 检查 package.json
 /codex 查看当前目录结构
-/mastra 整理本周会议纪要
 ```
 
 - `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
@@ -403,7 +418,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/close`：关闭当前话题会话
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
-- `/mastra <任务>`：新话题使用 Mastra Agent（无会话恢复，`/resume`、`/compact` 不可用）
+- `/dimagent <任务>`：新话题使用 DimAgent（接入模式取 bot 的 `accessMode`）
 
 ### 会话整理与历史恢复验收
 

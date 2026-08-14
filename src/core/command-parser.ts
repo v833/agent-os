@@ -14,7 +14,7 @@ const COMMAND_RE = /^(?:@.+\s+)?\/(close|status|help|new|resume)\s*$/;
 const CD_RE = /^(?:@.+\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
 const CLI_REQUEST_RE =
-  /^(?:@\S+\s+)?\/(claude|codex|mastra|dimagent)(?:\s+([\s\S]*))?$/;
+  /^(?:@\S+\s+)?\/(claude|codex|dimagent)(?:\s+([\s\S]*))?$/;
 
 function stripLeadingMention(
   text: string,

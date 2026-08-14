@@ -8,13 +8,12 @@
     "start": "tsx watch --include .env --include 'config/*.json' src/index.ts",
     "start:once": "tsx src/index.ts",
     "build": "tsc",
-    "test": "tsx --test src/cli-events.test.ts src/cli/runner.test.ts src/cli/acp-runner.test.ts src/cli/cli-adapters.test.ts src/cli/dimagent-adapter.test.ts src/cli/mastra-adapter.test.ts src/cli/native-sessions.test.ts src/cli/native-compact.test.ts src/cli/registry.test.ts src/agents/mastra-agent.test.ts src/agents/mastra-runner.test.ts src/im/lark.test.ts src/im/message-parser.test.ts src/im/card.test.ts src/core/bot-registry.test.ts src/core/collaboration.test.ts src/core/workspace.test.ts src/core/task-abort.test.ts src/core/task-progress.test.ts src/core/session-store.test.ts src/core/session-manager.test.ts src/core/command-parser.test.ts",
+    "test": "tsx --test src/cli-events.test.ts src/cli/runner.test.ts src/cli/acp-runner.test.ts src/cli/cli-adapters.test.ts src/cli/dimagent-adapter.test.ts src/cli/native-sessions.test.ts src/cli/native-compact.test.ts src/cli/registry.test.ts src/im/lark.test.ts src/im/message-parser.test.ts src/im/card.test.ts src/core/bot-registry.test.ts src/core/collaboration.test.ts src/core/workspace.test.ts src/core/task-abort.test.ts src/core/task-progress.test.ts src/core/session-store.test.ts src/core/session-manager.test.ts src/core/command-parser.test.ts",
     "probe:cli": "tsx src/probe-cli.ts"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",
     "@larksuiteoapi/node-sdk": "^1.71.1",
-    "@mastra/core": "^1.59.0",
     "dotenv": "^17.2.1",
     "zod": "^4.0.14"
   },

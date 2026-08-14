@@ -1,5 +1,5 @@
 /**
- * AI CLI 事件适配层：把 Codex 与 Claude Code 的 JSONL 事件
+ * AI CLI 事件适配层：把 Codex、Claude Code 与 DimAgent 的 JSONL 事件
  * 收敛成统一、适合日志和飞书卡片展示的中文时间线文本。
  */
 type JsonObject = Record<string, unknown>;
@@ -61,7 +61,7 @@ export function formatCliEvent(event: unknown): string[] {
     }
 
     case "result":
-      // Mastra 引擎的 result 直接携带最终回答与用量；Claude 的 result 携带账单与正文。
+      // DimAgent 的 result 直接携带最终回答与用量；Claude 的 result 携带账单与正文。
       if (typeof event.answer === "string") {
         const stats = isObject(event.stats) ? event.stats : {};
         const hasTokens =
@@ -76,7 +76,7 @@ export function formatCliEvent(event: unknown): string[] {
         `最终回答: ${value(event.result)}`,
       ];
 
-    // ── Mastra Agent ──
+    // ── DimAgent ──
     case "tool_start":
       return [
         `调用工具: ${value(event.toolName)}${
