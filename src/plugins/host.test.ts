@@ -10,8 +10,10 @@ import { join } from "node:path";
 import test from "node:test";
 import { Context, Service } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
+import type { TeamCardOptions } from "../im/card.js";
 import type {
   Bot,
+  BotConnectionState,
   BotIdentity,
   IncomingMessage,
 } from "../im/lark.js";
@@ -25,9 +27,11 @@ import * as cardsPlugin from "./cards.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as commandsPlugin from "./commands.js";
 import * as statusCommand from "./commands/status.js";
+import * as teamCommand from "./commands/team.js";
 import * as routerPlugin from "./router.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
+import * as teamPlugin from "./team.js";
 import { waitForAllActive } from "./loader.js";
 import type { BotRuntime } from "./types.js";
 
@@ -44,6 +48,8 @@ const baseBotConfig: BotConfig = {
   appSecret: "secret",
   defaultCliId: "codex",
   accessMode: "headless",
+  role: "测试角色",
+  skills: [],
   systemPrompt: "测试角色",
   workspaceDir: process.cwd(),
   collaborationMaxRounds: 2,
@@ -53,6 +59,7 @@ const baseBotConfig: BotConfig = {
 class FakeConfigService extends Service {
   readonly bots: BotConfig[];
   readonly defaultWorkspaces: Record<string, string>;
+  readonly teamLeaderId: string;
 
   constructor(ctx: Context, bots: BotConfig[]) {
     super(ctx, "config");
@@ -60,6 +67,7 @@ class FakeConfigService extends Service {
     this.defaultWorkspaces = Object.fromEntries(
       bots.map((bot) => [bot.id, bot.workspaceDir]),
     );
+    this.teamLeaderId = bots[0]?.id ?? "";
   }
 
   bot(id: string): BotConfig | undefined {
@@ -98,8 +106,13 @@ class FakeCliService extends Service {
 
   register(): void {}
 
-  get(): CliAdapter {
-    return fakeAdapter;
+  get(
+    _id: string,
+    accessMode: "headless" | "acp" = "headless",
+  ): CliAdapter {
+    return accessMode === "acp"
+      ? { ...fakeAdapter, accessMode: "acp", displayName: "FakeACP" }
+      : fakeAdapter;
   }
 
   list(): CliAdapter[] {
@@ -152,10 +165,16 @@ class FakeLarkService extends Service {
   bot(id: string): BotRuntime | undefined {
     return this.runtimes.get(id);
   }
+
+  connectionState(id: string): string | undefined {
+    return this.runtimes.get(id)?.bot.getConnectionState?.();
+  }
 }
 
 /** 记录 bot 出站调用的假平台句柄。 */
-function createFakeBot() {
+function createFakeBot(
+  connectionState: BotConnectionState = "connected",
+) {
   const calls = {
     replies: [] as string[],
     cards: [] as Record<string, unknown>[],
@@ -164,6 +183,7 @@ function createFakeBot() {
   };
   const bot = {
     client: {},
+    getConnectionState: () => connectionState,
     getIdentity: async () =>
       ({ openId: "bot_open", name: "TestBot" }) as BotIdentity,
     reply: async (_id: string, text: string) => {
@@ -177,6 +197,19 @@ function createFakeBot() {
     replyMention: async (_id: string, _target: BotIdentity, text: string) => {
       calls.mentions.push(text);
       return `mention-${calls.mentions.length}`;
+    },
+    sendResultNotification: async (options: {
+      replyToMessageId: string;
+      target: BotIdentity;
+      text: string;
+      replyInThread: boolean;
+    }) => {
+      await bot.replyMention(
+        options.replyToMessageId,
+        options.target,
+        options.text,
+        options.replyInThread,
+      );
     },
     updateCard: async (_id: string, card: Record<string, unknown>) => {
       calls.updates.push(card);
@@ -254,9 +287,12 @@ interface Host {
 }
 
 /** 组装一个最小 Agent OS 宿主：真实服务插件 + 假 cli/lark/config。 */
-async function createHost(bots: BotConfig[] = [baseBotConfig]): Promise<Host> {
+async function createHost(
+  bots: BotConfig[] = [baseBotConfig],
+  connectionState: BotConnectionState = "connected",
+): Promise<Host> {
   const root = new Context();
-  const fakeBot = createFakeBot();
+  const fakeBot = createFakeBot(connectionState);
   let cli!: FakeCliService;
   let lark!: FakeLarkService;
   const sessionsDir = await mkdtemp(join(tmpdir(), "agent-os-host-"));
@@ -283,12 +319,14 @@ async function createHost(bots: BotConfig[] = [baseBotConfig]): Promise<Host> {
 
   await Promise.all([
     root.plugin(configPlugin, { bots }),
+    root.plugin(teamPlugin),
     root.plugin(cliPlugin),
     root.plugin(larkPlugin),
     root.plugin(sessionsPlugin, { storePath: join(sessionsDir, "s.json") }),
     root.plugin(cardsPlugin),
     root.plugin(commandsPlugin),
     root.plugin(statusCommand),
+    root.plugin(teamCommand),
     root.plugin(collaborationPlugin),
     root.plugin(tasksPlugin),
     root.plugin(routerPlugin),
@@ -315,11 +353,94 @@ test("bot/message 把 /status 派发给命令插件", async () => {
   );
 });
 
+test("bot/message 把 /team 经 ctx.cards 服务出口生成团队卡片", async () => {
+  const host = await createHost();
+  // 钉住服务出口：验证命令插件走 ctx.cards.team，而不是直接调用渲染实现。
+  let teamCalls = 0;
+  let teamOptions: TeamCardOptions | undefined;
+  const originalTeam = host.root.cards.team.bind(host.root.cards);
+  host.root.cards.team = ((options: TeamCardOptions) => {
+    teamCalls += 1;
+    teamOptions = options;
+    return originalTeam(options);
+  }) as typeof host.root.cards.team;
+
+  const message = incomingMessage({ text: "/team" });
+  await host.root.parallel("bot/message", message, host.bot, baseBotConfig);
+
+  assert.equal(teamCalls, 1, "/team 必须经过 ctx.cards.team 服务出口");
+  assert.ok(
+    teamOptions?.members.some((member) => member.id === "testbot"),
+    "服务出口收到团队成员数据",
+  );
+  assert.equal(host.calls.cards.length, 1, "应该回复一张团队卡片");
+  const card = JSON.stringify(host.calls.cards[0]);
+  assert.ok(card.includes("Agent 团队"), "卡片标题包含团队名");
+  assert.ok(card.includes("TestBot"), "使用实时 bot 显示名");
+  assert.ok(card.includes("已连接"), "已建立连接的成员标记在线");
+  assert.ok(card.includes("FakeCodex"), "展示默认执行引擎");
+});
+
+test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错", async () => {
+  const host = await createHost();
+
+  // 团队内的成员应拿到团队上下文，作为 tasks 的提示词 provider。
+  const known = host.root.bail("task/prompt-context", baseBotConfig);
+  assert.ok(
+    known?.includes("你所在的 Agent 团队"),
+    "团队成员应返回团队上下文",
+  );
+
+  // 不在团队名册中的 bot 必须返回 undefined，不能让 contextFor 的异常打断任务启动。
+  const unknown = host.root.bail("task/prompt-context", {
+    ...baseBotConfig,
+    id: "ghost",
+  });
+  assert.equal(unknown, undefined);
+});
+
+test("/team 按成员 accessMode 查找 ACP 执行引擎", async () => {
+  const host = await createHost([
+    baseBotConfig,
+    { ...baseBotConfig, id: "acpbot", accessMode: "acp" },
+  ]);
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/team" }),
+    host.bot,
+    baseBotConfig,
+  );
+
+  assert.ok(
+    JSON.stringify(host.calls.cards[0]).includes("FakeACP"),
+    "/team 应按成员 accessMode 展示 ACP 引擎",
+  );
+});
+
+test("/team 仅把真实 connected 长连接标为在线", async () => {
+  const host = await createHost([baseBotConfig], "reconnecting");
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/team" }),
+    host.bot,
+    baseBotConfig,
+  );
+
+  assert.ok(
+    JSON.stringify(host.calls.cards[0]).includes("未连接"),
+    "重连中的 bot 不能显示为已连接",
+  );
+});
+
 test("普通任务走完卡片、执行与结果通知的生命周期", async () => {
   const host = await createHost();
   const message = incomingMessage({ text: "写一个 hello world" });
   await host.root.parallel("bot/message", message, host.bot, baseBotConfig);
   await waitFor(() => host.cli.captured !== undefined);
+  assert.ok(
+    host.cli.captured?.prompt.includes("你所在的 Agent 团队"),
+    "team 插件应通过 prompt-context provider 注入团队上下文",
+  );
 
   // 任务卡片已发出，且携带可停止的按钮。
   assert.ok(

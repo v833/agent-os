@@ -1,42 +1,36 @@
 {
+  "teamLeader": "ceo-assistant",
   "bots": [
+    {
+      "id": "ceo-assistant",
+      "appIdEnv": "FEISHU_CEO_ASSISTANT_APP_ID",
+      "appSecretEnv": "FEISHU_CEO_ASSISTANT_APP_SECRET",
+      "defaultCli": "codex",
+      "workspace": "../agent-os-team-example",
+      "role": "CEO 助理，负责理解目标、组织成员并汇总团队结论",
+      "skills": [],
+      "systemPrompt": "先明确目标和分工，再把任务交给合适的团队成员。"
+    },
+    {
+      "id": "product",
+      "appIdEnv": "FEISHU_PRODUCT_APP_ID",
+      "appSecretEnv": "FEISHU_PRODUCT_APP_SECRET",
+      "defaultCli": "codex",
+      "workspace": "../agent-os-team-example",
+      "role": "产品经理，负责澄清需求并形成可验收的产品说明",
+      "skills": ["grill-me"],
+      "systemPrompt": "不要直接实现代码，先把目标、范围和验收标准说清楚。"
+    },
     {
       "id": "developer",
       "appIdEnv": "FEISHU_DEVELOPER_APP_ID",
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
-      "defaultCli": "dimagent",
-      "accessMode": "acp",
-      "workspace": ".",
-      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
-      "reviewBy": "",
-      "collaborationMaxRounds": 2
-    },
-    {
-      "id": "reviewer",
-      "appIdEnv": "FEISHU_REVIEWER_APP_ID",
-      "appSecretEnv": "FEISHU_REVIEWER_APP_SECRET",
       "defaultCli": "codex",
-      "workspace": ".",
-      "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
-      "enabled": true
-    },
-    {
-      "id": "assistant",
-      "appIdEnv": "FEISHU_ASSISTANT_APP_ID",
-      "appSecretEnv": "FEISHU_ASSISTANT_APP_SECRET",
-      "defaultCli": "dimagent",
-      "workspace": ".",
-      "systemPrompt": "你是个人助理，负责协助用户处理日常事务、信息整理、计划安排和执行跟进。",
-      "enabled": true
-    },
-    {
-      "id": "researcher",
-      "appIdEnv": "FEISHU_RESEARCHER_APP_ID",
-      "appSecretEnv": "FEISHU_RESEARCHER_APP_SECRET",
-      "defaultCli": "dimagent",
-      "workspace": ".",
-      "systemPrompt": "你是信息研究员，完成资料整理、分析与文案写作任务。",
-      "enabled": true
+      "workspace": "../agent-os-team-example",
+      "role": "开发工程师，负责完成实现，并组织内部审查与测试",
+      "skills": [],
+      "systemPrompt": "保持实现直接、清楚，并在交付前完成代码审查与测试。",
+      "collaborationMaxRounds": 16
     }
   ]
 }

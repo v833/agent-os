@@ -12,6 +12,7 @@ import {
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
+  buildTeamCard,
   splitLongText,
   ThrottledCardUpdater,
 } from "./card.js";
@@ -309,4 +310,37 @@ test("cancel 丢弃待发送状态并阻止之后的 push 与 finish", async () 
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   assert.deepEqual(updates, []);
+});
+
+test("团队卡片展示成员职责、引擎、Skill 与连接状态", () => {
+  const card = buildTeamCard({
+    members: [
+      {
+        id: "ceo-assistant",
+        displayName: "CEO 助理",
+        role: "CEO 助理，负责理解目标、组织成员并汇总团队结论",
+        cliName: "Claude Code",
+        skills: [],
+        isLeader: true,
+        ready: true,
+      },
+      {
+        id: "product",
+        displayName: "产品经理",
+        role: "产品经理，负责澄清需求",
+        cliName: "Claude Code",
+        skills: ["grill-me"],
+        isLeader: false,
+        ready: false,
+      },
+    ],
+  });
+  const text = JSON.stringify(card);
+  assert.ok(text.includes("Agent 团队"), "卡片标题为 Agent 团队");
+  assert.ok(text.includes("CEO 助理 负责统筹"), "副标题说明负责人统筹");
+  assert.ok(text.includes("Team Leader"), "负责人带 Team Leader 徽标");
+  assert.ok(text.includes("已连接"), "在线成员显示已连接");
+  assert.ok(text.includes("未连接"), "离线成员显示未连接");
+  assert.ok(text.includes("$grill-me"), "展示项目 Skill");
+  assert.ok(text.includes("Claude Code"), "展示默认执行引擎");
 });

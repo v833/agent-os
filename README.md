@@ -60,10 +60,11 @@ plugins:
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`systemPrompt` 和可选的 `accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `2`，只能设置为 `1` 到 `4`。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`，需安装在成员工作目录的 `.agents/skills` 或 `.claude/skills`）。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
+  "teamLeader": "developer",
   "bots": [
     {
       "id": "developer",
@@ -72,9 +73,10 @@ Copy-Item config/bots.example.json config/bots.json
       "defaultCli": "dimagent",
       "accessMode": "acp",
       "workspace": ".",
+      "role": "开发工程师，负责完成实现，并组织内部审查与测试",
       "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
       "reviewBy": "reviewer",
-      "collaborationMaxRounds": 2
+      "collaborationMaxRounds": 16
     },
     {
       "id": "reviewer",
@@ -82,6 +84,7 @@ Copy-Item config/bots.example.json config/bots.json
       "appSecretEnv": "FEISHU_REVIEWER_APP_SECRET",
       "defaultCli": "codex",
       "workspace": ".",
+      "role": "代码审查工程师，负责检查实现、发现风险并给出修改建议",
       "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
       "enabled": true
     },
@@ -91,6 +94,7 @@ Copy-Item config/bots.example.json config/bots.json
       "appSecretEnv": "FEISHU_ASSISTANT_APP_SECRET",
       "defaultCli": "codex",
       "workspace": ".",
+      "role": "个人助理，负责协助用户处理日常事务、信息整理、计划安排和执行跟进",
       "systemPrompt": "你是个人助理，负责协助用户处理日常事务、信息整理、计划安排和执行跟进。",
       "enabled": true
     }
@@ -103,6 +107,8 @@ Copy-Item config/bots.example.json config/bots.json
 个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与开发 bot 的自动代码审查链。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
 
 `reviewBy` 填另一台已启用 bot 的 ID。开发 bot 的普通任务成功后，会在原话题发送审查卡片，再发送一条真正提及审查 bot 的富文本消息；审查 bot 会继承来源 bot 的工作目录并建立独立 CLI 会话。审查完成后，最终回答会登记为下一项协作任务，沿用同一个 `taskId` 并把 `round` 加一，再自动交回来源 bot。达到 `collaborationMaxRounds` 后只发送完成通知，不再继续派活，避免两个 bot 无限循环。目标不存在、未启用或指向自己时，程序会在启动阶段拒绝配置。
+
+在飞书群中 @任意成员发送 `/team`，会返回一张团队卡片，展示每位成员的职责、默认执行引擎、项目 Skill 与连接状态。
 
 ## 启动与验证
 

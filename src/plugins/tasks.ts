@@ -20,7 +20,6 @@ import {
   type ActiveRun,
 } from "../core/task-abort.js";
 import { TaskProgressTracker } from "../core/task-progress.js";
-import { sendResultNotification } from "../im/lark.js";
 import type { StartTaskInput, TaskResultPayload } from "./types.js";
 
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
@@ -90,9 +89,14 @@ export class TasksService extends Service {
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
+    const teamContext = this.ctx.root.bail(
+      "task/prompt-context",
+      botConfig,
+    );
     const prompt = buildBotPrompt(
-      botConfig.systemPrompt,
+      botConfig,
       resolveRetryPrompt(session, requestedPrompt),
+      teamContext ?? "",
     );
     // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
     if (
@@ -344,8 +348,7 @@ export class TasksService extends Service {
           `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
         );
         if (!collaboration) {
-          await sendResultNotification({
-            bot,
+          await bot.sendResultNotification({
             replyToMessageId,
             target: { openId: senderOpenId, name: "" },
             text: isCompacting

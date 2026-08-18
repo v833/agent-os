@@ -1,5 +1,5 @@
 /**
- * Bot 注册表测试：验证字段、重复 ID、启用过滤、环境凭证解析、
+ * Bot 注册表测试：验证团队字段、重复 ID、启用过滤、环境凭证解析、
  * 文件错误提示与角色提示词拼接。
  */
 import assert from "node:assert/strict";
@@ -9,18 +9,22 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   buildBotPrompt,
+  loadAgentOsConfig,
   loadBotConfigs,
+  parseAgentOsConfig,
   parseBotConfigs,
 } from "./bot-registry.js";
 
 function registry(overrides: Record<string, unknown> = {}) {
   return {
+    teamLeader: "developer",
     bots: [
       {
         id: "developer",
         appIdEnv: "FEISHU_DEVELOPER_APP_ID",
         appSecretEnv: "FEISHU_DEVELOPER_APP_SECRET",
         defaultCli: "claude",
+        role: "主力开发助手",
         systemPrompt: "主力开发助手",
         ...overrides,
       },
@@ -33,29 +37,37 @@ const credentials = {
   FEISHU_DEVELOPER_APP_SECRET: " developer-secret ",
 };
 
-test("解析启用 bot 的凭证、默认引擎和角色", () => {
-  assert.deepEqual(parseBotConfigs(registry(), credentials), [
+test("解析启用 bot 的凭证、默认引擎、角色和团队负责人", () => {
+  const parsed = parseAgentOsConfig(registry(), credentials);
+  assert.equal(parsed.teamLeaderId, "developer");
+  assert.deepEqual(parsed.bots, [
     {
       id: "developer",
       appId: "cli_developer",
       appSecret: "developer-secret",
       defaultCliId: "claude",
       accessMode: "headless",
+      role: "主力开发助手",
+      skills: [],
       systemPrompt: "主力开发助手",
-      collaborationMaxRounds: 2,
+      collaborationMaxRounds: 16,
       workspaceDir: process.cwd(),
     },
   ]);
+  // 兼容入口返回同样的成员列表。
+  assert.deepEqual(parseBotConfigs(registry(), credentials), parsed.bots);
 });
 
 test("可选字段使用默认值，停用 bot 不读取凭证", () => {
   const input = {
+    teamLeader: "reviewer",
     bots: [
       {
         id: "disabled",
         appIdEnv: "MISSING_ID",
         appSecretEnv: "MISSING_SECRET",
         defaultCli: "codex",
+        role: "停用的成员",
         enabled: false,
       },
       {
@@ -63,6 +75,7 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
         appIdEnv: "REVIEWER_ID",
         appSecretEnv: "REVIEWER_SECRET",
         defaultCli: "codex",
+        role: "审查工程师",
       },
     ],
   };
@@ -79,8 +92,10 @@ test("可选字段使用默认值，停用 bot 不读取凭证", () => {
         appSecret: "secret",
         defaultCliId: "codex",
         accessMode: "headless",
+        role: "审查工程师",
+        skills: [],
         systemPrompt: "",
-        collaborationMaxRounds: 2,
+        collaborationMaxRounds: 16,
         workspaceDir: process.cwd(),
       },
     ],
@@ -131,12 +146,14 @@ test("任意引擎可选 ACP 接入模式，未配置时默认 headless", () => 
 
 test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
   const input = {
+    teamLeader: "developer",
     bots: [
       {
         id: "developer",
         appIdEnv: "DEV_ID",
         appSecretEnv: "DEV_SECRET",
         defaultCli: "claude",
+        role: "开发",
         reviewBy: "reviewer",
       },
       {
@@ -144,6 +161,7 @@ test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
         appIdEnv: "REVIEW_ID",
         appSecretEnv: "REVIEW_SECRET",
         defaultCli: "codex",
+        role: "审查",
       },
     ],
   };
@@ -155,18 +173,16 @@ test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
     REVIEW_SECRET: "review-secret",
   });
   assert.equal(configs[0]?.reviewBy, "reviewer");
-  assert.equal(configs[0]?.collaborationMaxRounds, 2);
+  assert.equal(configs[0]?.collaborationMaxRounds, 16);
 
   assert.throws(
     () =>
       parseBotConfigs(
         {
+          ...input,
           bots: [
-            {
-              ...input.bots[0],
-              reviewBy: "missing",
-            },
-            { ...input.bots[1], enabled: false },
+            { ...input.bots[0]!, reviewBy: "missing" },
+            { ...input.bots[1]!, enabled: false },
           ],
         },
         {
@@ -179,7 +195,7 @@ test("解析 reviewBy 并要求目标是另一台已启用 bot", () => {
   assert.throws(
     () =>
       parseBotConfigs(
-        { bots: [{ ...input.bots[0], reviewBy: "developer" }] },
+        { ...input, bots: [{ ...input.bots[0]!, reviewBy: "developer" }] },
         { DEV_ID: "dev", DEV_SECRET: "dev-secret" },
       ),
     /不能把自己配置为 reviewBy/,
@@ -218,7 +234,7 @@ test("拒绝重复和非法 bot ID", () => {
   assert.throws(
     () =>
       parseBotConfigs(
-        { bots: [registry().bots[0], registry().bots[0]] },
+        { ...registry(), bots: [registry().bots[0], registry().bots[0]] },
         credentials,
       ),
     /bot id 不能重复: developer/,
@@ -229,7 +245,12 @@ test("拒绝重复和非法 bot ID", () => {
   );
 });
 
-test("协作轮次限制在 1 到 4 之间并支持显式配置", () => {
+test("协作轮次限制在 1 到 32 之间并支持显式配置", () => {
+  assert.equal(
+    parseBotConfigs(registry({ collaborationMaxRounds: 32 }), credentials)[0]
+      ?.collaborationMaxRounds,
+    32,
+  );
   assert.equal(
     parseBotConfigs(registry({ collaborationMaxRounds: 4 }), credentials)[0]
       ?.collaborationMaxRounds,
@@ -242,8 +263,8 @@ test("协作轮次限制在 1 到 4 之间并支持显式配置", () => {
   );
   assert.throws(
     () =>
-      parseBotConfigs(registry({ collaborationMaxRounds: 5 }), credentials),
-    /expected number to be <=4/,
+      parseBotConfigs(registry({ collaborationMaxRounds: 33 }), credentials),
+    /expected number to be <=32/,
   );
 });
 
@@ -253,9 +274,50 @@ test("拒绝启用 bot 缺少凭证和全部停用", () => {
     /bot developer 缺少环境变量 FEISHU_DEVELOPER_APP_ID/,
   );
   assert.throws(
-    () =>
-      parseBotConfigs(registry({ enabled: false }), {}),
+    () => parseBotConfigs(registry({ enabled: false }), {}),
     /至少需要启用一个 bot/,
+  );
+});
+
+test("teamLeader 必须指向启用成员，否则在连接前报错", () => {
+  assert.throws(
+    () =>
+      parseBotConfigs(
+        { ...registry(), teamLeader: "missing" },
+        credentials,
+      ),
+    /teamLeader 指向未启用的 bot: missing/,
+  );
+  // 负责人被禁用但团队还有其他启用成员时，同样在连接前报错。
+  assert.throws(
+    () =>
+      parseBotConfigs(
+        {
+          teamLeader: "ceo-assistant",
+          bots: [
+            { ...registry().bots[0]!, id: "ceo-assistant", enabled: false },
+            { ...registry().bots[0]!, id: "developer" },
+          ],
+        },
+        credentials,
+      ),
+    /teamLeader 指向未启用的 bot: ceo-assistant/,
+  );
+});
+
+test("role 必填，skills 去重并校验名称", () => {
+  assert.throws(
+    () => parseBotConfigs({ ...registry(), bots: [{ ...registry().bots[0]!, role: " " }] }, credentials),
+    /role/,
+  );
+  const deduped = parseBotConfigs(
+    registry({ skills: ["grill-me", "grill-me"] }),
+    credentials,
+  )[0];
+  assert.deepEqual(deduped?.skills, ["grill-me"]);
+  assert.throws(
+    () => parseBotConfigs(registry({ skills: ["Bad Skill"] }), credentials),
+    /skills/,
   );
 });
 
@@ -266,6 +328,9 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
   await writeFile(filePath, JSON.stringify(registry()), "utf8");
 
   assert.equal((await loadBotConfigs(filePath, credentials))[0]?.id, "developer");
+  const agentOs = await loadAgentOsConfig(filePath, credentials);
+  assert.equal(agentOs.teamLeaderId, "developer");
+  assert.equal(agentOs.bots[0]?.role, "主力开发助手");
   await assert.rejects(
     loadBotConfigs(join(directory, "missing.json"), credentials),
     /找不到 bot 配置文件/,
@@ -275,10 +340,32 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
   await assert.rejects(loadBotConfigs(filePath, credentials), /格式错误/);
 });
 
-test("角色提示词只在配置非空时前置", () => {
+test("角色提示词组装角色、系统原则、团队上下文与 Skill", () => {
+  const teamContext = "你所在的 Agent 团队：\n- product：产品经理";
   assert.equal(
-    buildBotPrompt(" 审查实现 ", "检查 package.json"),
-    "角色：审查实现\n\n任务：检查 package.json",
+    buildBotPrompt(
+      {
+        role: "产品经理",
+        skills: ["grill-me"],
+        systemPrompt: "不要直接实现代码",
+      },
+      "澄清这个需求",
+      teamContext,
+    ),
+    [
+      "你的角色：产品经理",
+      "不要直接实现代码",
+      teamContext,
+      "本次任务必须按项目 Skill 执行：$grill-me",
+      "当前任务：澄清这个需求",
+    ].join("\n\n"),
   );
-  assert.equal(buildBotPrompt("  ", "检查 package.json"), "检查 package.json");
+  // 无 Skill、无团队上下文时跳过对应段落，空角色说明会被过滤。
+  assert.equal(
+    buildBotPrompt(
+      { role: "开发", skills: [], systemPrompt: "  " },
+      "写代码",
+    ),
+    "你的角色：开发\n\n当前任务：写代码",
+  );
 });

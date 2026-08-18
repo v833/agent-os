@@ -50,9 +50,10 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/sessions/cli/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/prompt-context、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
-- `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证）
+- `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
+- `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
 - `src/plugins/sessions.ts`：sessions 服务——把 SessionManager 与 JsonSessionStore 挂到 ctx.sessions
 - `src/plugins/cli.ts`：cli 服务——执行引擎注册表与调度（run/compact/原生会话）
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
@@ -62,14 +63,17 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
 - `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、命令派发与任务启动
 - `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
-- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/cd/close），通过 ctx.commands.register() 登记
+- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
 - `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
+- `src/plugins/commands/team.ts`：/team 命令插件——经 ctx.team、ctx.lark、ctx.cli 与 ctx.cards 展示成员和真实长连接状态
 - `src/plugins/host.test.ts`：最小 Agent OS 集成测试——事件路由、命令派发、任务生命周期、停止与协作交接
 
 ### 核心与执行引擎（纯函数模块，供服务插件复用）
 
 - `src/core/bot-registry.ts`：多 bot 注册表读取、校验、凭证解析与角色提示词
 - `src/core/bot-registry.test.ts`：注册表字段、启用过滤、凭证和错误边界测试
+- `src/core/team-registry.ts`：团队成员注册表、团队上下文与项目 Skill 检查
+- `src/core/team-registry.test.ts`：团队成员查询、上下文和缺失 Skill 检查测试
 - `src/core/collaboration.ts`：bot 间同话题交接单、目标领取鉴权和协作轮次键
 - `src/core/collaboration.test.ts`：交接单一次性领取、目标鉴权和轮次键测试
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
