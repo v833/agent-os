@@ -7,7 +7,10 @@ import type { CliId } from "../cli/types.js";
 export type SlashCommand =
   | { name: "close" | "status" | "help" | "new" | "resume" }
   | { name: "compact"; instructions?: string }
-  | { name: "cd"; path?: string };
+  | { name: "cd"; path?: string }
+  | { name: "schedule"; action: "add"; schedule: string; prompt: string }
+  | { name: "schedule"; action: "list" }
+  | { name: "schedule"; action: "remove"; id: string };
 
 // 飞书还原提及后可能得到“@机器人名称 /status”，机器人名称允许包含空格。
 const COMMAND_RE = /^(?:@.+\s+)?\/(close|status|help|new|resume)\s*$/;
@@ -15,6 +18,11 @@ const CD_RE = /^(?:@.+\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
 const CLI_REQUEST_RE =
   /^(?:@\S+\s+)?\/(claude|codex|dimagent)(?:\s+([\s\S]*))?$/;
+// /schedule add 的周期用双引号包裹，避免任务文本里出现斜杠时误切分。
+const SCHEDULE_ADD_RE =
+  /^(?:@.+\s+)?\/schedule add\s+"([^"]+)"\s+([\s\S]+?)\s*$/;
+const SCHEDULE_REMOVE_RE = /^(?:@.+\s+)?\/schedule remove\s+([^\s]+?)\s*$/;
+const SCHEDULE_LIST_RE = /^(?:@.+\s+)?\/schedule\s+list\s*$/;
 
 function stripLeadingMention(
   text: string,
@@ -41,6 +49,29 @@ export function parseCommand(text: string): SlashCommand | undefined {
       name: "compact",
       instructions: compactMatch[1]?.trim() || undefined,
     };
+  }
+
+  const scheduleAddMatch = SCHEDULE_ADD_RE.exec(value);
+  if (scheduleAddMatch) {
+    return {
+      name: "schedule",
+      action: "add",
+      schedule: scheduleAddMatch[1],
+      prompt: scheduleAddMatch[2].trim(),
+    };
+  }
+  const scheduleRemoveMatch = SCHEDULE_REMOVE_RE.exec(value);
+  if (scheduleRemoveMatch) {
+    // 兼容用户带 # 前缀的写法（如 #sched-001）。
+    return {
+      name: "schedule",
+      action: "remove",
+      id: scheduleRemoveMatch[1].replace(/^#/, ""),
+    };
+  }
+  const scheduleListMatch = SCHEDULE_LIST_RE.exec(value);
+  if (scheduleListMatch) {
+    return { name: "schedule", action: "list" };
   }
 
   const match = COMMAND_RE.exec(value);

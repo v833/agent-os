@@ -26,6 +26,7 @@ import type { CollaborationService } from "./collaboration.js";
 import type { CommandsService } from "./commands.js";
 import type { ConfigService } from "./config.js";
 import type { LarkService } from "./lark.js";
+import type { ScheduleService } from "./schedule.js";
 import type { SessionsService } from "./sessions.js";
 import type { TasksService } from "./tasks.js";
 
@@ -47,6 +48,8 @@ declare module "cordis" {
     collaboration: CollaborationService;
     /** 任务编排：一轮 CLI 执行的启动、进度、取消与收尾。 */
     tasks: TasksService;
+    /** 定时任务：cron / 自然语言周期到点触发，复用 tasks 流水线。 */
+    schedule: ScheduleService;
   }
 
   interface Events {

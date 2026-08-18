@@ -7,9 +7,9 @@
 插件化设计：运行中的 Agent OS 本质上是一个 Cordis 根 Context，平台、执行引擎、斜杠命令、会话、任务编排和 bot 协作都是挂载在它上面的插件，通过 `ctx.<service>` 与类型化事件协作，而不是互相导入具体实现。
 
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
-- **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.collaboration`（bot 协作）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
+- **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
 - **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，collaboration 插件监听并决定是否自动交接——协作是可选插件，移除后任务编排不受影响。
-- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/cd`、`/close`。新增执行引擎或斜杠命令 = 新增一个插件。
+- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/cd`、`/close`、`/schedule`。新增执行引擎或斜杠命令 = 新增一个插件。
 
 默认 `cordis.yml` 内容：
 
@@ -33,8 +33,10 @@ plugins:
   - name: commands/status
   - name: commands/cd
   - name: commands/close
+  - name: commands/schedule
   - name: collaboration
   - name: tasks
+  - name: schedule
   - name: router
 ```
 
@@ -459,9 +461,42 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/cd <目录>`：切换当前话题的工作目录
 - `/help`：列出会话控制和引擎选择命令
 - `/close`：关闭当前话题会话
+- `/schedule add "每 30 分钟" <任务>`：创建周期定时任务
+- `/schedule list`：查看当前 bot 的定时任务
+- `/schedule remove <id>`：删除定时任务
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
 - `/dimagent <任务>`：新话题使用 DimAgent（接入模式取 bot 的 `accessMode`）
+
+## 定时任务
+
+Agent OS 可以把飞书从“被动响应”升级为“主动指挥”：用 `/schedule` 创建周期任务，到点后由 daemon 自动触发一轮 CLI 执行，并把结果发回配置所在的飞书话题。定时任务复用现有 `tasks` 流水线（任务卡片、进度、停止、结果回传），不重造执行链路。
+
+```text
+/schedule add "每 30 分钟" 读取 data/logs/error.log 并总结最新错误
+→ 已创建定时任务 #sched-001（每 30 分钟）
+  下次触发：14:30
+/schedule list
+→ #sched-001  每 30 分钟  读取 data/logs/error.log …  下次触发 14:30
+/schedule remove sched-001
+→ 已删除 #sched-001
+```
+
+支持的周期语法（`schedule` 服务插件，`src/plugins/schedule.ts` + `src/plugins/commands/schedule.ts`）：
+
+- **cron 表达式**（5 段）：`0 9 * * *` 表示每天 9 点；由 `croner` 解析与调度。
+- **自然语言**：
+  - `每 N 分钟`（N 1-59）、`每 N 小时`（N 1-24）、`每 N 天`（N 1-30）
+  - `每小时`
+  - `每天`、`每天 9:00`、`每天早上9点`
+
+触发语义：
+
+- 到点时先主动发一条“⏰ 定时任务”锚点消息，任务卡片与结果作为它的回复出现在话题中；结果通过现有卡片与通知链路回传。
+- 定时任务复用配置话题的会话：目标话题正在执行（`active`）或已关闭（`closed`）时到点触发会跳过并记录 `lastSkippedAt`，不会并发启动。
+- 任务配置持久化到 `data/schedules.json`（原子写、Zod 校验、重启恢复），重启后自动重新注册定时器；时区跟随本机（可用 `cordis.yml` 的 `schedule.timezone` 覆盖）。
+- 任务卡片上的“停止任务”按钮按配置者的 `openId` 鉴权，配置者可以随时停止定时触发的执行。
+- 在 `cordis.yml` 中移除 `schedule` 或 `commands/schedule` 即可整体下线定时能力。
 
 ### 会话整理与历史恢复验收
 

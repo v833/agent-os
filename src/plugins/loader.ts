@@ -19,6 +19,7 @@ import * as compactCommand from "./commands/compact.js";
 import * as helpCommand from "./commands/help.js";
 import * as newCommand from "./commands/new.js";
 import * as resumeCommand from "./commands/resume.js";
+import * as scheduleCommand from "./commands/schedule.js";
 import * as statusCommand from "./commands/status.js";
 import * as claudeEngine from "./engines/claude.js";
 import * as codexEngine from "./engines/codex.js";
@@ -26,6 +27,7 @@ import * as dimagentEngine from "./engines/dimagent.js";
 import * as acpEngine from "./engines/acp.js";
 import * as larkPlugin from "./lark.js";
 import * as routerPlugin from "./router.js";
+import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
 
@@ -48,8 +50,10 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/status": statusCommand,
   "commands/cd": cdCommand,
   "commands/close": closeCommand,
+  "commands/schedule": scheduleCommand,
   collaboration: collaborationPlugin,
   tasks: tasksPlugin,
+  schedule: schedulePlugin,
   router: routerPlugin,
 };
 

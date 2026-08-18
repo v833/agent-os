@@ -29,6 +29,8 @@ plugins:
   - name: commands/status
   - name: commands/cd
   - name: commands/close
+  - name: commands/schedule
   - name: collaboration
   - name: tasks
+  - name: schedule
   - name: router

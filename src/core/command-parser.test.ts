@@ -31,6 +31,46 @@ test("解析 /cd 的查询、带空格路径和机器人提及", () => {
   });
 });
 
+test("解析 /schedule 的 add / list / remove 与机器人提及", () => {
+  assert.deepEqual(parseCommand('/schedule add "每 30 分钟" 读取日志'), {
+    name: "schedule",
+    action: "add",
+    schedule: "每 30 分钟",
+    prompt: "读取日志",
+  });
+  assert.deepEqual(
+    parseCommand('@Agent OS /schedule add "0 9 * * *" 每日总结'),
+    {
+      name: "schedule",
+      action: "add",
+      schedule: "0 9 * * *",
+      prompt: "每日总结",
+    },
+  );
+  assert.deepEqual(parseCommand("/schedule list"), {
+    name: "schedule",
+    action: "list",
+  });
+  assert.deepEqual(parseCommand("/schedule remove sched-001"), {
+    name: "schedule",
+    action: "remove",
+    id: "sched-001",
+  });
+  assert.deepEqual(parseCommand("/schedule remove #sched-001"), {
+    name: "schedule",
+    action: "remove",
+    id: "sched-001",
+  });
+});
+
+test("/schedule 缺引号或参数不完整时不会被误识别", () => {
+  assert.equal(parseCommand("/schedule"), undefined);
+  assert.equal(parseCommand("/schedule add 每 30 分钟 读取日志"), undefined);
+  assert.equal(parseCommand('/schedule add "每 30 分钟"'), undefined);
+  assert.equal(parseCommand("/schedule remove"), undefined);
+  assert.equal(parseCommand("帮我 /schedule list"), undefined);
+});
+
 test("普通文本和不支持的命令不会被误识别", () => {
   assert.equal(parseCommand("帮我运行 /status 看看"), undefined);
   assert.equal(parseCommand("/unknown"), undefined);

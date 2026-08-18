@@ -65,6 +65,8 @@ export interface BotIdentity {
 export interface Bot {
   client: Lark.Client;
   getIdentity: () => Promise<BotIdentity>;
+  /** 主动向群聊/单聊发送一条文本消息；定时任务等无人回复场景使用。 */
+  send: (chatId: string, text: string) => Promise<string | undefined>;
   reply: (
     messageId: string,
     text: string,
@@ -252,6 +254,17 @@ export function startBot(options: BotOptions): Bot {
     client,
     getIdentity() {
       return fetchBotIdentity(client);
+    },
+    async send(chatId, text) {
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: chatId,
+          msg_type: "text",
+          content: JSON.stringify({ text }),
+        },
+      });
+      return response.data?.message_id;
     },
     async reply(messageId, text, replyInThread = false) {
       const response = await client.im.v1.message.reply({
