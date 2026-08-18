@@ -10,6 +10,7 @@ import {
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
+  buildTeamCard,
   splitLongText,
   ThrottledCardUpdater,
   type CardJson,
@@ -17,6 +18,7 @@ import {
   type ResumeCardOptions,
   type SessionNoticeCardOptions,
   type TaskCardOptions,
+  type TeamCardOptions,
 } from "../im/card.js";
 
 /** 卡片渲染与节流更新器的统一出口。 */
@@ -39,6 +41,10 @@ export class CardsService extends Service {
 
   collaboration(options: CollaborationCardOptions): CardJson {
     return buildCollaborationCard(options);
+  }
+
+  team(options: TeamCardOptions): CardJson {
+    return buildTeamCard(options);
   }
 
   throttled(updateCard: (card: CardJson) => Promise<void>): ThrottledCardUpdater {

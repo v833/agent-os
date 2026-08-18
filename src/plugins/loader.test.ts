@@ -34,12 +34,14 @@ async function writeBotsConfig(dir: string): Promise<string> {
   await writeFile(
     botsPath,
     JSON.stringify({
+      teamLeader: "testbot",
       bots: [
         {
           id: "testbot",
           appIdEnv: "TEST_APP_ID",
           appSecretEnv: "TEST_APP_SECRET",
           defaultCli: "codex",
+          role: "测试角色",
           workspace: ".",
         },
       ],
@@ -61,6 +63,7 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
         `  - name: config`,
         `    config:`,
         `      botsPath: ${yamlPath(botsPath)}`,
+        `  - name: team`,
         `  - name: sessions`,
         `    config:`,
         `      storePath: ${yamlPath(join(dir, "sessions.json"))}`,
@@ -77,8 +80,9 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
     const root = new Context();
     await root.plugin(loader, { path: ymlPath });
 
-    await root.inject(["config", "sessions", "cli", "commands", "tasks"], (ctx) => {
+    await root.inject(["config", "team", "sessions", "cli", "commands", "tasks"], (ctx) => {
       assert.equal(ctx.config.bots.length, 1);
+      assert.equal(ctx.team.leaderBotId, "testbot");
       assert.equal(ctx.config.bots[0].id, "testbot");
       assert.equal(ctx.sessions.manager.size, 0);
       assert.equal(ctx.cli.get("codex").id, "codex");
@@ -91,6 +95,36 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
   });
 });
 
+test("tasks 不依赖 team 插件也能独立装配", async () => {
+  await withTempDir(async (dir) => {
+    process.env.TEST_APP_ID = "cli_test";
+    process.env.TEST_APP_SECRET = "test_secret";
+    const botsPath = await writeBotsConfig(dir);
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(
+      ymlPath,
+      [
+        "plugins:",
+        `  - name: config`,
+        `    config:`,
+        `      botsPath: ${yamlPath(botsPath)}`,
+        `  - name: sessions`,
+        `    config:`,
+        `      storePath: ${yamlPath(join(dir, "sessions.json"))}`,
+        `  - name: cli`,
+        `  - name: engines/codex`,
+        `  - name: cards`,
+        `  - name: tasks`,
+      ].join("\n"),
+    );
+
+    const root = new Context();
+    await root.plugin(loader, { path: ymlPath });
+    await root.inject(["tasks"], (ctx) => {
+      assert.equal(ctx.tasks.activeRuns.size, 0);
+    });
+  });
+});
 test("loader 跳过 disabled 插件", async () => {
   await withTempDir(async (dir) => {
     process.env.TEST_APP_ID = "cli_test";

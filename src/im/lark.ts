@@ -32,6 +32,13 @@ export interface IncomingMessage {
   mentions: Mention[];
 }
 
+/** Agent OS 对飞书长连接状态的稳定抽象，不暴露 SDK 内部 WebSocket 类型。 */
+export type BotConnectionState =
+  | "connecting"
+  | "connected"
+  | "reconnecting"
+  | "failed";
+
 export interface BotOptions {
   appId: string;
   appSecret: string;
@@ -39,6 +46,7 @@ export interface BotOptions {
   onCardAction?: (
     action: CardAction,
   ) => Promise<CardActionResponse | undefined>;
+  onConnectionState?: (state: BotConnectionState) => void;
 }
 
 /** 飞书卡片动作中业务层唯一需要信任的平台字段。 */
@@ -64,6 +72,8 @@ export interface BotIdentity {
 
 export interface Bot {
   client: Lark.Client;
+  /** 当前入站长连接状态；未暴露 SDK 的 WSClient，避免平台实现渗透到插件层。 */
+  getConnectionState?: () => BotConnectionState;
   getIdentity: () => Promise<BotIdentity>;
   /** 主动向群聊/单聊发送一条文本消息；定时任务等无人回复场景使用。 */
   send: (chatId: string, text: string) => Promise<string | undefined>;
@@ -246,12 +256,24 @@ export async function sendResultNotification(options: {
 }
 
 export function startBot(options: BotOptions): Bot {
-  const { appId, appSecret, onMessage, onCardAction } = options;
+  const {
+    appId,
+    appSecret,
+    onMessage,
+    onCardAction,
+    onConnectionState,
+  } = options;
+  let connectionState: BotConnectionState = "connecting";
+  const setConnectionState = (state: BotConnectionState): void => {
+    connectionState = state;
+    onConnectionState?.(state);
+  };
   // Client 管“出站”：SDK 会自动维护 tenant token，无需业务层处理刷新。
   const client = new Lark.Client({ appId, appSecret });
 
   const bot: Bot = {
     client,
+    getConnectionState: () => connectionState,
     getIdentity() {
       return fetchBotIdentity(client);
     },
@@ -350,8 +372,18 @@ export function startBot(options: BotOptions): Bot {
   });
 
   // WSClient 管“入站”：主动连飞书平台，无需公网 webhook，并由 SDK 自动重连。
-  const wsClient = new Lark.WSClient({ appId, appSecret });
-  void wsClient.start({ eventDispatcher: dispatcher });
+  // 状态由 SDK 的握手/重连回调驱动；“已拿到 bot 身份”本身不代表 WS 已在线。
+  const wsClient = new Lark.WSClient({
+    appId,
+    appSecret,
+    onReady: () => setConnectionState("connected"),
+    onReconnecting: () => setConnectionState("reconnecting"),
+    onReconnected: () => setConnectionState("connected"),
+    onError: () => setConnectionState("failed"),
+  });
+  void wsClient
+    .start({ eventDispatcher: dispatcher })
+    .catch(() => setConnectionState("failed"));
 
   return bot;
 }

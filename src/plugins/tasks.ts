@@ -90,9 +90,14 @@ export class TasksService extends Service {
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
+    const teamContext = this.ctx.root.bail(
+      "task/prompt-context",
+      botConfig,
+    );
     const prompt = buildBotPrompt(
-      botConfig.systemPrompt,
+      botConfig,
       resolveRetryPrompt(session, requestedPrompt),
+      teamContext ?? "",
     );
     // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
     if (

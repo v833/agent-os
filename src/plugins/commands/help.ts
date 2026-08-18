@@ -7,6 +7,7 @@ import type { CommandHandler } from "../types.js";
 
 const HELP_TEXT = [
   "/status 查看当前会话",
+  "/team 查看当前 Agent 团队",
   "/new 开启一个全新的 CLI 会话",
   "/resume 选择当前工作目录中的 CLI 会话",
   "/compact [要求] 使用当前引擎原生整理上下文",

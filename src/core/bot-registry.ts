@@ -14,12 +14,22 @@ export interface BotConfig {
   appSecret: string;
   defaultCliId: CliId;
   accessMode: CliAccessMode;
+  /** 一句话职责说明，用于飞书团队卡片展示与提示词中的身份描述。 */
+  role: string;
+  /** 该成员处理任务时必须遵守的项目 Skill 名称（如 grill-me）。 */
+  skills: string[];
   systemPrompt: string;
   workspaceDir: string;
   /** 当前 bot 完成任务后接收审查任务的目标 bot。 */
   reviewBy?: string;
   /** 一次 bot 协作允许发生的最大交接次数。 */
   collaborationMaxRounds: number;
+}
+
+/** 完整团队配置：负责人的稳定 ID 与全部启用的成员。 */
+export interface AgentOsConfig {
+  teamLeaderId: string;
+  bots: BotConfig[];
 }
 
 type Environment = Record<string, string | undefined>;
@@ -39,24 +49,37 @@ const BotSchema = z.object({
   mode: z.enum(["headless", "acp"]).optional(),
   workspace: z.string().trim().min(1).optional(),
   systemPrompt: z.string().trim().optional().default(""),
+  role: z.string().trim().min(1),
+  skills: z
+    .array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/))
+    .optional()
+    .default([]),
   reviewBy: z
     .string()
     .regex(/^[a-z0-9][a-z0-9_-]{0,31}$/)
     .optional(),
-  collaborationMaxRounds: z.number().int().min(1).max(4).optional().default(2),
+  // 团队默认最多 16 轮交接，防止协作失控循环；任务完成时会立即结束。
+  collaborationMaxRounds: z
+    .number()
+    .int()
+    .min(1)
+    .max(32)
+    .optional()
+    .default(16),
   enabled: z.boolean().optional().default(true),
 });
 
 const BotConfigFileSchema = z.object({
+  teamLeader: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
   bots: z.array(BotSchema).min(1),
 });
 
 /** 校验注册表，并只返回凭证完整的已启用 bot。 */
-export function parseBotConfigs(
+export function parseAgentOsConfig(
   input: unknown,
   env: Environment,
   baseDirectory = process.cwd(),
-): BotConfig[] {
+): AgentOsConfig {
   const parsed = BotConfigFileSchema.parse(input);
   const ids = new Set<string>();
   for (const bot of parsed.bots) {
@@ -87,6 +110,8 @@ export function parseBotConfigs(
         appSecret,
         defaultCliId: bot.defaultCli,
         accessMode,
+        role: bot.role,
+        skills: [...new Set(bot.skills)],
         systemPrompt: bot.systemPrompt,
         ...(bot.reviewBy ? { reviewBy: bot.reviewBy } : {}),
         collaborationMaxRounds: bot.collaborationMaxRounds,
@@ -98,9 +123,12 @@ export function parseBotConfigs(
           baseDirectory,
         ),
       };
-  });
+    });
   if (configs.length === 0) throw new Error("至少需要启用一个 bot");
   const enabledIds = new Set(configs.map((config) => config.id));
+  if (!enabledIds.has(parsed.teamLeader)) {
+    throw new Error(`teamLeader 指向未启用的 bot: ${parsed.teamLeader}`);
+  }
   for (const config of configs) {
     if (config.reviewBy && !enabledIds.has(config.reviewBy)) {
       throw new Error(
@@ -111,15 +139,24 @@ export function parseBotConfigs(
       throw new Error(`bot ${config.id} 不能把自己配置为 reviewBy`);
     }
   }
-  return configs;
+  return { teamLeaderId: parsed.teamLeader, bots: configs };
 }
 
-/** 从 JSON 文件加载 bot 注册表，并把配置错误补充为启动可读信息。 */
-export async function loadBotConfigs(
+/** 兼容入口：只返回启用成员，供仍按旧签名读取的调用方使用。 */
+export function parseBotConfigs(
+  input: unknown,
+  env: Environment,
+  baseDirectory = process.cwd(),
+): BotConfig[] {
+  return parseAgentOsConfig(input, env, baseDirectory).bots;
+}
+
+/** 从 JSON 文件加载完整团队配置，并把配置错误补充为启动可读信息。 */
+export async function loadAgentOsConfig(
   filePath: string,
   env: Environment = process.env,
   baseDirectory = process.cwd(),
-): Promise<BotConfig[]> {
+): Promise<AgentOsConfig> {
   let content: string;
   try {
     content = await readFile(filePath, "utf8");
@@ -133,15 +170,36 @@ export async function loadBotConfigs(
   }
 
   try {
-    return parseBotConfigs(JSON.parse(content), env, baseDirectory);
+    return parseAgentOsConfig(JSON.parse(content), env, baseDirectory);
   } catch (error) {
     throw new Error(`bot 配置文件格式错误: ${(error as Error).message}`);
   }
 }
 
-/** 把当前 bot 的角色说明放到原始任务前，空角色不改写任务。 */
-export function buildBotPrompt(systemPrompt: string, prompt: string): string {
-  const role = systemPrompt.trim();
-  if (!role) return prompt;
-  return `角色：${role}\n\n任务：${prompt}`;
+/** 兼容入口：只返回启用成员列表。 */
+export async function loadBotConfigs(
+  filePath: string,
+  env: Environment = process.env,
+  baseDirectory = process.cwd(),
+): Promise<BotConfig[]> {
+  return (await loadAgentOsConfig(filePath, env, baseDirectory)).bots;
+}
+
+/** 把角色、系统原则、团队上下文与本次任务组装成执行引擎提示词。 */
+export function buildBotPrompt(
+  config: Pick<BotConfig, "role" | "skills" | "systemPrompt">,
+  prompt: string,
+  teamContext = "",
+): string {
+  return [
+    `你的角色：${config.role}`,
+    config.systemPrompt.trim(),
+    teamContext.trim(),
+    config.skills.length > 0
+      ? `本次任务必须按项目 Skill 执行：${config.skills.map((skill) => `$${skill}`).join("、")}`
+      : "",
+    `当前任务：${prompt}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }

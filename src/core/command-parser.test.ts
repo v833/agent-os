@@ -9,6 +9,8 @@ test("识别会话控制命令和可选机器人提及", () => {
   assert.deepEqual(parseCommand("@Agent OS /help  "), { name: "help" });
   assert.deepEqual(parseCommand("/new"), { name: "new" });
   assert.deepEqual(parseCommand("@Agent OS /resume"), { name: "resume" });
+  assert.deepEqual(parseCommand("/team"), { name: "team" });
+  assert.deepEqual(parseCommand("@CEO 助理 /team"), { name: "team" });
   assert.deepEqual(parseCommand("/compact"), {
     name: "compact",
     instructions: undefined,

@@ -19,6 +19,7 @@ try {
       `[Bot ${config.id.toUpperCase()}] default_cli=${config.defaultCliId} access_mode=${config.accessMode} workspace=${config.workspaceDir}`,
     );
   }
+  console.log(`[团队] Team Leader=${root.config.teamLeaderId}`);
   console.log("Agent OS 启动完成");
 } catch (error) {
   console.error("Agent OS 启动失败:", (error as Error).message);

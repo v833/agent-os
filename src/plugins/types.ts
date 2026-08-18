@@ -29,11 +29,14 @@ import type { LarkService } from "./lark.js";
 import type { ScheduleService } from "./schedule.js";
 import type { SessionsService } from "./sessions.js";
 import type { TasksService } from "./tasks.js";
+import type { TeamService } from "./team.js";
 
 declare module "cordis" {
   interface Context {
     /** 机器人注册表：加载 config/bots.json 并解析环境变量凭证。 */
     config: ConfigService;
+    /** 团队注册表与团队上下文扩展；移除 team 插件即可下线团队能力。 */
+    team: TeamService;
     /** 会话模型：把飞书话题映射为稳定会话，约束生命周期。 */
     sessions: SessionsService;
     /** 执行引擎注册表与调度：统一驱动 Codex/Claude/DimAgent。 */
@@ -61,12 +64,17 @@ declare module "cordis" {
       bot: Bot,
       botConfig: BotConfig,
     ): Promise<CardActionResponse | undefined>;
+    /**
+     * 任务提示词上下文 provider。没有 team 插件时返回 undefined；
+     * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
+     */
+    "task/prompt-context"(botConfig: BotConfig): string | undefined;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
   }
 }
 
-/** 一台已连接 bot 的运行时状态：配置、平台句柄与稳定身份。 */
+/** 一台已启动 bot 的运行时状态：配置、平台句柄与稳定身份；WS 状态由 Bot 提供。 */
 export interface BotRuntime {
   config: BotConfig;
   bot: Bot;

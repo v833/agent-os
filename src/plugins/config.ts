@@ -1,15 +1,20 @@
 /**
  * config 服务插件：加载并校验 bot 注册表（config/bots.json + 环境变量凭证），
- * 为其他插件提供 ctx.config。它是装配树的第一层，lark/sessions 都依赖它。
+ * 只提供配置数据；团队注册表与团队上下文由独立的 team 插件负责。
  */
 import { Service, type Context } from "cordis";
 import { resolve } from "node:path";
-import { loadBotConfigs, type BotConfig } from "../core/bot-registry.js";
+import {
+  loadAgentOsConfig,
+  type BotConfig,
+} from "../core/bot-registry.js";
 
 /** 提供已加载 bot 配置的只读入口，其他服务按 bot ID 查询。 */
 export class ConfigService extends Service {
   bots: BotConfig[] = [];
   defaultWorkspaces: Record<string, string> = {};
+  /** 团队负责人（CEO 助理等）的稳定 bot ID。 */
+  teamLeaderId = "";
 
   constructor(ctx: Context) {
     super(ctx, "config");
@@ -35,9 +40,13 @@ export async function apply(ctx: Context, config: Config = {}) {
     config.botsPath ?? process.env.BOTS_CONFIG ?? "config/bots.json",
   );
   // 配置解析失败直接让插件加载失败，阻止后续依赖它的插件启动。
-  service.bots = await loadBotConfigs(botsPath);
+  const agentOsConfig = await loadAgentOsConfig(botsPath);
+  service.bots = agentOsConfig.bots;
+  service.teamLeaderId = agentOsConfig.teamLeaderId;
   service.defaultWorkspaces = Object.fromEntries(
     service.bots.map((bot) => [bot.id, bot.workspaceDir]),
   );
-  console.log(`[配置] 已加载 ${service.bots.length} 个 bot 注册表`);
+  console.log(
+    `[配置] 已加载 ${service.bots.length} 个 bot 注册表，Team Leader=${service.teamLeaderId}`,
+  );
 }

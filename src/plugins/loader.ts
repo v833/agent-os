@@ -21,6 +21,7 @@ import * as newCommand from "./commands/new.js";
 import * as resumeCommand from "./commands/resume.js";
 import * as scheduleCommand from "./commands/schedule.js";
 import * as statusCommand from "./commands/status.js";
+import * as teamCommand from "./commands/team.js";
 import * as claudeEngine from "./engines/claude.js";
 import * as codexEngine from "./engines/codex.js";
 import * as dimagentEngine from "./engines/dimagent.js";
@@ -30,6 +31,7 @@ import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
+import * as teamPlugin from "./team.js";
 
 /** 插件名 → 插件对象；新增插件时在这里登记名字，供 cordis.yml 引用。 */
 const pluginRegistry: Record<string, Plugin> = {
@@ -48,11 +50,13 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/resume": resumeCommand,
   "commands/compact": compactCommand,
   "commands/status": statusCommand,
+  "commands/team": teamCommand,
   "commands/cd": cdCommand,
   "commands/close": closeCommand,
   "commands/schedule": scheduleCommand,
   collaboration: collaborationPlugin,
   tasks: tasksPlugin,
+  team: teamPlugin,
   schedule: schedulePlugin,
   router: routerPlugin,
 };

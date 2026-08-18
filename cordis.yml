@@ -5,6 +5,7 @@ plugins:
   - name: config
     config:
       botsPath: config/bots.json
+  - name: team
   - name: sessions
   - name: cli
   - name: engines/claude
@@ -27,6 +28,7 @@ plugins:
   - name: commands/resume
   - name: commands/compact
   - name: commands/status
+  - name: commands/team
   - name: commands/cd
   - name: commands/close
   - name: commands/schedule
