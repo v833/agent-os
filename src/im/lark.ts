@@ -93,6 +93,13 @@ export interface Bot {
     text: string,
     replyInThread?: boolean,
   ) => Promise<string | undefined>;
+  /** 给指定目标发送完成提醒；通知失败不影响任务结果。 */
+  sendResultNotification: (options: {
+    replyToMessageId: string;
+    target: BotIdentity;
+    text: string;
+    replyInThread: boolean;
+  }) => Promise<void>;
   updateCard: (messageId: string, card: CardJson) => Promise<void>;
   downloadResource: (
     messageId: string,
@@ -235,26 +242,6 @@ export function extractMessageText(messageType: string, content: string): string
   return "";
 }
 
-/** 给来源 bot 或普通消息发起人发送完成提醒；通知失败不影响任务结果。 */
-export async function sendResultNotification(options: {
-  bot: Bot;
-  replyToMessageId: string;
-  target: BotIdentity;
-  text: string;
-  replyInThread: boolean;
-}): Promise<void> {
-  try {
-    await options.bot.replyMention(
-      options.replyToMessageId,
-      options.target,
-      options.text,
-      options.replyInThread,
-    );
-  } catch (error) {
-    console.error("[通知] 结果通知发送失败:", (error as Error).message);
-  }
-}
-
 export function startBot(options: BotOptions): Bot {
   const {
     appId,
@@ -320,6 +307,18 @@ export function startBot(options: BotOptions): Bot {
         },
       });
       return response.data?.message_id;
+    },
+    async sendResultNotification({
+      replyToMessageId,
+      target,
+      text,
+      replyInThread = false,
+    }) {
+      try {
+        await this.replyMention(replyToMessageId, target, text, replyInThread);
+      } catch (error) {
+        console.error("[通知] 结果通知发送失败:", (error as Error).message);
+      }
     },
     async updateCard(messageId, card) {
       // 更新必须使用机器人卡片自己的 message_id，而不是用户的入站 message_id。

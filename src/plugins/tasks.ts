@@ -20,7 +20,6 @@ import {
   type ActiveRun,
 } from "../core/task-abort.js";
 import { TaskProgressTracker } from "../core/task-progress.js";
-import { sendResultNotification } from "../im/lark.js";
 import type { StartTaskInput, TaskResultPayload } from "./types.js";
 
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
@@ -349,8 +348,7 @@ export class TasksService extends Service {
           `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
         );
         if (!collaboration) {
-          await sendResultNotification({
-            bot,
+          await bot.sendResultNotification({
             replyToMessageId,
             target: { openId: senderOpenId, name: "" },
             text: isCompacting

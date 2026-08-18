@@ -11,9 +11,8 @@ import {
   collaborationTurnKey,
   type CollaborationMessage,
 } from "../core/collaboration.js";
-import { sendResultNotification } from "../im/lark.js";
 import type { BotConfig } from "../core/bot-registry.js";
-import type { Bot, BotIdentity } from "../im/lark.js";
+import type { Bot } from "../im/lark.js";
 import type { TaskResultPayload } from "./types.js";
 
 /** 发起一次交接所需的完整参数。 */
@@ -28,15 +27,6 @@ export interface SendDispatchOptions {
   workspaceDir: string;
   prompt: string;
 }
-
-/** 向某个目标发送一条结果提醒。 */
-export type SendResultNotificationOptions = {
-  bot: Bot;
-  replyToMessageId: string;
-  target: BotIdentity;
-  text: string;
-  replyInThread: boolean;
-};
 
 /** 提供交接单、轮次去重与审查派发能力。 */
 export class CollaborationService extends Service {
@@ -129,11 +119,6 @@ export class CollaborationService extends Service {
     );
   }
 
-  /** 给目标发送完成提醒；通知失败不影响任务结果。 */
-  sendResultNotification(options: SendResultNotificationOptions): Promise<void> {
-    return sendResultNotification(options);
-  }
-
   /**
    * 任务完成后的协作决策：未达轮次上限则回传来源 bot；
    * 普通任务且配置了 reviewBy 则发起审查；否则向来源 bot 发送完成通知。
@@ -180,8 +165,7 @@ export class CollaborationService extends Service {
           ].join("\n\n"),
         });
       } else if (collaboration && senderRuntime) {
-        await this.sendResultNotification({
-          bot,
+        await bot.sendResultNotification({
           replyToMessageId,
           target: senderRuntime.identity,
           text: "本轮协作已完成，请查看上方结果。",

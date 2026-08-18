@@ -198,6 +198,19 @@ function createFakeBot(
       calls.mentions.push(text);
       return `mention-${calls.mentions.length}`;
     },
+    sendResultNotification: async (options: {
+      replyToMessageId: string;
+      target: BotIdentity;
+      text: string;
+      replyInThread: boolean;
+    }) => {
+      await bot.replyMention(
+        options.replyToMessageId,
+        options.target,
+        options.text,
+        options.replyInThread,
+      );
+    },
     updateCard: async (_id: string, card: Record<string, unknown>) => {
       calls.updates.push(card);
     },

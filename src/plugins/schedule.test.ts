@@ -55,6 +55,7 @@ function createFakeBot() {
     },
     replyCard: async () => "card-1",
     replyMention: async () => "mention-1",
+    sendResultNotification: async () => undefined,
     updateCard: async () => undefined,
     downloadResource: async () => "downloads/x",
   } as unknown as Bot;
