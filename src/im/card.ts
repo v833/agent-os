@@ -4,6 +4,7 @@
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
 import type { ClarificationRequest } from "../core/clarification.js";
+import type { OrchestrationRun } from "../core/orchestration.js";
 import type {
   TaskActivity,
   TaskProgressSnapshot,
@@ -71,6 +72,11 @@ export interface TeamCardMember {
 
 export interface TeamCardOptions {
   members: TeamCardMember[];
+}
+
+/** 编排面板卡片输入：一次或多次 /orchestrate 的运行快照。 */
+export interface OrchestrationPanelOptions {
+  runs: OrchestrationRun[];
 }
 
 const STATUS_STYLE = {
@@ -783,6 +789,89 @@ export function buildTeamCard(options: TeamCardOptions): CardJson {
         },
         { tag: "hr" },
         ...memberElements,
+      ],
+    },
+  };
+}
+
+const SUBTASK_STATUS_LABEL = {
+  pending: "⏳ 等待",
+  done: "✅ 完成",
+  failed: "❌ 失败",
+} as const;
+
+/** 编排面板卡片：展示每次 /orchestrate 的并行子任务进度与结果摘要。 */
+export function buildOrchestrationPanelCard(
+  options: OrchestrationPanelOptions,
+): CardJson {
+  if (!options.runs.length) {
+    return {
+      schema: "2.0",
+      config: { summary: { content: "编排面板：暂无运行" } },
+      header: {
+        template: "blue",
+        title: { tag: "plain_text", content: "编排面板" },
+      },
+      body: {
+        direction: "vertical",
+        vertical_spacing: "12px",
+        elements: [
+          {
+            tag: "markdown",
+            content:
+              "还没有编排运行。用 `/orchestrate <任务>` 启动一次并行编排。",
+          },
+        ],
+      },
+    };
+  }
+
+  const runElements = options.runs
+    .flatMap((run) => {
+      const done = run.subTasks.filter((sub) => sub.status === "done").length;
+      const subElements = run.subTasks.map((sub) => {
+        const detail =
+          sub.status === "done" && sub.answer
+            ? `\n${escapeFeishuMarkdown(markdownPreview(sub.answer, 200))}`
+            : sub.status === "failed" && sub.error
+              ? `\n_${escapeFeishuMarkdown(sub.error)}_`
+              : "";
+        return {
+          tag: "markdown",
+          content: `${SUBTASK_STATUS_LABEL[sub.status]} **#${escapeFeishuMarkdown(sub.id)}**［${escapeFeishuMarkdown(sub.targetBotId)}］\n${escapeFeishuMarkdown(sub.prompt)}${detail}`,
+        };
+      });
+      return [
+        {
+          tag: "markdown",
+          content: `**${run.runId}** · ${done}/${run.subTasks.length} 完成\n_${escapeFeishuMarkdown(markdownPreview(run.prompt, 120))}_`,
+        },
+        ...subElements,
+        { tag: "hr" },
+      ];
+    })
+    .slice(0, -1);
+
+  return {
+    schema: "2.0",
+    config: {
+      summary: { content: `编排面板：${options.runs.length} 个运行` },
+    },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: "编排面板" },
+      subtitle: {
+        tag: "plain_text",
+        content: `${options.runs.length} 个运行`,
+      },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        { tag: "markdown", content: "并行子任务进度一览。" },
+        { tag: "hr" },
+        ...runElements,
       ],
     },
   };

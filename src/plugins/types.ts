@@ -28,6 +28,7 @@ import type { CollaborationService } from "./collaboration.js";
 import type { CommandsService } from "./commands.js";
 import type { ConfigService } from "./config.js";
 import type { LarkService } from "./lark.js";
+import type { OrchestrationService } from "./orchestration.js";
 import type { ScheduleService } from "./schedule.js";
 import type { SessionsService } from "./sessions.js";
 import type { TasksService } from "./tasks.js";
@@ -57,6 +58,8 @@ declare module "cordis" {
     tasks: TasksService;
     /** 定时任务：cron / 自然语言周期到点触发，复用 tasks 流水线。 */
     schedule: ScheduleService;
+    /** 多话题并行编排：拆解大任务、派发子任务并汇总结果（移除本插件即下线编排）。 */
+    orchestration: OrchestrationService;
   }
 
   interface Events {
@@ -79,6 +82,11 @@ declare module "cordis" {
     ): Promise<TaskToolCallsOutcome | undefined>;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
+    /**
+     * 一轮任务执行失败；tasks 服务在失败收尾时发出。
+     * 与 task/result 语义区分（后者只在成功时广播），编排等插件据此标记子任务失败。
+     */
+    "task/failed"(payload: TaskResultPayload): void | Promise<void>;
   }
 }
 

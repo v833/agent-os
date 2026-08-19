@@ -10,7 +10,9 @@ export type SlashCommand =
   | { name: "cd"; path?: string }
   | { name: "schedule"; action: "add"; schedule: string; prompt: string }
   | { name: "schedule"; action: "list" }
-  | { name: "schedule"; action: "remove"; id: string };
+  | { name: "schedule"; action: "remove"; id: string }
+  | { name: "orchestrate"; prompt?: string }
+  | { name: "panel" };
 
 // 飞书还原提及后可能得到“@机器人名称 /status”，机器人名称允许包含空格，
 // 因此名称段用非贪婪匹配，避免把后面的命令内容吞进显示名。
@@ -24,6 +26,9 @@ const SCHEDULE_ADD_RE =
   /^(?:@.+?\s+)?\/schedule add\s+"([^"]+)"\s+([\s\S]+?)\s*$/;
 const SCHEDULE_REMOVE_RE = /^(?:@.+?\s+)?\/schedule remove\s+([^\s]+?)\s*$/;
 const SCHEDULE_LIST_RE = /^(?:@.+?\s+)?\/schedule\s+list\s*$/;
+const ORCHESTRATE_RE =
+  /^(?:@.+?\s+)?\/orchestrate(?:\s+([\s\S]+?))?\s*$/;
+const PANEL_RE = /^(?:@.+?\s+)?\/panel\s*$/;
 
 function stripLeadingMention(
   text: string,
@@ -74,6 +79,16 @@ export function parseCommand(text: string): SlashCommand | undefined {
   if (scheduleListMatch) {
     return { name: "schedule", action: "list" };
   }
+
+  const orchestrateMatch = ORCHESTRATE_RE.exec(value);
+  if (orchestrateMatch) {
+    return {
+      name: "orchestrate",
+      prompt: orchestrateMatch[1]?.trim() || undefined,
+    };
+  }
+  const panelMatch = PANEL_RE.exec(value);
+  if (panelMatch) return { name: "panel" };
 
   const match = COMMAND_RE.exec(value);
   if (!match) return undefined;

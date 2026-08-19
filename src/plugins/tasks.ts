@@ -448,6 +448,21 @@ export class TasksService extends Service {
             ...(!isCompacting ? { progress: progress.snapshot() } : {}),
           }),
         );
+        if (!isCompacting) {
+          // 失败也走事件广播（与 task/result 语义区分）：编排等可选插件据此标记
+          // 子任务失败；collaboration 不监听本事件，不会误触发审查交接。
+          await this.ctx.parallel("task/failed", {
+            bot,
+            botConfig,
+            session: this.ctx.sessions.manager.get(session.id) ?? session,
+            requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
+            answer: "",
+            replyToMessageId,
+            hasThread,
+            collaboration,
+            senderRuntime,
+          });
+        }
       })
       .finally(async () => {
         clearInterval(progressHeartbeat);

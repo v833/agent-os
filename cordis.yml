@@ -33,7 +33,12 @@ plugins:
   - name: commands/cd
   - name: commands/close
   - name: commands/schedule
+  # 多话题并行编排：/orchestrate 拆解派发 + /panel 进度总览。
+  # 移除此条目即整体下线编排能力；命令与执行拆开为独立插件可分别调整。
+  - name: commands/orchestrate
+  - name: commands/panel
   - name: collaboration
+  - name: orchestration
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification

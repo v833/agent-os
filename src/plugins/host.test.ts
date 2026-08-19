@@ -10,6 +10,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { Context, Service } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
+import { MAX_RUNS } from "../core/orchestration.js";
 import type { TeamCardOptions } from "../im/card.js";
 import type {
   Bot,
@@ -28,6 +29,9 @@ import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as commandsPlugin from "./commands.js";
+import * as orchestrationPlugin from "./orchestration.js";
+import * as orchestrateCommand from "./commands/orchestrate.js";
+import * as panelCommand from "./commands/panel.js";
 import * as statusCommand from "./commands/status.js";
 import * as teamCommand from "./commands/team.js";
 import * as routerPlugin from "./router.js";
@@ -361,6 +365,9 @@ async function createHost(
     root.plugin(statusCommand),
     root.plugin(teamCommand),
     root.plugin(collaborationPlugin),
+    root.plugin(orchestrationPlugin),
+    root.plugin(orchestrateCommand),
+    root.plugin(panelCommand),
     root.plugin(tasksPlugin),
     root.plugin(clarificationPlugin, { storePath: clarificationsPath }),
     root.plugin(routerPlugin),
@@ -638,4 +645,278 @@ test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () 
   assert.ok(
     host.calls.mentions.some((text) => text.includes("新的代码审查任务")),
   );
+});
+
+test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示", async () => {
+  const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
+  const productConfig: BotConfig = { ...baseBotConfig, id: "product" };
+  const host = await createHost([baseBotConfig, developerConfig, productConfig]);
+  host.lark.runtimes.set("developer", {
+    config: developerConfig,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "Developer" },
+  });
+  host.lark.runtimes.set("product", {
+    config: productConfig,
+    bot: host.bot,
+    identity: { openId: "product_open", name: "Product" },
+  });
+
+  // 用户给编排 bot 一个大任务，命令插件启动后台拆解。
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      text: "/orchestrate 检查 TASK.md 的 A、B、C 三个模块",
+    }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  assert.ok(
+    host.cli.captured?.prompt.includes("可派发的成员"),
+    "拆解提示词必须列出可派发的成员",
+  );
+
+  // 编排 bot 的 CLI 返回结构化子任务清单。
+  host.cli.finish({
+    answer: JSON.stringify({
+      tasks: [
+        { id: "t1", prompt: "分析模块 A", bot: "developer" },
+        { id: "t2", prompt: "审查模块 B", bot: "product" },
+      ],
+    }),
+  });
+
+  // 每个子任务都以 @ 提及派发，并携带可识别的交接单任务编号。
+  await waitFor(() => host.calls.mentions.length >= 2);
+  const mention = host.calls.mentions.find((text) =>
+    text.includes("编排 run-001"),
+  )!;
+  const dispatchId = mention.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId, "@ 派发必须携带协作交接单任务编号");
+  assert.ok(
+    host.calls.replies.some((text) => text.includes("已创建 run-001")),
+    "编排完成后回复汇总",
+  );
+
+  // 子任务完成：task/result 事件（携带交接单）驱动编排状态为 done。
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: developerConfig,
+    session: {
+      id: "s1",
+      botId: "developer",
+      threadId: "thread1",
+      chatId: "chat1",
+      cliId: "codex",
+      workspaceDir: process.cwd(),
+      status: "idle",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    requestedPrompt: "分析模块 A",
+    answer: "A 模块分析完成",
+    replyToMessageId: "m1",
+    hasThread: false,
+    collaboration: {
+      dispatchId: dispatchId!,
+      taskId: "run-001#t1",
+      fromBotId: "testbot",
+      toBotId: "developer",
+      round: 1,
+      maxRounds: 1,
+      workspaceDir: process.cwd(),
+      prompt: "分析模块 A",
+    },
+  });
+
+  // /panel 展示 run 进度：已完成子任务打勾、未完成保持等待。
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/panel" }),
+    host.bot,
+    baseBotConfig,
+  );
+  const panel = JSON.stringify(host.calls.cards[host.calls.cards.length - 1]);
+  assert.ok(panel.includes("run-001"), "面板包含编排运行号");
+  assert.ok(panel.includes("✅ 完成"), "已完成子任务显示完成标记");
+  assert.ok(panel.includes("⏳ 等待"), "未完成子任务保持等待");
+});
+
+test("编排子任务失败经 task/failed 事件标记为失败", async () => {
+  const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
+  const host = await createHost([baseBotConfig, developerConfig]);
+  host.lark.runtimes.set("developer", {
+    config: developerConfig,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "Developer" },
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/orchestrate 检查模块 A" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  host.cli.finish({
+    answer: JSON.stringify({
+      tasks: [{ id: "t1", prompt: "分析模块 A", bot: "developer" }],
+    }),
+  });
+  await waitFor(() => host.calls.mentions.length >= 1);
+  const mention = host.calls.mentions.find((text) =>
+    text.includes("编排 run-001"),
+  )!;
+  const dispatchId = mention.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+
+  // 子任务执行失败：task/failed 事件携带交接单，驱动子任务状态为失败。
+  await host.root.parallel("task/failed", {
+    bot: host.bot,
+    botConfig: developerConfig,
+    session: {
+      id: "s1",
+      botId: "developer",
+      threadId: "thread1",
+      chatId: "chat1",
+      cliId: "codex",
+      workspaceDir: process.cwd(),
+      status: "idle",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    requestedPrompt: "分析模块 A",
+    answer: "",
+    replyToMessageId: "m1",
+    hasThread: false,
+    collaboration: {
+      dispatchId: dispatchId!,
+      taskId: "run-001#t1",
+      fromBotId: "testbot",
+      toBotId: "developer",
+      round: 1,
+      maxRounds: 1,
+      workspaceDir: process.cwd(),
+      prompt: "分析模块 A",
+    },
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/panel" }),
+    host.bot,
+    baseBotConfig,
+  );
+  const panel = JSON.stringify(host.calls.cards[host.calls.cards.length - 1]);
+  assert.ok(panel.includes("❌ 失败"), "失败子任务在面板显示失败标记");
+  assert.ok(!panel.includes("✅ 完成"), "失败子任务不显示完成标记");
+});
+
+test("/orchestrate 拆解把多个子任务分配给同一 bot 时整轮拒绝", async () => {
+  const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
+  const host = await createHost([baseBotConfig, developerConfig]);
+  host.lark.runtimes.set("developer", {
+    config: developerConfig,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "Developer" },
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/orchestrate 检查模块 A 和模块 B" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+
+  // 拆解结果把两个子任务都分给同一个 bot：必须整轮拒绝，避免 router busy 检查
+  // 消费交接单后丢弃第二个子任务。
+  host.cli.finish({
+    answer: JSON.stringify({
+      tasks: [
+        { id: "t1", prompt: "分析模块 A", bot: "developer" },
+        { id: "t2", prompt: "分析模块 B", bot: "developer" },
+      ],
+    }),
+  });
+
+  await waitFor(() =>
+    host.calls.replies.some((text) =>
+      text.includes("同一成员被分配了多个子任务"),
+    ),
+  );
+  assert.equal(host.calls.mentions.length, 0, "拒绝后不能有任何 @ 派发");
+  assert.equal(
+    host.root.orchestration.list().length,
+    0,
+    "拒绝后不能创建 run",
+  );
+});
+
+test("编排 runs 表有界：超过 MAX_RUNS 个完成的 run 后淘汰最旧", async () => {
+  const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
+  const host = await createHost([baseBotConfig, developerConfig]);
+  host.lark.runtimes.set("developer", {
+    config: developerConfig,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "Developer" },
+  });
+
+  // 连续创建并完成 MAX_RUNS + 2 个 run（每个 run 一个子任务），每次拆解派发给同一 bot。
+  for (let i = 0; i < MAX_RUNS + 2; i++) {
+    const runNum = String(i + 1).padStart(3, "0");
+    await host.root.parallel(
+      "bot/message",
+      incomingMessage({ text: `/orchestrate 子任务 ${i}` }),
+      host.bot,
+      baseBotConfig,
+    );
+    await waitFor(() => host.cli.captures.length === i + 1);
+    host.cli.finish({
+      answer: JSON.stringify({
+        tasks: [{ id: "t1", prompt: `分析 ${i}`, bot: "developer" }],
+      }),
+    });
+    await waitFor(() =>
+      host.calls.replies.some((text) => text.includes(`已创建 run-${runNum}`)),
+    );
+
+    // 子任务完成：task/result 事件驱动该 run 进入全终态，触发淘汰清理。
+    await host.root.parallel("task/result", {
+      bot: host.bot,
+      botConfig: developerConfig,
+      session: {
+        id: "s1",
+        botId: "developer",
+        threadId: "thread1",
+        chatId: "chat1",
+        cliId: "codex",
+        workspaceDir: process.cwd(),
+        status: "idle",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      requestedPrompt: `分析 ${i}`,
+      answer: "ok",
+      replyToMessageId: "m1",
+      hasThread: false,
+      collaboration: {
+        dispatchId: `d${i}`,
+        taskId: `run-${runNum}#t1`,
+        fromBotId: "testbot",
+        toBotId: "developer",
+        round: 1,
+        maxRounds: 1,
+        workspaceDir: process.cwd(),
+        prompt: `分析 ${i}`,
+      },
+    });
+  }
+
+  const runs = host.root.orchestration.list();
+  assert.ok(runs.length <= MAX_RUNS, "runs 表不能超过 MAX_RUNS 条");
+  const ids = runs.map((run) => run.runId);
+  assert.ok(!ids.includes("run-001"), "最旧的 run 已被淘汰");
+  assert.ok(ids.includes("run-022"), "最新的 run 保留");
 });
