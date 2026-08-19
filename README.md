@@ -7,9 +7,9 @@
 插件化设计：运行中的 Agent OS 本质上是一个 Cordis 根 Context，平台、执行引擎、斜杠命令、会话、任务编排和 bot 协作都是挂载在它上面的插件，通过 `ctx.<service>` 与类型化事件协作，而不是互相导入具体实现。
 
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
-- **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
-- **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，collaboration 插件监听并决定是否自动交接——协作是可选插件，移除后任务编排不受影响。
-- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/cd`、`/close`、`/schedule`。新增执行引擎或斜杠命令 = 新增一个插件。
+- **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）、`ctx.orchestration`（多话题并行编排）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
+- **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，失败时广播 `task/failed`——collaboration 监听成功事件决定是否自动交接，orchestration 监听两类事件更新子任务状态。协作与编排都是可选插件，移除后任务编排不受影响。
+- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
 
 默认 `cordis.yml` 内容：
 
@@ -35,6 +35,9 @@ plugins:
   - name: commands/close
   - name: commands/schedule
   - name: collaboration
+  - name: orchestration
+  - name: commands/orchestrate
+  - name: commands/panel
   - name: tasks
   - name: schedule
   - name: router
@@ -470,6 +473,8 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/schedule add "每 30 分钟" <任务>`：创建周期定时任务
 - `/schedule list`：查看当前 bot 的定时任务
 - `/schedule remove <id>`：删除定时任务
+- `/orchestrate <大任务>`：拆解成多个子任务并行派发给团队成员
+- `/panel`：查看所有编排运行的并行子任务进度
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
 - `/dimagent <任务>`：新话题使用 DimAgent（接入模式取 bot 的 `accessMode`）
@@ -503,6 +508,41 @@ Agent OS 可以把飞书从“被动响应”升级为“主动指挥”：用 `
 - 任务配置持久化到 `data/schedules.json`（原子写、Zod 校验、重启恢复），重启后自动重新注册定时器；时区跟随本机（可用 `cordis.yml` 的 `schedule.timezone` 覆盖）。
 - 任务卡片上的“停止任务”按钮按配置者的 `openId` 鉴权，配置者可以随时停止定时触发的执行。
 - 在 `cordis.yml` 中移除 `schedule` 或 `commands/schedule` 即可整体下线定时能力。
+
+## 多话题并行编排
+
+Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给不同 bot 独立执行，再用一张面板汇总进度——`orchestration` 服务插件 + `/orchestrate`、`/panel` 命令插件。
+
+```text
+/orchestrate 检查 TASK.md 里的 A、B、C 三个模块，分别让开发、审查、助理 bot 分析
+→ ⏳ 正在拆解任务并派发子任务，请稍候…
+→ 已创建 run-001：3 个子任务，已派发给对应成员。
+  用 /panel 查看进度。
+/panel
+→ 编排面板：1 个运行
+  run-001 · 1/3 完成
+  ✅ 完成 #t1［developer］  分析模块 A …
+  ⏳ 等待 #t2［product］    审查模块 B …
+  ❌ 失败 #t3［assistant］  整理结论 …
+```
+
+流程与语义：
+
+- **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败。
+- **P0 派发方式为“同话题多 bot 并行”**：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在当前话题 `@` 目标 bot——目标 bot 走现有 router 的协作识别启动任务。会话按 `botId` 隔离，同一话题不同 bot 天然拥有独立 CLI 会话，互不阻塞；`reviewBy` 交接链不受影响。
+- **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；面板通过 `/panel` 实时查看。
+- **失败重试**：失败子任务可在话题中直接 `@` 目标 bot 发送“继续执行”，目标 bot 会基于已保存的原始子任务重试。
+- **插件化**：`orchestration`（服务）与 `commands/orchestrate`、`commands/panel`（命令）是独立插件，都在 `cordis.yml` 声明；移除 `orchestration` 即整体下线编排，`task/failed` 事件无监听者时自动退化为普通失败收尾。
+- 拆解的目标 bot 必须已就绪（运行时存在），否则整轮拒绝并提示。
+
+### 并行编排验收
+
+1. 确认团队中至少两台 bot 在线（`/team` 查看连接状态）。
+2. 发送 `/orchestrate 检查 package.json 和 src/index.ts，分别让开发、审查 bot 分析`。
+3. 日志应出现 `[编排] run-001 创建，共 2 个子任务`，话题里出现两条 `@` 派发消息（各带任务编号）。
+4. 两台目标 bot 各自独立执行（可同时运行，不互相等待）。
+5. 完成后发送 `/panel`，卡片显示 `2/2 完成`，各子任务带回答摘要。
+6. 在 `cordis.yml` 中移除 `commands/orchestrate`、`commands/panel`、`orchestration` 后重启，现有任务与协作链路仍正常。
 
 ### 会话整理与历史恢复验收
 

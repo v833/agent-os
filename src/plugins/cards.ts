@@ -9,6 +9,7 @@ import {
   buildClarificationCard,
   buildClarificationCompletedCard,
   buildCollaborationCard,
+  buildOrchestrationPanelCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -19,6 +20,7 @@ import {
   type ClarificationCardOptions,
   type ClarificationCompletedCardOptions,
   type CollaborationCardOptions,
+  type OrchestrationPanelOptions,
   type ResumeCardOptions,
   type SessionNoticeCardOptions,
   type TaskCardOptions,
@@ -57,6 +59,10 @@ export class CardsService extends Service {
 
   team(options: TeamCardOptions): CardJson {
     return buildTeamCard(options);
+  }
+
+  orchestrationPanel(options: OrchestrationPanelOptions): CardJson {
+    return buildOrchestrationPanelCard(options);
   }
 
   throttled(updateCard: (card: CardJson) => Promise<void>): ThrottledCardUpdater {

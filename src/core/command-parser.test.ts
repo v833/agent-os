@@ -73,6 +73,29 @@ test("/schedule 缺引号或参数不完整时不会被误识别", () => {
   assert.equal(parseCommand("帮我 /schedule list"), undefined);
 });
 
+test("解析 /orchestrate 与 /panel 编排命令", () => {
+  assert.deepEqual(parseCommand("/panel"), { name: "panel" });
+  assert.deepEqual(parseCommand("@CEO 助理 /panel"), { name: "panel" });
+  assert.deepEqual(parseCommand("/orchestrate"), {
+    name: "orchestrate",
+    prompt: undefined,
+  });
+  assert.deepEqual(
+    parseCommand("/orchestrate 检查 TASK.md 的 A、B、C 三个模块"),
+    {
+      name: "orchestrate",
+      prompt: "检查 TASK.md 的 A、B、C 三个模块",
+    },
+  );
+  assert.deepEqual(parseCommand("@CEO 助理 /orchestrate 并行 review MR"), {
+    name: "orchestrate",
+    prompt: "并行 review MR",
+  });
+  // 编排命令必须出现在消息开头，普通文本里的斜杠不误识别。
+  assert.equal(parseCommand("帮我 /panel 看看"), undefined);
+  assert.equal(parseCommand("帮我 /orchestrate 一下"), undefined);
+});
+
 test("普通文本和不支持的命令不会被误识别", () => {
   assert.equal(parseCommand("帮我运行 /status 看看"), undefined);
   assert.equal(parseCommand("/unknown"), undefined);

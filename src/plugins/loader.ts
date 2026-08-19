@@ -20,6 +20,8 @@ import * as closeCommand from "./commands/close.js";
 import * as compactCommand from "./commands/compact.js";
 import * as helpCommand from "./commands/help.js";
 import * as newCommand from "./commands/new.js";
+import * as orchestrateCommand from "./commands/orchestrate.js";
+import * as panelCommand from "./commands/panel.js";
 import * as resumeCommand from "./commands/resume.js";
 import * as scheduleCommand from "./commands/schedule.js";
 import * as statusCommand from "./commands/status.js";
@@ -29,6 +31,7 @@ import * as codexEngine from "./engines/codex.js";
 import * as dimagentEngine from "./engines/dimagent.js";
 import * as acpEngine from "./engines/acp.js";
 import * as larkPlugin from "./lark.js";
+import * as orchestrationPlugin from "./orchestration.js";
 import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
@@ -58,7 +61,10 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/cd": cdCommand,
   "commands/close": closeCommand,
   "commands/schedule": scheduleCommand,
+  "commands/orchestrate": orchestrateCommand,
+  "commands/panel": panelCommand,
   collaboration: collaborationPlugin,
+  orchestration: orchestrationPlugin,
   tasks: tasksPlugin,
   team: teamPlugin,
   schedule: schedulePlugin,
