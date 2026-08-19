@@ -8,6 +8,8 @@ import type { TaskProgressSnapshot } from "../core/task-progress.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildClarificationCard,
+  buildClarificationCompletedCard,
   buildCollaborationCard,
   buildResumeCard,
   buildSessionNoticeCard,
@@ -166,6 +168,46 @@ test("累计上下文超过窗口时不伪造上下文百分比", () => {
 
   assert.match(serialized, /累计消耗/);
   assert.doesNotMatch(serialized, /当前上下文/);
+});
+
+test("澄清卡片用表单提交全部答案并生成只读完成态", () => {
+  const request = {
+    title: "确认范围",
+    intro: "请选择实现方式。",
+    questions: [
+      {
+        id: "priority",
+        prompt: "优先级支持几档？",
+        recommendedOptionId: "three",
+        options: [
+          { id: "three", label: "三档" },
+          { id: "custom", label: "自定义" },
+        ],
+      },
+    ],
+  };
+  const waiting = buildClarificationCard({
+    clarificationId: "clarify-1",
+    runId: "run-1",
+    request,
+  }) as any;
+  const form = waiting.body.elements[1];
+  assert.equal(form.tag, "form");
+  assert.equal(form.elements[1].name, "priority");
+  assert.equal(form.elements[2].form_action_type, "submit");
+  assert.deepEqual(form.elements[2].behaviors[0].value, {
+    action: "submit_clarification",
+    clarificationId: "clarify-1",
+    runId: "run-1",
+  });
+
+  const completed = buildClarificationCompletedCard({
+    request,
+    answers: { priority: "three" },
+  }) as any;
+  assert.equal(completed.header.template, "green");
+  assert.match(completed.body.elements[0].content, /三档/);
+  assert.doesNotMatch(JSON.stringify(completed), /select_static/);
 });
 
 test("恢复卡片展示历史会话并为非当前记录生成安全回调参数", () => {

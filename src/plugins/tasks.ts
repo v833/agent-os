@@ -20,7 +20,11 @@ import {
   type ActiveRun,
 } from "../core/task-abort.js";
 import { TaskProgressTracker } from "../core/task-progress.js";
-import type { StartTaskInput, TaskResultPayload } from "./types.js";
+import type {
+  StartTaskInput,
+  TaskResultPayload,
+  TaskToolCallsPayload,
+} from "./types.js";
 
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
 export class TasksService extends Service {
@@ -78,6 +82,7 @@ export class TasksService extends Service {
       replyToMessageId,
       senderOpenId,
       requestedPrompt,
+      originalRequestedPrompt,
       isCompacting,
       compactInstructions,
       collaboration,
@@ -259,6 +264,7 @@ export class TasksService extends Service {
             answer: result.message ?? "",
             sessionId: result.sessionId,
             stats: undefined,
+            toolCalls: undefined,
           }))
       : this.runCliTask(
           cliAdapter,
@@ -315,6 +321,33 @@ export class TasksService extends Service {
         if (!isCompacting) {
           await this.ctx.sessions.manager.setRetryPrompt(session.id, undefined);
         }
+        const taskResultPayload: TaskResultPayload = {
+          bot,
+          botConfig,
+          session: this.ctx.sessions.manager.get(session.id) ?? session,
+          requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
+          answer: result.answer,
+          replyToMessageId,
+          hasThread,
+          collaboration,
+          senderRuntime,
+        };
+        if (!isCompacting && result.toolCalls?.length) {
+          const toolPayload: TaskToolCallsPayload = {
+            ...taskResultPayload,
+            result,
+            runId: activeRun.runId,
+            senderOpenId,
+          };
+          const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
+          if (outcome) {
+            await cardUpdater.finish(outcome.card);
+            console.log(
+              `[CLI] ${cliAdapter.id} 已交给应用工具处理 session_id=${result.sessionId ?? "(无)"}`,
+            );
+            return;
+          }
+        }
         await cardUpdater.finish(
           isCompacting
             ? this.ctx.cards.notice({
@@ -359,18 +392,7 @@ export class TasksService extends Service {
         }
         if (!isCompacting) {
           // 协作交接走事件广播，collaboration 插件自行决定是否继续派发。
-          const payload: TaskResultPayload = {
-            bot,
-            botConfig,
-            session,
-            requestedPrompt,
-            answer: result.answer,
-            replyToMessageId,
-            hasThread,
-            collaboration,
-            senderRuntime,
-          };
-          await this.ctx.parallel("task/result", payload);
+          await this.ctx.parallel("task/result", taskResultPayload);
         }
       })
       .catch(async (error) => {

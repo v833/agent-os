@@ -106,6 +106,7 @@ test("解析新版飞书卡片回调中的真实操作者、消息和按钮值",
       operator: { open_id: "ou_owner" },
       context: { open_message_id: "om_card" },
       action: {
+        form_value: { priority: "high" },
         value: {
           action: "abort_task",
           sessionId: "session-1",
@@ -116,6 +117,7 @@ test("解析新版飞书卡片回调中的真实操作者、消息和按钮值",
     {
       operatorOpenId: "ou_owner",
       messageId: "om_card",
+      formValue: { priority: "high" },
       value: {
         action: "abort_task",
         sessionId: "session-1",

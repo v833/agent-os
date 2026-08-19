@@ -6,8 +6,8 @@ import type { Context } from "cordis";
 import { CodexAdapter } from "../../cli/codex-adapter.js";
 
 export const name = "engines/codex";
-export const inject = ["cli"];
+export const inject = ["cli", "applicationTools"];
 
 export function apply(ctx: Context) {
-  ctx.cli.register(new CodexAdapter());
+  ctx.cli.register(new CodexAdapter(() => ctx.applicationTools.list()));
 }

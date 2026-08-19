@@ -6,6 +6,8 @@ import { Service, type Context } from "cordis";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildClarificationCard,
+  buildClarificationCompletedCard,
   buildCollaborationCard,
   buildResumeCard,
   buildSessionNoticeCard,
@@ -14,6 +16,8 @@ import {
   splitLongText,
   ThrottledCardUpdater,
   type CardJson,
+  type ClarificationCardOptions,
+  type ClarificationCompletedCardOptions,
   type CollaborationCardOptions,
   type ResumeCardOptions,
   type SessionNoticeCardOptions,
@@ -37,6 +41,14 @@ export class CardsService extends Service {
 
   notice(options: SessionNoticeCardOptions): CardJson {
     return buildSessionNoticeCard(options);
+  }
+
+  clarification(options: ClarificationCardOptions): CardJson {
+    return buildClarificationCard(options);
+  }
+
+  clarificationCompleted(options: ClarificationCompletedCardOptions): CardJson {
+    return buildClarificationCompletedCard(options);
   }
 
   collaboration(options: CollaborationCardOptions): CardJson {

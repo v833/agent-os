@@ -97,6 +97,12 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     let observedSessionId = sessionId;
     let observedAnswer: string | undefined;
     let observedStats: CliRunResult["stats"];
+    // 同一 toolUseId 可能在流式输出中重复出现，用 Map 按 id 去重；
+    // 收到失败的 tool_end 时把这次调用从结果中移除。
+    const observedToolCalls = new Map<
+      string,
+      NonNullable<CliRunResult["toolCalls"]>[number]
+    >();
     let resultError: Error | undefined;
     let stderr = "";
     let settled = false;
@@ -159,6 +165,10 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
           }
           if (event.type === "error") {
             resultError = new Error(event.message);
+          } else if (event.type === "tool_call") {
+            observedToolCalls.set(event.toolUseId, event);
+          } else if (event.type === "tool_end" && event.failed) {
+            observedToolCalls.delete(event.toolUseId);
           } else if (event.type === "result") {
             // Codex 会把回答和统计拆成不同事件；空字段不能覆盖已经观察到的值。
             if (event.answer) observedAnswer = event.answer;
@@ -214,10 +224,16 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
       settled = true;
       cleanup();
+      const toolCalls = [...observedToolCalls.values()].map((call) => ({
+        toolUseId: call.toolUseId,
+        toolName: call.toolName,
+        input: call.input,
+      }));
       resolve({
         answer: observedAnswer,
         ...(observedSessionId ? { sessionId: observedSessionId } : {}),
         ...(observedStats ? { stats: observedStats } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
       });
     });
   });

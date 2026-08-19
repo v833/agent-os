@@ -9,6 +9,37 @@ import { ClaudeAdapter } from "./claude-adapter.js";
 import { CodexAdapter } from "./codex-adapter.js";
 import { resolveCliCommand } from "./command-resolver.js";
 
+const testApplicationTools = [
+  {
+    id: "test_tools",
+    command: process.execPath,
+    args: ["test-server.js"],
+    tools: ["ask_user"],
+  },
+] as const;
+
+/** 断言 Claude 参数末尾携带注册表提供的 --mcp-config。 */
+function expectClaudeMcpConfig(args: string[]): void {
+  assert.equal(args.at(-2), "--mcp-config");
+  const config = JSON.parse(args.at(-1) as string) as {
+    mcpServers: Record<
+      string,
+      { type: string; command: string; args: string[] }
+    >;
+  };
+  assert.equal(config.mcpServers.test_tools.type, "stdio");
+  assert.equal(config.mcpServers.test_tools.command, process.execPath);
+  assert.deepEqual(config.mcpServers.test_tools.args, ["test-server.js"]);
+}
+
+/** 断言 Codex 参数开头携带注册表提供的 MCP 配置。 */
+function expectCodexMcpConfig(args: string[]): void {
+  assert.equal(args[0], "-c");
+  assert.match(args[1], /^mcp_servers\.test_tools\.command=/);
+  assert.equal(args[2], "-c");
+  assert.match(args[3], /^mcp_servers\.test_tools\.args=\[/);
+}
+
 test("用户提示词始终作为单独参数传给两个 CLI", () => {
   const prompt = '检查 "package.json"\n$(Remove-Item important.txt)';
   const adapters = [new ClaudeAdapter(), new CodexAdapter()];
@@ -21,10 +52,24 @@ test("用户提示词始终作为单独参数传给两个 CLI", () => {
   }
 });
 
-test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
-  const adapter = new ClaudeAdapter();
+test("执行引擎只注入注册表提供的应用工具", () => {
+  const plainClaude = new ClaudeAdapter();
+  const plainCodex = new CodexAdapter();
+  assert.equal(plainClaude.buildArgs("你好").includes("--mcp-config"), false);
+  assert.equal(plainCodex.buildArgs("你好")[0], "exec");
 
-  assert.deepEqual(adapter.buildArgs("你好"), [
+  const claude = new ClaudeAdapter(() => testApplicationTools);
+  const codex = new CodexAdapter(() => testApplicationTools);
+  expectClaudeMcpConfig(claude.buildArgs("你好"));
+  expectCodexMcpConfig(codex.buildArgs("你好"));
+});
+
+test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
+  const adapter = new ClaudeAdapter(() => testApplicationTools);
+
+  const first = adapter.buildArgs("你好");
+  expectClaudeMcpConfig(first);
+  assert.deepEqual(first.slice(0, -2), [
     "--dangerously-skip-permissions",
     "-p",
     "你好",
@@ -32,7 +77,9 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
     "stream-json",
     "--verbose",
   ]);
-  assert.deepEqual(adapter.buildResumeArgs("继续", "claude-session"), [
+  const resumed = adapter.buildResumeArgs("继续", "claude-session");
+  expectClaudeMcpConfig(resumed);
+  assert.deepEqual(resumed.slice(0, -2), [
     "--resume",
     "claude-session",
     "--dangerously-skip-permissions",
@@ -42,26 +89,28 @@ test("Claude Code 首次对话和续聊参数符合 headless 协议", () => {
     "stream-json",
     "--verbose",
   ]);
-  assert.deepEqual(adapter.buildCompactPlan("claude-session", "保留接口"), {
-    protocol: "claude-stream-json",
-    command: "claude",
-    args: [
-      "--resume",
-      "claude-session",
-      "--dangerously-skip-permissions",
-      "-p",
-      "/compact 保留接口",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-    ],
-  });
+  const compact = adapter.buildCompactPlan("claude-session", "保留接口");
+  expectClaudeMcpConfig(compact.args);
+  assert.equal(compact.protocol, "claude-stream-json");
+  assert.equal(compact.command, "claude");
+  assert.deepEqual(compact.args.slice(0, -2), [
+    "--resume",
+    "claude-session",
+    "--dangerously-skip-permissions",
+    "-p",
+    "/compact 保留接口",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+  ]);
 });
 
 test("Codex 首次对话和续聊参数符合 exec 协议", () => {
-  const adapter = new CodexAdapter();
+  const adapter = new CodexAdapter(() => testApplicationTools);
 
-  assert.deepEqual(adapter.buildArgs("你好"), [
+  const first = adapter.buildArgs("你好");
+  expectCodexMcpConfig(first);
+  assert.deepEqual(first.slice(4), [
     "exec",
     "--json",
     "--sandbox",
@@ -69,7 +118,9 @@ test("Codex 首次对话和续聊参数符合 exec 协议", () => {
     "--skip-git-repo-check",
     "你好",
   ]);
-  assert.deepEqual(adapter.buildResumeArgs("继续", "codex-thread"), [
+  const resumed = adapter.buildResumeArgs("继续", "codex-thread");
+  expectCodexMcpConfig(resumed);
+  assert.deepEqual(resumed.slice(4), [
     "exec",
     "resume",
     "--json",
@@ -414,6 +465,142 @@ test("Codex 标记命令失败并解析协议错误", () => {
       }),
     ),
     [],
+  );
+});
+
+test("Claude Code 把已注册应用工具调用翻译成统一的 tool_call 事件", () => {
+  const adapter = new ClaudeAdapter(() => [
+    {
+      id: "agent_os",
+      command: "test",
+      args: [],
+      tools: ["request_clarification"],
+    },
+  ]);
+
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-clarify",
+              name: "mcp__agent_os__request_clarification",
+              input: {
+                title: "确认优先级功能范围",
+                questions: [
+                  {
+                    id: "priority_scope",
+                    prompt: "优先级需要支持几档？",
+                    options: [
+                      { id: "three", label: "高、中、低三档" },
+                      { id: "custom", label: "允许自定义优先级" },
+                    ],
+                    recommendedOptionId: "three",
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "tool-clarify",
+        toolName: "mcp__agent_os__request_clarification",
+        label: "调用 mcp__agent_os__request_clarification",
+      },
+      {
+        type: "tool_call",
+        toolUseId: "tool-clarify",
+        toolName: "request_clarification",
+        input: {
+          title: "确认优先级功能范围",
+          questions: [
+            {
+              id: "priority_scope",
+              prompt: "优先级需要支持几档？",
+              options: [
+                { id: "three", label: "高、中、低三档" },
+                { id: "custom", label: "允许自定义优先级" },
+              ],
+              recommendedOptionId: "three",
+            },
+          ],
+        },
+      },
+    ],
+  );
+});
+
+test("Codex 把已注册应用工具调用翻译成统一的 tool_call 事件", () => {
+  const adapter = new CodexAdapter(() => [
+    {
+      id: "agent_os",
+      command: "test",
+      args: [],
+      tools: ["request_clarification"],
+    },
+  ]);
+
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        type: "item.started",
+        item: {
+          id: "item-clarify",
+          type: "mcp_tool_call",
+          server: "agent_os",
+          tool: "request_clarification",
+          arguments: {
+            title: "确认优先级功能范围",
+            questions: [
+              {
+                id: "priority_scope",
+                prompt: "优先级需要支持几档？",
+                options: [
+                  { id: "three", label: "高、中、低三档" },
+                  { id: "custom", label: "允许自定义优先级" },
+                ],
+                recommendedOptionId: "three",
+              },
+            ],
+          },
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "item-clarify",
+        toolName: "MCP",
+        label: "调用外部工具",
+        detail: "agent_os.request_clarification",
+      },
+      {
+        type: "tool_call",
+        toolUseId: "item-clarify",
+        toolName: "request_clarification",
+        input: {
+          title: "确认优先级功能范围",
+          questions: [
+            {
+              id: "priority_scope",
+              prompt: "优先级需要支持几档？",
+              options: [
+                { id: "three", label: "高、中、低三档" },
+                { id: "custom", label: "允许自定义优先级" },
+              ],
+              recommendedOptionId: "three",
+            },
+          ],
+        },
+      },
+    ],
   );
 });
 

@@ -53,6 +53,8 @@ export interface BotOptions {
 export interface CardAction {
   operatorOpenId: string;
   messageId: string;
+  /** 表单组件随卡片动作一起提交的值；普通按钮回调没有该字段。 */
+  formValue?: Record<string, unknown>;
   value: Record<string, unknown>;
 }
 
@@ -155,6 +157,7 @@ export function parseCardAction(data: unknown): CardAction {
   const legacyOperator = isRecord(root.operator_id) ? root.operator_id : {};
   const context = isRecord(root.context) ? root.context : {};
   const value = action.value;
+  const formValue = action.form_value;
 
   return {
     operatorOpenId:
@@ -169,6 +172,7 @@ export function parseCardAction(data: unknown): CardAction {
         : typeof root.open_message_id === "string"
           ? root.open_message_id
           : "",
+    ...(isRecord(formValue) ? { formValue } : {}),
     value: isRecord(value) ? value : {},
   };
 }

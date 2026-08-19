@@ -298,6 +298,41 @@ test("按顺序分发一行中的多个事件并保留最终统计", async () =>
   });
 });
 
+test("tool_call 按 id 去重并剔除失败的调用", async () => {
+  const result = await runScript(`
+    console.log(JSON.stringify([
+      {
+        type: "tool_call",
+        toolUseId: "tool-a",
+        toolName: "request_clarification",
+        input: { title: "澄清" }
+      },
+      {
+        type: "tool_call",
+        toolUseId: "tool-a",
+        toolName: "request_clarification",
+        input: { title: "澄清" }
+      },
+      {
+        type: "tool_call",
+        toolUseId: "tool-b",
+        toolName: "request_clarification",
+        input: { title: "澄清二" }
+      },
+      { type: "tool_end", toolUseId: "tool-b", failed: true },
+      { type: "result", answer: "完成" }
+    ]));
+  `);
+
+  assert.deepEqual(result.toolCalls, [
+    {
+      toolUseId: "tool-a",
+      toolName: "request_clarification",
+      input: { title: "澄清" },
+    },
+  ]);
+});
+
 test("Codex 回答先到统计后到时合并为完整结果", async () => {
   const result = await runScript(`
     console.log(JSON.stringify({ type: "result", answer: "完成" }));

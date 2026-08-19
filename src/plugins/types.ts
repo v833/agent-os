@@ -10,7 +10,8 @@ import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
 import type { Session } from "../core/session-manager.js";
-import type { CliAdapter } from "../cli/types.js";
+import type { CliAdapter, CliRunResult } from "../cli/types.js";
+import type { CardJson } from "../im/card.js";
 import type { MessageResource } from "../im/message-parser.js";
 import type {
   Bot,
@@ -20,6 +21,7 @@ import type {
   IncomingMessage,
 } from "../im/lark.js";
 
+import type { ApplicationToolsService } from "./application-tools.js";
 import type { CardsService } from "./cards.js";
 import type { CliService } from "./cli.js";
 import type { CollaborationService } from "./collaboration.js";
@@ -43,6 +45,8 @@ declare module "cordis" {
     cli: CliService;
     /** 飞书平台适配：启动多 bot、发送消息与卡片、下载资源。 */
     lark: LarkService;
+    /** 应用工具注册表：业务插件登记 MCP Server，执行引擎读取通用描述。 */
+    applicationTools: ApplicationToolsService;
     /** 卡片渲染：任务卡片、会话卡片、协作卡片的统一出口。 */
     cards: CardsService;
     /** 斜杠命令注册表：每个命令由独立插件登记处理函数。 */
@@ -69,6 +73,10 @@ declare module "cordis" {
      * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
      */
     "task/prompt-context"(botConfig: BotConfig): string | undefined;
+    /** 一轮 CLI 成功结束后，应用工具插件可优先认领结果并替换普通成功收尾。 */
+    "task/tool-calls"(
+      payload: TaskToolCallsPayload,
+    ): Promise<TaskToolCallsOutcome | undefined>;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
   }
@@ -110,11 +118,25 @@ export interface StartTaskInput {
   replyToMessageId: string;
   senderOpenId: string;
   requestedPrompt: string;
+  /** 应用工具恢复轮次使用；CLI 收到 requestedPrompt，最终结果仍关联最初任务。 */
+  originalRequestedPrompt?: string;
   isCompacting: boolean;
   compactInstructions?: string;
   collaboration?: CollaborationMessage;
   senderRuntime?: BotRuntime;
   resources: MessageResource[];
+}
+
+/** 应用工具插件认领任务结果后返回的替代终态卡片。 */
+export interface TaskToolCallsOutcome {
+  card: CardJson;
+}
+
+/** 一轮 CLI 的应用工具调用及恢复任务所需上下文。 */
+export interface TaskToolCallsPayload extends TaskResultPayload {
+  result: CliRunResult;
+  runId: string;
+  senderOpenId: string;
 }
 
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */

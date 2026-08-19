@@ -52,6 +52,12 @@ export type CliEvent =
       detail?: string;
     }
   | { type: "tool_end"; toolUseId: string; failed: boolean }
+  | {
+      type: "tool_call";
+      toolUseId: string;
+      toolName: string;
+      input: unknown;
+    }
   | { type: "context"; usedTokens: number }
   | {
       type: "result";
@@ -86,4 +92,10 @@ export interface CliRunResult {
   answer: string;
   sessionId?: string;
   stats?: CliRunStats;
+  /** 本轮调用的应用工具（按 toolUseId 去重、剔除失败的调用）。 */
+  toolCalls?: Array<{
+    toolUseId: string;
+    toolName: string;
+    input: unknown;
+  }>;
 }

@@ -8,6 +8,7 @@ plugins:
   - name: team
   - name: sessions
   - name: cli
+  - name: application-tools
   - name: engines/claude
   - name: engines/codex
   - name: engines/dimagent
@@ -34,5 +35,9 @@ plugins:
   - name: commands/schedule
   - name: collaboration
   - name: tasks
+  # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
+  - name: clarification
+    config:
+      storePath: data/clarifications.json
   - name: schedule
   - name: router

@@ -4,7 +4,7 @@
  * 这里是“一切皆为插件”装配方式的端到端验证：替换 lark/cli 实现即可测试。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -23,7 +23,9 @@ import type {
   CliSessionSummary,
 } from "../cli/types.js";
 import type { RunCliOptions } from "../cli/runner.js";
+import * as applicationToolsPlugin from "./application-tools.js";
 import * as cardsPlugin from "./cards.js";
+import * as clarificationPlugin from "./clarification.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as commandsPlugin from "./commands.js";
 import * as statusCommand from "./commands/status.js";
@@ -94,6 +96,7 @@ const fakeAdapter: CliAdapter = {
 /** 假执行引擎：捕获调用参数，由测试控制何时完成或取消。 */
 class FakeCliService extends Service {
   captured: RunCliOptions | undefined;
+  readonly captures: RunCliOptions[] = [];
   compactOptions: unknown;
   private resolver: ((result: CliRunResult) => void) | undefined;
   private compactResolver:
@@ -121,6 +124,7 @@ class FakeCliService extends Service {
 
   run(options: RunCliOptions): Promise<CliRunResult> {
     this.captured = options;
+    this.captures.push(options);
     return new Promise((resolve) => {
       this.resolver = resolve;
       // 任务被停止时按成功路径收尾，让编排走 cancelMode 分支。
@@ -258,6 +262,32 @@ function abortValueOf(card: Record<string, unknown>): Record<string, unknown> {
   throw new Error("卡片里找不到 abort 按钮");
 }
 
+function clarificationValueOf(card: Record<string, unknown>): Record<string, unknown> {
+  const elements = (card.body as { elements?: unknown[] } | undefined)
+    ?.elements ?? [];
+  for (const element of elements) {
+    const formElements =
+      (element as { tag?: string; elements?: unknown[] }).tag === "form"
+        ? (element as { elements?: unknown[] }).elements ?? []
+        : [];
+    for (const formElement of formElements) {
+      const behaviors = (formElement as { behaviors?: { value?: unknown }[] })
+        .behaviors ?? [];
+      for (const behavior of behaviors) {
+        const value = behavior.value;
+        if (
+          typeof value === "object" &&
+          value !== null &&
+          (value as { action?: string }).action === "submit_clarification"
+        ) {
+          return value as Record<string, unknown>;
+        }
+      }
+    }
+  }
+  throw new Error("卡片里找不到澄清提交按钮");
+}
+
 function cardSummaryContains(
   card: Record<string, unknown>,
   text: string,
@@ -284,6 +314,7 @@ interface Host {
   lark: FakeLarkService;
   bot: ReturnType<typeof createFakeBot>["bot"];
   calls: ReturnType<typeof createFakeBot>["calls"];
+  clarificationsPath: string;
 }
 
 /** 组装一个最小 Agent OS 宿主：真实服务插件 + 假 cli/lark/config。 */
@@ -296,6 +327,7 @@ async function createHost(
   let cli!: FakeCliService;
   let lark!: FakeLarkService;
   const sessionsDir = await mkdtemp(join(tmpdir(), "agent-os-host-"));
+  const clarificationsPath = join(sessionsDir, "clarifications.json");
   tempDirs.push(sessionsDir);
 
   const configPlugin = {
@@ -323,12 +355,14 @@ async function createHost(
     root.plugin(cliPlugin),
     root.plugin(larkPlugin),
     root.plugin(sessionsPlugin, { storePath: join(sessionsDir, "s.json") }),
+    root.plugin(applicationToolsPlugin),
     root.plugin(cardsPlugin),
     root.plugin(commandsPlugin),
     root.plugin(statusCommand),
     root.plugin(teamCommand),
     root.plugin(collaborationPlugin),
     root.plugin(tasksPlugin),
+    root.plugin(clarificationPlugin, { storePath: clarificationsPath }),
     root.plugin(routerPlugin),
   ]);
   // mount fiber 不等待深层 inject 级联，必须等全部插件 ACTIVE 再发事件。
@@ -340,7 +374,14 @@ async function createHost(
     identity: { openId: "bot_open", name: "TestBot" },
   });
 
-  return { root, cli, lark, bot: fakeBot.bot, calls: fakeBot.calls };
+  return {
+    root,
+    cli,
+    lark,
+    bot: fakeBot.bot,
+    calls: fakeBot.calls,
+    clarificationsPath,
+  };
 }
 
 test("bot/message 把 /status 派发给命令插件", async () => {
@@ -453,6 +494,86 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   );
   assert.ok(
     host.calls.updates.some((card) => cardSummaryContains(card, "已完成")),
+  );
+});
+
+test("澄清工具调用进入等待卡片，用户回答后续接原 CLI 会话", async () => {
+  const host = await createHost();
+  const message = incomingMessage({
+    text: "实现优先级功能",
+    senderOpenId: "ou_owner",
+  });
+  await host.root.parallel("bot/message", message, host.bot, baseBotConfig);
+  await waitFor(() => host.cli.captured !== undefined);
+
+  host.cli.finish({
+    answer: "等待用户确认。",
+    sessionId: "sess-clarification",
+    toolCalls: [
+      {
+        toolUseId: "tool-1",
+        toolName: "request_clarification",
+        input: {
+          title: "确认优先级范围",
+          intro: "请选择实现方式。",
+          questions: [
+            {
+              id: "priority_scope",
+              prompt: "优先级需要支持几档？",
+              options: [
+                { id: "three", label: "高、中、低三档" },
+                { id: "custom", label: "允许自定义" },
+              ],
+              recommendedOptionId: "three",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "等待回答")),
+  );
+  assert.equal(host.calls.mentions.length, 0, "等待澄清时不能发送任务完成通知");
+  const persisted = JSON.parse(
+    await readFile(host.clarificationsPath, "utf8"),
+  ) as Array<Record<string, unknown>>;
+  assert.equal(persisted.length, 1, "待澄清状态必须持久化");
+  assert.equal(typeof persisted[0]?.runId, "string");
+  assert.equal(persisted[0]?.cliSessionId, "sess-clarification");
+
+  const waitingCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "等待回答"),
+  )!;
+  const response = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "card-1",
+      value: clarificationValueOf(waitingCard),
+      formValue: { priority_scope: "three" },
+    },
+    host.bot,
+    baseBotConfig,
+  );
+  assert.equal(response?.toast?.content, "回答已提交，正在继续执行。");
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(
+    host.cli.captures[1]?.sessionId,
+    "sess-clarification",
+    "回答必须恢复原始 CLI 会话",
+  );
+  assert.match(host.cli.captures[1]?.prompt ?? "", /高、中、低三档/);
+
+  host.cli.finish({ answer: "已按三档实现。", sessionId: "sess-clarification" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+  assert.deepEqual(
+    JSON.parse(await readFile(host.clarificationsPath, "utf8")),
+    [],
+    "回答后必须删除待澄清记录",
   );
 });
 

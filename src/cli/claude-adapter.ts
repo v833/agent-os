@@ -7,6 +7,14 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import type {
+  ApplicationToolProvider,
+  ApplicationToolServer,
+} from "./app-tools.js";
+import {
+  claudeAppToolArgs,
+  findClaudeApplicationTool,
+} from "./app-tools.js";
 import type { CliAdapter, CliEvent, CliRunStats, CliSessionSummary } from "./types.js";
 
 /** /resume 卡片最多展示的原生会话数量。 */
@@ -132,7 +140,10 @@ function parseStats(event: ClaudeEvent): CliRunStats | undefined {
     : undefined;
 }
 
-function outputArgs(prompt: string): string[] {
+function outputArgs(
+  prompt: string,
+  servers: readonly ApplicationToolServer[],
+): string[] {
   // 机器人无法展示交互式确认；仅在受信任且可回退的配置工作目录中使用。
   // 提示词保持为独立参数，不能与用户输入拼成一条 shell 命令。
   return [
@@ -142,6 +153,7 @@ function outputArgs(prompt: string): string[] {
     "--output-format",
     "stream-json",
     "--verbose",
+    ...claudeAppToolArgs(servers),
   ];
 }
 
@@ -216,12 +228,16 @@ export class ClaudeAdapter implements CliAdapter {
   readonly displayName = "Claude Code";
   readonly accessMode = "headless" as const;
 
+  constructor(
+    private readonly applicationTools: ApplicationToolProvider = () => [],
+  ) {}
+
   buildArgs(prompt: string): string[] {
-    return outputArgs(prompt);
+    return outputArgs(prompt, this.applicationTools());
   }
 
   buildResumeArgs(prompt: string, sessionId: string): string[] {
-    return ["--resume", sessionId, ...outputArgs(prompt)];
+    return ["--resume", sessionId, ...outputArgs(prompt, this.applicationTools())];
   }
 
   buildCompactPlan(sessionId: string, instructions?: string) {
@@ -308,7 +324,7 @@ export class ClaudeAdapter implements CliAdapter {
             return [];
           }
           const detail = toolDetail(block.name, block.input);
-          return [
+          const events: CliEvent[] = [
             {
               type: "tool_start",
               toolUseId: block.id,
@@ -317,6 +333,20 @@ export class ClaudeAdapter implements CliAdapter {
               ...(detail ? { detail } : {}),
             },
           ];
+          const applicationToolName = findClaudeApplicationTool(
+            this.applicationTools(),
+            block.name,
+          );
+          // 应用工具注册表决定哪些 MCP 调用要交给生产插件；适配器不认识业务工具。
+          if (applicationToolName) {
+            events.push({
+              type: "tool_call",
+              toolUseId: block.id,
+              toolName: applicationToolName,
+              input: block.input,
+            });
+          }
+          return events;
         },
       );
       // 一条 assistant 消息可能同时携带用量和多个工具，必须全部返回。

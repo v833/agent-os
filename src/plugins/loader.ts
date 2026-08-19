@@ -8,7 +8,9 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 
+import * as applicationToolsPlugin from "./application-tools.js";
 import * as cardsPlugin from "./cards.js";
+import * as clarificationPlugin from "./clarification.js";
 import * as cliPlugin from "./cli.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as commandsPlugin from "./commands.js";
@@ -38,6 +40,8 @@ const pluginRegistry: Record<string, Plugin> = {
   config: configPlugin,
   sessions: sessionsPlugin,
   cli: cliPlugin,
+  "application-tools": applicationToolsPlugin,
+  clarification: clarificationPlugin,
   "engines/claude": claudeEngine,
   "engines/codex": codexEngine,
   "engines/dimagent": dimagentEngine,

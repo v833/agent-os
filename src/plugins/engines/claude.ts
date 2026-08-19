@@ -6,8 +6,8 @@ import type { Context } from "cordis";
 import { ClaudeAdapter } from "../../cli/claude-adapter.js";
 
 export const name = "engines/claude";
-export const inject = ["cli"];
+export const inject = ["cli", "applicationTools"];
 
 export function apply(ctx: Context) {
-  ctx.cli.register(new ClaudeAdapter());
+  ctx.cli.register(new ClaudeAdapter(() => ctx.applicationTools.list()));
 }

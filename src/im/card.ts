@@ -3,6 +3,7 @@
  * 并负责高频任务卡片更新的节流与串行化。
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
+import type { ClarificationRequest } from "../core/clarification.js";
 import type {
   TaskActivity,
   TaskProgressSnapshot,
@@ -21,6 +22,17 @@ export interface TaskCardOptions {
   technicalDetail?: string;
   abortSessionId?: string;
   abortRunId?: string;
+}
+
+export interface ClarificationCardOptions {
+  clarificationId: string;
+  runId: string;
+  request: ClarificationRequest;
+}
+
+export interface ClarificationCompletedCardOptions {
+  request: ClarificationRequest;
+  answers: Readonly<Record<string, string>>;
 }
 
 export interface ResumeCardOptions {
@@ -418,6 +430,113 @@ function formatSessionTime(value: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(date);
+}
+
+/** 生成结构化澄清表单；一个表单一次性提交全部问题答案。 */
+export function buildClarificationCard(
+  options: ClarificationCardOptions,
+): CardJson {
+  const questionElements = options.request.questions.flatMap((question, index) => [
+    {
+      tag: "markdown",
+      content: `**${index + 1}. ${escapeFeishuMarkdown(question.prompt)}**${question.recommendedOptionId ? "\n_已标注推荐项_" : ""}`,
+    },
+    {
+      tag: "select_static",
+      name: question.id,
+      required: true,
+      width: "fill",
+      placeholder: { tag: "plain_text", content: "请选择" },
+      options: question.options.map((option) => ({
+        text: {
+          tag: "plain_text",
+          content:
+            option.id === question.recommendedOptionId
+              ? `${option.label}（推荐）`
+              : option.label,
+        },
+        value: option.id,
+      })),
+    },
+  ]);
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `${options.request.title}：等待回答` },
+    },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: options.request.title },
+      subtitle: { tag: "plain_text", content: "需要你的选择才能继续" },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        ...(options.request.intro
+          ? [
+              {
+                tag: "markdown",
+                content: escapeFeishuMarkdown(options.request.intro),
+              },
+            ]
+          : []),
+        {
+          tag: "form",
+          name: "clarification_answers",
+          element_id: `clarification_${options.clarificationId}`,
+          direction: "vertical",
+          vertical_spacing: "12px",
+          elements: [
+            ...questionElements,
+            {
+              tag: "button",
+              name: "submit_clarification",
+              text: { tag: "plain_text", content: "提交并继续" },
+              type: "primary_filled",
+              width: "default",
+              form_action_type: "submit",
+              behaviors: [
+                {
+                  type: "callback",
+                  value: {
+                    action: "submit_clarification",
+                    clarificationId: options.clarificationId,
+                    runId: options.runId,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** 生成提交后的只读答案卡片，替换原表单以阻止重复提交。 */
+export function buildClarificationCompletedCard(
+  options: ClarificationCompletedCardOptions,
+): CardJson {
+  const lines = options.request.questions.map((question, index) => {
+    const optionId = options.answers[question.id];
+    const label = question.options.find((option) => option.id === optionId)?.label;
+    return `${index + 1}. **${escapeFeishuMarkdown(question.prompt)}**\n${escapeFeishuMarkdown(label ?? optionId ?? "")}`;
+  });
+  return {
+    schema: "2.0",
+    config: { summary: { content: `${options.request.title}：已提交` } },
+    header: {
+      template: "green",
+      title: { tag: "plain_text", content: "回答已提交，继续执行" },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [{ tag: "markdown", content: lines.join("\n\n") }],
+    },
+  };
 }
 
 /** 生成历史 CLI 会话列表；按钮只携带 ID，真实性由入口回调重新校验。 */

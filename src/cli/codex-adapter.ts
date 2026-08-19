@@ -5,6 +5,11 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { resolveCliCommand } from "./command-resolver.js";
+import type { ApplicationToolProvider } from "./app-tools.js";
+import {
+  codexAppToolArgs,
+  findCodexApplicationTool,
+} from "./app-tools.js";
 import type { CliAdapter, CliEvent, CliRunStats, CliSessionSummary } from "./types.js";
 
 /** /resume 卡片最多展示的原生会话数量。 */
@@ -154,8 +159,13 @@ export class CodexAdapter implements CliAdapter {
   readonly retryOnDisconnect = true;
   readonly compactDetail = "使用原生默认策略整理上下文";
 
+  constructor(
+    private readonly applicationTools: ApplicationToolProvider = () => [],
+  ) {}
+
   buildArgs(prompt: string): string[] {
     return [
+      ...codexAppToolArgs(this.applicationTools()),
       "exec",
       "--json",
       "--sandbox",
@@ -167,6 +177,7 @@ export class CodexAdapter implements CliAdapter {
 
   buildResumeArgs(prompt: string, sessionId: string): string[] {
     return [
+      ...codexAppToolArgs(this.applicationTools()),
       "exec",
       "resume",
       "--json",
@@ -369,13 +380,31 @@ export class CodexAdapter implements CliAdapter {
     const tool = toolInfo(item);
     if (!tool) return [];
     if (event.type === "item.started") {
-      return [
+      const events: CliEvent[] = [
         {
           type: "tool_start",
           toolUseId: item.id,
           ...tool,
         },
       ];
+      const applicationToolName =
+        item.type === "mcp_tool_call"
+          ? findCodexApplicationTool(
+              this.applicationTools(),
+              item.server,
+              item.tool,
+            )
+          : undefined;
+      // 应用工具注册表决定哪些 MCP 调用要交给生产插件；适配器不认识业务工具。
+      if (applicationToolName) {
+        events.push({
+          type: "tool_call",
+          toolUseId: item.id,
+          toolName: applicationToolName,
+          input: item.arguments ?? item.input,
+        });
+      }
+      return events;
     }
     if (event.type === "item.completed") {
       const exitCode = asNumber(item.exit_code);

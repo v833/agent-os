@@ -27,6 +27,7 @@
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
 - `pnpm test`：运行 CLI、飞书消息、卡片与会话模型测试
 - `pnpm probe:cli`：从标准输入读取 Codex/Claude/DimAgent JSONL 并输出时间线
+- `pnpm probe:tool <claude|codex> [工作目录]`：不经飞书直接驱动 CLI 调用 `request_clarification`，验证 MCP 工具链与 Schema 校验
 
 ## CLI Headless 调试
 
@@ -50,12 +51,15 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/prompt-context、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/prompt-context、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
 - `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
 - `src/plugins/sessions.ts`：sessions 服务——把 SessionManager 与 JsonSessionStore 挂到 ctx.sessions
-- `src/plugins/cli.ts`：cli 服务——执行引擎注册表与调度（run/compact/原生会话）
+- `src/plugins/application-tools.ts`：应用工具注册服务——插件声明 stdio MCP Server，执行引擎只消费通用描述
+- `src/plugins/clarification.ts`：澄清插件——认领结构化工具调用、展示飞书表单、持久化回答并恢复 CLI 会话
+- `src/plugins/clarification-store.ts`：待澄清记录的校验与原子持久化
+- `src/plugins/clarification-tool.ts`：澄清插件提供给 CLI 探针和 MCP 注入的 server 描述
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
@@ -88,11 +92,14 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
 - `src/core/task-progress.ts`：高频 CLI 事件的工具配对、上下文增量与稳定进度快照
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
+- `src/core/clarification.ts`：澄清请求数据结构——Zod Schema 约束 Agent 结构化提问，既是 MCP 工具参数也是飞书卡片输入
+- `src/core/clarification.test.ts`：Schema 边界校验与工具调用历史提取测试
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
 - `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args 配置驱动）以标准接入方式登记，与具体供应商解耦
 - `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、展示名回退、compact 与失效会话识别测试
 - `src/cli/registry.ts`：多引擎注册表（registerCliAdapter 供引擎插件登记）、查找与 CLI ID 校验
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
+- `src/cli/app-tools.ts`：应用工具公共契约——把插件注册的 MCP Server 转换为各 CLI 的启动参数并识别工具调用
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
 - `src/cli/acp-daemon.ts`：DimAgent ACP 常驻进程——单进程多会话并发、空闲回收、崩溃重连与软取消
@@ -112,7 +119,9 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli/cli-adapters.test.ts`：双 CLI 参数、多事件和协议解析测试
 - `src/cli-events.ts`：Codex/Claude/DimAgent 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
+- `src/probe-app-tool.ts`：应用工具探针——不经飞书驱动 Claude/Codex 调用澄清工具并校验结果
 - `src/cli-events.test.ts`：事件解析器测试
+- `src/mcp/clarification-server.ts`：本地 MCP Server——通过 stdio 向 Claude Code 与 Codex 提供 `request_clarification` 工具
 - `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新、消息资源下载与结果提醒（sendResultNotification）
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
