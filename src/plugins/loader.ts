@@ -32,6 +32,8 @@ import * as dimagentEngine from "./engines/dimagent.js";
 import * as acpEngine from "./engines/acp.js";
 import * as larkPlugin from "./lark.js";
 import * as orchestrationPlugin from "./orchestration.js";
+import * as orchestrationActions from "./orchestration/actions.js";
+import * as orchestrationLivePanel from "./orchestration/live-panel.js";
 import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
@@ -65,6 +67,8 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/panel": panelCommand,
   collaboration: collaborationPlugin,
   orchestration: orchestrationPlugin,
+  "orchestration/actions": orchestrationActions,
+  "orchestration/live-panel": orchestrationLivePanel,
   tasks: tasksPlugin,
   team: teamPlugin,
   schedule: schedulePlugin,

@@ -33,14 +33,24 @@ test("交接单只允许目标 bot 领取一次", () => {
   assert.equal(inbox.consume("dispatch-1", "reviewer"), undefined);
 });
 
-test("协作轮次键由整项任务、轮次和目标 bot 组成", () => {
-  assert.equal(collaborationTurnKey(message()), "task-1:1:reviewer");
+test("协作轮次键由整项任务、轮次、目标 bot 和交接单组成", () => {
+  assert.equal(collaborationTurnKey(message()), "task-1:1:reviewer:dispatch-1");
   assert.equal(
     collaborationTurnKey(message({ toBotId: "other" })),
-    "task-1:1:other",
+    "task-1:1:other:dispatch-1",
   );
   assert.equal(
     collaborationTurnKey(message({ round: 2, toBotId: "developer" })),
-    "task-1:2:developer",
+    "task-1:2:developer:dispatch-1",
+  );
+  // dispatchId 必须纳入键：重试生成新交接单（同 taskId/round）不被旧记录拦截。
+  assert.notEqual(
+    collaborationTurnKey(message({ dispatchId: "dispatch-1" })),
+    collaborationTurnKey(message({ dispatchId: "dispatch-2" })),
+  );
+  // 同一交接单的重复事件必须映射到同一键（幂等）。
+  assert.equal(
+    collaborationTurnKey(message()),
+    collaborationTurnKey(message()),
   );
 });

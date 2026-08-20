@@ -9,6 +9,7 @@ import type { Context } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
+import type { OrchestrationRun } from "../core/orchestration.js";
 import type { Session } from "../core/session-manager.js";
 import type { CliAdapter, CliRunResult } from "../cli/types.js";
 import type { CardJson } from "../im/card.js";
@@ -87,6 +88,14 @@ declare module "cordis" {
      * 与 task/result 语义区分（后者只在成功时广播），编排等插件据此标记子任务失败。
      */
     "task/failed"(payload: TaskResultPayload): void | Promise<void>;
+    /** 编排运行状态更新广播；orchestration 服务发出，live-panel 插件消费并节流刷新面板卡片。 */
+    "orchestration/update"(
+      payload: OrchestrationUpdatePayload,
+    ): void | Promise<void>;
+    /** 编排 run 被淘汰广播；live-panel 插件据此清理挂起卡片与节流引用。 */
+    "orchestration/evicted"(
+      payload: OrchestrationEvictedPayload,
+    ): void | Promise<void>;
   }
 }
 
@@ -158,4 +167,26 @@ export interface TaskResultPayload {
   hasThread: boolean;
   collaboration?: CollaborationMessage;
   senderRuntime?: BotRuntime;
+}
+
+/** 实时面板挂卡片所需锚点：回复目标与话题参数，由编排服务创建 run 时记录。 */
+export interface OrchestrationPanelAnchor {
+  bot: Bot;
+  replyToMessageId: string;
+  hasThread: boolean;
+}
+
+/** 编排运行状态更新事件负载：run 快照 + 首次挂卡片锚点。 */
+export interface OrchestrationUpdatePayload {
+  run: OrchestrationRun;
+  /**
+   * 挂实时面板卡片的锚点；仅创建 run 后的首次广播携带（编排服务在派发完成后发一次），
+   * live-panel 首次收到时 replyCard 挂起卡片，后续更新只携带 run 快照。
+   */
+  anchor?: OrchestrationPanelAnchor;
+}
+
+/** 编排 run 被淘汰事件负载：live-panel 按 runId 清理挂起卡片与节流引用。 */
+export interface OrchestrationEvictedPayload {
+  runId: string;
 }

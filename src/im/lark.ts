@@ -95,6 +95,12 @@ export interface Bot {
     text: string,
     replyInThread?: boolean,
   ) => Promise<string | undefined>;
+  /** 向指定群发一条新的根 post 消息并 @ 目标 bot；用于编排跨话题派发子任务。 */
+  sendMentionToChat: (
+    chatId: string,
+    target: BotIdentity,
+    text: string,
+  ) => Promise<string | undefined>;
   /** 给指定目标发送完成提醒；通知失败不影响任务结果。 */
   sendResultNotification: (options: {
     replyToMessageId: string;
@@ -130,6 +136,26 @@ export function buildMentionPostContent(
           { tag: "text", text: ` ${text}` },
         ],
       ],
+    },
+  };
+}
+
+/** 构造向指定群发送新根消息（msg_type=post、@ 目标 bot）的 create 请求参数；
+ * 独立成纯函数便于单测直接断言，startBot 与测试共用同一份构造逻辑。 */
+export function buildChatMentionMessage(
+  chatId: string,
+  target: BotIdentity,
+  text: string,
+): {
+  params: { receive_id_type: "chat_id" };
+  data: { receive_id: string; msg_type: "post"; content: string };
+} {
+  return {
+    params: { receive_id_type: "chat_id" },
+    data: {
+      receive_id: chatId,
+      msg_type: "post",
+      content: JSON.stringify(buildMentionPostContent(target, text)),
     },
   };
 }
@@ -310,6 +336,13 @@ export function startBot(options: BotOptions): Bot {
           ...(replyInThread ? { reply_in_thread: true } : {}),
         },
       });
+      return response.data?.message_id;
+    },
+    async sendMentionToChat(chatId, target, text) {
+      // 发新根消息（非回复）才会在群内形成独立话题，供目标 bot 跨话题并行承接子任务。
+      const response = await client.im.v1.message.create(
+        buildChatMentionMessage(chatId, target, text),
+      );
       return response.data?.message_id;
     },
     async sendResultNotification({

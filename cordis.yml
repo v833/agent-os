@@ -39,6 +39,20 @@ plugins:
   - name: commands/panel
   - name: collaboration
   - name: orchestration
+    config:
+      # 派发方式：topic=每个子任务在编排群内独立新话题派发（默认，同 bot 可跨话题并行承接多个子任务）；
+      # same-topic=在当前话题回复派发（兼容降级，同 bot 多子任务整轮拒绝）。
+      dispatchMode: topic
+      # 失败子任务一键重试的最大次数，默认 2；达到上限后面板不再渲染重试按钮。
+      maxRetry: 2
+      # pending 子任务等待结果的最长时间（毫秒），默认 30 分钟；超时后收口为 failed。
+      pendingTimeoutMs: 1800000
+  # 编排实时面板：/orchestrate 派发后自动挂起实时汇总面板卡片，子任务状态变化节流刷新、终态定格。
+  # 移除本条目即回退为“仅汇总文本”（orchestration/update 无消费者，事件空转无害）。
+  - name: orchestration/live-panel
+  # 编排面板动作：认领「重试」按钮，一键重新派发失败子任务（带鉴权/去重/次数上限）。
+  # 移除本条目即下线一键重试——面板不渲染重试按钮，保留手动「继续执行」。
+  - name: orchestration/actions
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification
