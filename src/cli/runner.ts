@@ -221,6 +221,18 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         fail(new Error(`${adapter.displayName} 没有返回最终结果`));
         return;
       }
+      // 续聊时若 stderr 明确提示会话已失效（如 agy 对不存在会话降级为新会话，
+      // 仍以退出码 0 返回“成功”结果），不能把静默新建会话当成功接受：
+      // 必须报错让会话层清除失效指针，下一次任务重新建立会话。
+      if (sessionId && adapter.isSessionUnavailable?.(stderr)) {
+        fail(
+          new CliRunError(
+            `${adapter.displayName} 会话已失效：${stderr.trim()}`,
+            observedSessionId,
+          ),
+        );
+        return;
+      }
 
       settled = true;
       cleanup();

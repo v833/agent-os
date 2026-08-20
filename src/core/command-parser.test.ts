@@ -127,6 +127,34 @@ test("解析新话题显式指定的 CLI 与真实任务正文", () => {
     cliId: "dimagent",
     prompt: "检查项目",
   });
+  assert.deepEqual(parseCliRequest("/agy 检查项目"), {
+    cliId: "agy",
+    prompt: "检查项目",
+  });
+});
+
+test("引擎请求按注册表注入的 CLI ID 动态解析，未注册引擎不误识别", () => {
+  const known = ["codex", "claude", "dimagent", "agy"];
+
+  assert.deepEqual(parseCliRequest("/agy 检查项目", undefined, known), {
+    cliId: "agy",
+    prompt: "检查项目",
+  });
+  assert.deepEqual(
+    parseCliRequest("@MyBot /agy 检查项目", undefined, known),
+    {
+      cliId: "agy",
+      prompt: "检查项目",
+    },
+  );
+  // 不在注册表里的引擎前缀不会被当成引擎请求，避免把任务文本误路由。
+  assert.equal(parseCliRequest("/unknown 任务", undefined, known), undefined);
+  assert.equal(
+    parseCliRequest("/other 任务", undefined, ["codex"]),
+    undefined,
+  );
+  // 空注册表时直接不识别，保证不会匹配空分支。
+  assert.equal(parseCliRequest("/codex 任务", undefined, []), undefined);
 });
 
 test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {

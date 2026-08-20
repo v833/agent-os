@@ -1,6 +1,7 @@
 /**
  * 会话命令解析器：识别控制命令和新话题的执行引擎前缀，
  * 防止普通任务文本中偶然出现斜杠字样时误触发控制或切换操作。
+ * 引擎请求按调用方注入的注册表 CLI ID 动态解析，新增引擎无需改白名单。
  */
 import type { CliId } from "../cli/types.js";
 
@@ -19,8 +20,8 @@ export type SlashCommand =
 const COMMAND_RE = /^(?:@.+?\s+)?\/(close|status|help|new|resume|team)\s*$/;
 const CD_RE = /^(?:@.+?\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+?\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
-const CLI_REQUEST_RE =
-  /^(?:@.+?\s+)?\/(claude|codex|dimagent)(?:\s+([\s\S]*))?$/;
+/** 未显式注入注册表时的回退引擎集合（router 会传入真实注册表，保持两者同步）。 */
+const DEFAULT_CLI_IDS = ["codex", "claude", "dimagent", "agy"] as const;
 // /schedule add 的周期用双引号包裹，避免任务文本里出现斜杠时误切分。
 const SCHEDULE_ADD_RE =
   /^(?:@.+?\s+)?\/schedule add\s+"([^"]+)"\s+([\s\S]+?)\s*$/;
@@ -108,14 +109,26 @@ export interface CliRequest {
   prompt: string;
 }
 
-/** 解析消息开头的引擎选择；精确提及名称允许包含空格。 */
+/** 转义正则特殊字符，保证注册表里带符号的 CLI ID 也能安全参与匹配。 */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 解析消息开头的引擎选择；精确提及名称允许包含空格。
+ * knownCliIds 由调用方从执行引擎注册表注入（router 传 ctx.cli.list()），
+ * 未传时回退到内置引擎集合，保证纯函数可独立使用。
+ */
 export function parseCliRequest(
   text: string,
   leadingMentionName?: string,
+  knownCliIds: readonly string[] = DEFAULT_CLI_IDS,
 ): CliRequest | undefined {
-  const match = CLI_REQUEST_RE.exec(
-    stripLeadingMention(text, leadingMentionName),
-  );
+  if (knownCliIds.length === 0) return undefined;
+  const pattern = knownCliIds.map(escapeRegExp).join("|");
+  const match = new RegExp(
+    `^(?:@.+?\\s+)?\\/(${pattern})(?:\\s+([\\s\\S]*))?$`,
+  ).exec(stripLeadingMention(text, leadingMentionName));
   if (!match) return undefined;
   return {
     cliId: match[1] as CliId,

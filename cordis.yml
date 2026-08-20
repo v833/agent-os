@@ -12,6 +12,7 @@ plugins:
   - name: engines/claude
   - name: engines/codex
   - name: engines/dimagent
+  - name: engines/agy
   # 标准 ACP 接入：engines 列表可声明任意提供 ACP server 的 CLI。
   # 移除本插件或 engines 列表即可整体下线 ACP 接入能力。
   - name: engines/acp

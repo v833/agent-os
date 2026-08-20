@@ -137,6 +137,57 @@ test("传入会话 ID 时 Runner 使用适配器的续聊参数", async () => {
   });
 });
 
+test("续聊时 stderr 提示会话已失效会把静默新建会话判为失败", async () => {
+  const parser = new ScriptAdapter("");
+  const adapter: CliAdapter = {
+    id: "agy",
+    command: process.execPath,
+    displayName: "测试 CLI",
+    buildArgs() {
+      throw new Error("不应构造首次对话参数");
+    },
+    buildResumeArgs(_prompt, sessionId) {
+      assert.equal(sessionId, "stale-session");
+      return [
+        "-e",
+        `
+          console.error('warning: conversation "stale-session" not found');
+          console.log(JSON.stringify({ type: "session", sessionId: "new-session" }));
+          console.log(JSON.stringify({ type: "result", answer: "新会话的回答" }));
+        `,
+      ];
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
+    },
+    parseEvents: parser.parseEvents.bind(parser),
+    // 模拟 agy 对“会话不存在”的 stderr 警告识别。
+    isSessionUnavailable(message) {
+      return /conversation[^\n]*not found/.test(message);
+    },
+  };
+
+  await assert.rejects(
+    runCli({
+      adapter,
+      prompt: "继续",
+      cwd: process.cwd(),
+      sessionId: "stale-session",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof CliRunError);
+      assert.match(error.message, /会话已失效/);
+      assert.equal(error.sessionId, "new-session");
+      return true;
+    },
+  );
+});
+
 test("协议事件明确报错时优先返回该错误", async () => {
   await assert.rejects(
     runScript(

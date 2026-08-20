@@ -69,7 +69,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/orchestration.ts`：orchestration 服务——把大任务拆解成子任务并行派发（topic/same-topic）、维护有界运行表、监听 task/result|failed 更新子任务状态，并提供失败子任务一键重试（retrySubTask，鉴权/去重/次数上限）
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
 - `src/plugins/orchestration/actions.ts`：面板动作子插件（可选）——启动时置位重试能力，认领 retry_subtask 卡片动作并映射 toast；移除即无重试按钮
-- `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
+- `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/agy/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
 - `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
 - `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
 - `src/plugins/commands/team.ts`：/team 命令插件——经 ctx.team、ctx.lark、ctx.cli 与 ctx.cards 展示成员和真实长连接状态
@@ -90,7 +90,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘
 - `src/core/session-store.test.ts`：会话文件清理、恢复和并发保存测试
-- `src/core/command-parser.ts`：会话控制命令（含 `/new`、`/resume`、`/compact`）与 `/claude`、`/codex`、`/dimagent` 引擎请求解析
+- `src/core/command-parser.ts`：会话控制命令（含 `/new`、`/resume`、`/compact`）与按注册表动态解析的引擎请求（`/claude`、`/codex`、`/dimagent`、`/agy` 等已登记引擎）
 - `src/core/command-parser.test.ts`：会话命令、compact 参数、引擎选择和误识别边界测试
 - `src/core/task-abort.ts`：任务发起人鉴权、运行实例隔离与停止信号
 - `src/core/task-abort.test.ts`：停止结果、权限、重复点击和旧卡片隔离测试
@@ -113,6 +113,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli/process-tree.ts`：headless/ACP Runner 共用的跨平台子进程树清理
 - `src/cli/dimagent-adapter.ts`：DimAgent headless 参数、JSONL 事件与 ACP 启动入口
 - `src/cli/dimagent-adapter.test.ts`：DimAgent 两种接入模式、事件翻译和能力边界测试
+- `src/cli/agy-adapter.ts`：Antigravity CLI (agy) 适配器——headless 参数、stream-json 事件翻译、会话失效判定；无命令行 MCP 注入点故不接入应用工具，无原生 compact 协议故 /compact 明确拒绝
+- `src/cli/agy-adapter.test.ts`：agy 参数构造、事件翻译、compact 拒绝与失效会话识别测试
 - `src/cli/native-sessions.ts`：原生会话入口——按 adapter 声明的 listNativeSessions 分发，未声明即不支持；具体协议实现归属各引擎适配器
 - `src/cli/native-sessions.test.ts`：原生会话目录过滤、标题回退和排序测试
 - `src/cli/native-compact.ts`：驱动 Claude/Codex 原生上下文整理协议

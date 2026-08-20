@@ -29,6 +29,7 @@ import * as teamCommand from "./commands/team.js";
 import * as claudeEngine from "./engines/claude.js";
 import * as codexEngine from "./engines/codex.js";
 import * as dimagentEngine from "./engines/dimagent.js";
+import * as agyEngine from "./engines/agy.js";
 import * as acpEngine from "./engines/acp.js";
 import * as larkPlugin from "./lark.js";
 import * as orchestrationPlugin from "./orchestration.js";
@@ -50,6 +51,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "engines/claude": claudeEngine,
   "engines/codex": codexEngine,
   "engines/dimagent": dimagentEngine,
+  "engines/agy": agyEngine,
   "engines/acp": acpEngine,
   lark: larkPlugin,
   cards: cardsPlugin,

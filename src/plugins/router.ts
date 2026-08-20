@@ -172,6 +172,8 @@ async function handleMessage(
   const cliRequest = parseCliRequest(
     resolved,
     leadingMentionName(message.text, message.mentions),
+    // 引擎请求按注册表动态解析：新增引擎插件后无需改核心解析器白名单。
+    ctx.cli.list().map((adapter) => adapter.id),
   );
   if (cliRequest && !cliRequest.prompt) {
     await bot.reply(
