@@ -4,7 +4,7 @@
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
 import type { ClarificationRequest } from "../core/clarification.js";
-import type { OrchestrationRun } from "../core/orchestration.js";
+import { retryToken, type OrchestrationRun } from "../core/orchestration.js";
 import type {
   TaskActivity,
   TaskProgressSnapshot,
@@ -74,9 +74,16 @@ export interface TeamCardOptions {
   members: TeamCardMember[];
 }
 
-/** 编排面板卡片输入：一次或多次 /orchestrate 的运行快照。 */
+/** 编排面板卡片输入：一次或多次 /orchestrate 的运行快照；maxRetry 决定重试按钮。 */
 export interface OrchestrationPanelOptions {
   runs: OrchestrationRun[];
+  /** 失败子任务最大重试次数；0/缺省不渲染重试按钮（actions 插件下线时的降级）。 */
+  maxRetry?: number;
+}
+
+/** 生成重试按钮一次性令牌的 nonce：时间戳+随机数，保证同一子任务每批渲染令牌不同。 */
+function newRetryNonce(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 const STATUS_STYLE = {
@@ -826,20 +833,47 @@ export function buildOrchestrationPanelCard(
     };
   }
 
+  const maxRetry = options.maxRetry ?? 0;
   const runElements = options.runs
     .flatMap((run) => {
       const done = run.subTasks.filter((sub) => sub.status === "done").length;
-      const subElements = run.subTasks.map((sub) => {
+      const subElements = run.subTasks.flatMap((sub) => {
         const detail =
           sub.status === "done" && sub.answer
             ? `\n${escapeFeishuMarkdown(markdownPreview(sub.answer, 200))}`
             : sub.status === "failed" && sub.error
               ? `\n_${escapeFeishuMarkdown(sub.error)}_`
               : "";
-        return {
+        const markdown = {
           tag: "markdown",
           content: `${SUBTASK_STATUS_LABEL[sub.status]} **#${escapeFeishuMarkdown(sub.id)}**［${escapeFeishuMarkdown(sub.targetBotId)}］\n${escapeFeishuMarkdown(sub.prompt)}${detail}`,
         };
+        // 仅失败且未达上限的子任务渲染「重试」按钮；maxRetry=0（actions 插件下线）不渲染。
+        if (sub.status === "failed" && maxRetry > 0 && sub.retryCount < maxRetry) {
+          return [
+            markdown,
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "重试" },
+              type: "default",
+              width: "default",
+              size: "medium",
+              behaviors: [
+                {
+                  type: "callback",
+                  value: {
+                    action: "retry_subtask",
+                    runId: run.runId,
+                    subTaskId: sub.id,
+                    // 每次渲染生成一次性令牌：服务侧按 run 实例标识完整校验后消费，拒绝重复点击。
+                    retryToken: retryToken(run.instanceId, sub.id, newRetryNonce()),
+                  },
+                },
+              ],
+            },
+          ];
+        }
+        return [markdown];
       });
       return [
         {

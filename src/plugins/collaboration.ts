@@ -15,6 +15,9 @@ import type { BotConfig } from "../core/bot-registry.js";
 import type { Bot } from "../im/lark.js";
 import type { TaskResultPayload } from "./types.js";
 
+/** 协作消息去重键最多保留的数量；超限按最旧插入顺序淘汰，避免长期运行无界增长。 */
+export const MAX_PROCESSED_TURNS = 10_000;
+
 /** 发起一次交接所需的完整参数。 */
 export interface SendDispatchOptions {
   senderConfig: BotConfig;
@@ -32,6 +35,8 @@ export interface SendDispatchOptions {
 export class CollaborationService extends Service {
   readonly inbox = new CollaborationInbox();
   readonly processedTurns = new Set<string>();
+  /** 单独维护访问顺序，保留 processedTurns 的 Set 兼容接口并实现 LRU 淘汰。 */
+  private readonly processedTurnOrder = new Map<string, true>();
 
   constructor(ctx: Context) {
     super(ctx, "collaboration");
@@ -54,7 +59,19 @@ export class CollaborationService extends Service {
   }
 
   markTurnProcessed(key: string): void {
+    // 重复事件本身仍是幂等的，但刷新其位置，避免活跃交接在容量压力下被过早淘汰。
+    this.processedTurns.delete(key);
     this.processedTurns.add(key);
+    this.processedTurnOrder.delete(key);
+    this.processedTurnOrder.set(key, true);
+    while (this.processedTurnOrder.size > MAX_PROCESSED_TURNS) {
+      const oldest = this.processedTurnOrder.keys().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      this.processedTurnOrder.delete(oldest);
+      this.processedTurns.delete(oldest);
+    }
   }
 
   /**

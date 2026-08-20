@@ -66,6 +66,9 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
 - `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
 - `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、命令派发与任务启动
+- `src/plugins/orchestration.ts`：orchestration 服务——把大任务拆解成子任务并行派发（topic/same-topic）、维护有界运行表、监听 task/result|failed 更新子任务状态，并提供失败子任务一键重试（retrySubTask，鉴权/去重/次数上限）
+- `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
+- `src/plugins/orchestration/actions.ts`：面板动作子插件（可选）——启动时置位重试能力，认领 retry_subtask 卡片动作并映射 toast；移除即无重试按钮
 - `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
 - `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
 - `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
@@ -80,6 +83,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/team-registry.test.ts`：团队成员查询、上下文和缺失 Skill 检查测试
 - `src/core/collaboration.ts`：bot 间同话题交接单、目标领取鉴权和协作轮次键
 - `src/core/collaboration.test.ts`：交接单一次性领取、目标鉴权和轮次键测试
+- `src/core/orchestration.ts`：编排数据契约——run/子任务结构（ownerOpenId/retryCount）、拆解解析、taskId 编解码、一次性重试令牌与运行表裁剪
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
 - `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
 - `src/core/session-manager.ts`：按 bot 隔离的话题映射、状态机与持久化协调

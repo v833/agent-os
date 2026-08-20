@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildChatMentionMessage,
   buildMentionPostContent,
   extractMessageText,
   getHeader,
@@ -30,6 +31,29 @@ test("构造带语言节点的真实 bot 提及 post", () => {
       },
     },
   );
+});
+
+test("sendMentionToChat 构造向群发送新根消息的 @ post 请求", () => {
+  const message = buildChatMentionMessage(
+    "oc_chat",
+    { openId: "ou_developer", name: "开发者" },
+    "请分析模块 A",
+  );
+  assert.equal(message.params.receive_id_type, "chat_id");
+  assert.equal(message.data.receive_id, "oc_chat");
+  assert.equal(message.data.msg_type, "post");
+  // 内容必须是 @ 目标 bot + 文本的 post 结构，供目标 bot 经 router 协作识别。
+  assert.deepEqual(JSON.parse(message.data.content), {
+    zh_cn: {
+      title: "",
+      content: [
+        [
+          { tag: "at", user_id: "ou_developer", user_name: "开发者" },
+          { tag: "text", text: " 请分析模块 A" },
+        ],
+      ],
+    },
+  });
 });
 
 test("提取 text 消息正文", () => {

@@ -17,9 +17,13 @@ export interface CollaborationMessage {
   prompt: string;
 }
 
-/** 以任务、轮次和目标 bot 标识当前交接，防止重复事件重复执行。 */
+/**
+ * 以任务、轮次、目标 bot 与交接单标识当前交接，防止重复事件重复执行。
+ * dispatchId 纳入键：同一交接单的重复事件仍只处理一次（幂等），而重试生成的新交接单
+ * （新 dispatchId、同 taskId/round）不会被旧记录拦截，目标 bot 可再次执行。
+ */
 export function collaborationTurnKey(message: CollaborationMessage): string {
-  return `${message.taskId}:${message.round}:${message.toBotId}`;
+  return `${message.taskId}:${message.round}:${message.toBotId}:${message.dispatchId}`;
 }
 
 /** 进程内待领取交接单；领取成功立即删除，避免同一消息重复执行。 */

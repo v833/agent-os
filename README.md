@@ -8,7 +8,7 @@
 
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
 - **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）、`ctx.orchestration`（多话题并行编排）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
-- **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，失败时广播 `task/failed`——collaboration 监听成功事件决定是否自动交接，orchestration 监听两类事件更新子任务状态。协作与编排都是可选插件，移除后任务编排不受影响。
+- **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，失败时广播 `task/failed`——collaboration 监听成功事件决定是否自动交接，orchestration 监听两类事件更新子任务状态；orchestration 再广播 `orchestration/update` / `orchestration/evicted`，可选插件 `orchestration/live-panel` 据此挂起并节流刷新实时面板卡片（移除该插件即回退为仅汇总文本），可选插件 `orchestration/actions` 认领面板「重试」按钮回调并重新派发失败子任务（移除即无重试按钮）。协作与编排都是可选插件，移除后任务编排不受影响。
 - **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
 
 默认 `cordis.yml` 内容：
@@ -36,6 +36,12 @@ plugins:
   - name: commands/schedule
   - name: collaboration
   - name: orchestration
+    config:
+      dispatchMode: topic
+      maxRetry: 2
+      pendingTimeoutMs: 1800000
+  - name: orchestration/live-panel
+  - name: orchestration/actions
   - name: commands/orchestrate
   - name: commands/panel
   - name: tasks
@@ -473,8 +479,8 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/schedule add "每 30 分钟" <任务>`：创建周期定时任务
 - `/schedule list`：查看当前 bot 的定时任务
 - `/schedule remove <id>`：删除定时任务
-- `/orchestrate <大任务>`：拆解成多个子任务并行派发给团队成员
-- `/panel`：查看所有编排运行的并行子任务进度
+- `/orchestrate <大任务>`：拆解成多个子任务并行派发给团队成员（默认 `topic` 模式：同群多话题并行派发，同一 bot 可跨话题承接多个子任务；`same-topic` 为兼容降级）
+- `/panel`：查看当前群聊、当前 bot 创建的编排运行进度（按 chatId + botId 隔离）
 - `/claude <任务>`：新话题使用 Claude Code
 - `/codex <任务>`：新话题使用 Codex
 - `/dimagent <任务>`：新话题使用 DimAgent（接入模式取 bot 的 `accessMode`）
@@ -529,9 +535,10 @@ Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给�
 流程与语义：
 
 - **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败。
-- **P0 派发方式为“同话题多 bot 并行”**：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在当前话题 `@` 目标 bot——目标 bot 走现有 router 的协作识别启动任务。会话按 `botId` 隔离，同一话题不同 bot 天然拥有独立 CLI 会话，互不阻塞；`reviewBy` 交接链不受影响。
+- **派发方式（默认 `topic`，`same-topic` 为兼容降级）**：`cordis.yml` 的 `orchestration.dispatchMode` 决定。默认 `topic`：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在编排所在群内发一条独立根消息（独立话题）`@` 目标 bot——同一 bot 可跨话题并行承接多个子任务，两个子任务各走各的话题、互不阻塞。`same-topic` 为兼容降级：改在当前话题 `@` 目标 bot，此时同一 bot 的多个子任务会被整轮拒绝。`reviewBy` 交接链不受影响。
 - **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；面板通过 `/panel` 实时查看。
-- **失败重试**：失败子任务可在话题中直接 `@` 目标 bot 发送“继续执行”，目标 bot 会基于已保存的原始子任务重试。
+- **生命周期边界**：子任务 ID 会 trim 后校验唯一性；派发接口未返回 `message_id` 会立即将子任务标记为失败并撤销交接单。同一派发尝试的重复 `task/result`/`task/failed` 事件只接受首个终态；run 默认等待结果 30 分钟，超时后未完成子任务自动标记为失败并清理交接单。
+- **失败重试**：面板卡片上为 `failed` 子任务渲染「重试」按钮（可选插件 `orchestration/actions` 提供，点击重新派发、带发起人鉴权/防重复/次数上限 `maxRetry`）；也可在话题中直接 `@` 目标 bot 发送“继续执行”让目标 bot 基于已保存的原始子任务重试。移除 `orchestration/actions` 即下线一键重试（无按钮），保留手动「继续执行」。
 - **插件化**：`orchestration`（服务）与 `commands/orchestrate`、`commands/panel`（命令）是独立插件，都在 `cordis.yml` 声明；移除 `orchestration` 即整体下线编排，`task/failed` 事件无监听者时自动退化为普通失败收尾。
 - 拆解的目标 bot 必须已就绪（运行时存在），否则整轮拒绝并提示。
 
@@ -539,7 +546,7 @@ Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给�
 
 1. 确认团队中至少两台 bot 在线（`/team` 查看连接状态）。
 2. 发送 `/orchestrate 检查 package.json 和 src/index.ts，分别让开发、审查 bot 分析`。
-3. 日志应出现 `[编排] run-001 创建，共 2 个子任务`，话题里出现两条 `@` 派发消息（各带任务编号）。
+3. 日志应出现 `[编排] run-001 创建，共 2 个子任务`，编排所在群内出现两条独立根消息（各带任务编号、独立话题，默认 `topic` 模式）。
 4. 两台目标 bot 各自独立执行（可同时运行，不互相等待）。
 5. 完成后发送 `/panel`，卡片显示 `2/2 完成`，各子任务带回答摘要。
 6. 在 `cordis.yml` 中移除 `commands/orchestrate`、`commands/panel`、`orchestration` 后重启，现有任务与协作链路仍正常。

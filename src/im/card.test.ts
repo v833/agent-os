@@ -11,6 +11,7 @@ import {
   buildClarificationCard,
   buildClarificationCompletedCard,
   buildCollaborationCard,
+  buildOrchestrationPanelCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -18,6 +19,7 @@ import {
   splitLongText,
   ThrottledCardUpdater,
 } from "./card.js";
+import type { OrchestrationRun } from "../core/orchestration.js";
 
 function progress(
   overrides: Partial<TaskProgressSnapshot> = {},
@@ -385,4 +387,109 @@ test("团队卡片展示成员职责、引擎、Skill 与连接状态", () => {
   assert.ok(text.includes("未连接"), "离线成员显示未连接");
   assert.ok(text.includes("$grill-me"), "展示项目 Skill");
   assert.ok(text.includes("Claude Code"), "展示默认执行引擎");
+});
+
+/** 构造编排 run：ownerOpenId 固定为发起人，子任务携带状态与重试次数。 */
+function orchestrationRun(
+  runId: string,
+  subTasks: Array<{
+    id: string;
+    status: "pending" | "done" | "failed";
+    retryCount?: number;
+  }>,
+): OrchestrationRun {
+  return {
+    runId,
+    // 卡片重试令牌按 run 实例标识生成，测试用固定假实例即可验证绑定关系。
+    instanceId: `instance-${runId}`,
+    prompt: `任务 ${runId}`,
+    ownerOpenId: "ou_owner",
+    chatId: "chat1",
+    botId: "testbot",
+    startedAt: new Date().toISOString(),
+    subTasks: subTasks.map((sub) => ({
+      id: sub.id,
+      prompt: `子任务 ${sub.id}`,
+      targetBotId: "developer",
+      status: sub.status,
+      retryCount: sub.retryCount ?? 0,
+      attempt: 0,
+    })),
+  };
+}
+
+/** 从编排面板卡片中取出全部「重试」按钮的 value。 */
+function retryValuesOf(
+  card: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const elements = (card.body as { elements?: unknown[] } | undefined)
+    ?.elements ?? [];
+  const values: Record<string, unknown>[] = [];
+  for (const element of elements) {
+    const behaviors = (element as { behaviors?: { value?: unknown }[] })
+      ?.behaviors ?? [];
+    for (const behavior of behaviors) {
+      const value = behavior.value;
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        (value as { action?: string }).action === "retry_subtask"
+      ) {
+        values.push(value as Record<string, unknown>);
+      }
+    }
+  }
+  return values;
+}
+
+test("失败子任务渲染「重试」按钮且 value 携带 runId/subTaskId/retryToken", () => {
+  const card = buildOrchestrationPanelCard({
+    runs: [orchestrationRun("run-001", [{ id: "t1", status: "failed" }])],
+    maxRetry: 2,
+  });
+  const values = retryValuesOf(card);
+  assert.equal(values.length, 1, "失败子任务应渲染一个重试按钮");
+  assert.equal(values[0].runId, "run-001");
+  assert.equal(values[0].subTaskId, "t1");
+  // 令牌绑定 run 实例标识而非展示编号，跨进程重启后旧令牌无法命中新 run。
+  assert.match(String(values[0].retryToken), /^instance-run-001:t1:/);
+});
+
+test("达到重试上限的失败子任务不再渲染重试按钮", () => {
+  const card = buildOrchestrationPanelCard({
+    runs: [
+      orchestrationRun("run-001", [{ id: "t1", status: "failed", retryCount: 2 }]),
+    ],
+    maxRetry: 2,
+  });
+  assert.deepEqual(retryValuesOf(card), [], "retryCount 达上限不能渲染按钮");
+});
+
+test("非 failed 子任务不渲染重试按钮", () => {
+  const card = buildOrchestrationPanelCard({
+    runs: [
+      orchestrationRun("run-001", [
+        { id: "t1", status: "done" },
+        { id: "t2", status: "pending" },
+      ]),
+    ],
+    maxRetry: 2,
+  });
+  assert.deepEqual(retryValuesOf(card), [], "非失败子任务不能渲染重试按钮");
+});
+
+test("maxRetry 缺省或为 0 时不渲染重试按钮（actions 下线降级）", () => {
+  const failed = orchestrationRun("run-001", [
+    { id: "t1", status: "failed" },
+  ]);
+  assert.deepEqual(
+    retryValuesOf(buildOrchestrationPanelCard({ runs: [failed] })),
+    [],
+    "maxRetry 缺省时不能渲染重试按钮",
+  );
+  assert.deepEqual(
+    retryValuesOf(buildOrchestrationPanelCard({ runs: [failed], maxRetry: 0 })),
+    [],
+    "maxRetry=0 时不能渲染重试按钮",
+  );
 });
