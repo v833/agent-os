@@ -69,7 +69,7 @@ plugins:
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`，需安装在成员工作目录的 `.agents/skills` 或 `.claude/skills`）。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`，需安装在成员工作目录的 `.agents/skills` 或 `.claude/skills`）。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -84,17 +84,17 @@ Copy-Item config/bots.example.json config/bots.json
       "workspace": ".",
       "role": "开发工程师，负责完成实现，并组织内部审查与测试",
       "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
-      "reviewBy": "reviewer",
+      "reviewBy": "qa",
       "collaborationMaxRounds": 16
     },
     {
-      "id": "reviewer",
-      "appIdEnv": "FEISHU_REVIEWER_APP_ID",
-      "appSecretEnv": "FEISHU_REVIEWER_APP_SECRET",
+      "id": "qa",
+      "appIdEnv": "FEISHU_QA_APP_ID",
+      "appSecretEnv": "FEISHU_QA_APP_SECRET",
       "defaultCli": "codex",
       "workspace": ".",
-      "role": "代码审查工程师，负责检查实现、发现风险并给出修改建议",
-      "systemPrompt": "你是审查助手，负责检查实现、发现风险并给出修改建议。",
+      "role": "QA 工程师，负责执行测试、验证验收标准并给出质量结论",
+      "systemPrompt": "在隔离快照中执行验证，最后只按任务给出的 QAResult 协议输出结构化结论。",
       "enabled": true
     },
     {
@@ -349,26 +349,27 @@ Agent OS 启动完成
 
 CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下一轮会自动调用 Claude Code 的 `--resume <session_id>` 或 Codex 的 `exec resume <thread_id>`；新话题没有恢复指针，会从干净上下文开始。
 
-## 同话题任务交接
+## QA 质量闸门
 
 配置 `reviewBy` 后，普通开发任务成功会按以下顺序交接：
 
 1. 开发 bot 更新原任务卡片为成功状态。
-2. Agent OS 在内存收件箱登记 `dispatchId`、来源/目标 bot、原话题 `taskId`、当前 `round`、`maxRounds`、完整审查提示词和工作目录。
+2. `workspaces` 插件为 Developer 当前工作树创建隔离快照；revision 同时覆盖 Git HEAD、dirty diff 和未跟踪文件内容。
 3. 开发 bot 回复一张“代码审查已发起”卡片，再回复一条带任务编号的 `post` 消息，真实 `@` 审查 bot。
 4. 只有被提及且匹配任务编号的目标 bot 会领取交接单；领取后立即删除，重复事件不会再次执行。
-5. 审查 bot 在来源工作目录中启动自己的 CLI 会话，完成后把最终回答作为下一项任务交回开发 bot；开发 bot 会在同一项目中处理反馈。达到轮次上限后，原话题只收到“本轮协作已完成”通知。
+5. QA 在隔离快照中执行审查，并输出结构化 `QAResult`；报告 revision 与实际快照不一致、快照被修改或协议无效时一律按 `blocked` 处理。
+6. `pass` 立即结束链路；`changes_requested` 只把结构化缺陷交回 Developer 的源工作区；`blocked` 只升级 `teamLeader`。`collaborationMaxRounds` 仅是异常循环的安全上限。
 
 卡片只负责展示项目、角色和审查说明，不能替代真实提及。交接单当前保存在内存中，服务在投递后重启会丢失尚未领取的任务；验证交接链路时不要重启服务。
 
-### 多轮协作验收
+### QA 闭环验收
 
-1. 将开发 bot 的 `reviewBy` 配为 `reviewer`，并让两台 bot 的 `workspace` 都指向同一个真实项目。
+1. 将开发 bot 的 `reviewBy` 配为 `qa`；QA 的默认 `workspace` 可独立配置，reviewBy 审查会自动使用一次性隔离快照。
 2. 运行 `pnpm build`、`pnpm test` 后启动 `pnpm start`，日志应打印两台 bot 的 `name` 和 `open_id`。
 3. 在新话题发送 `@开发助手 阅读 TASK.md，完成里面的功能并运行验证。`。
 4. 开发任务完成后，应看到“代码审查已发起”卡片和一条新的 `@审查助手` 富文本消息。
-5. 审查 bot 应在同一项目中独立检查改动，完成后看到“审查意见已返回”卡片和一条新的 `@开发助手` 富文本消息。
-6. 开发 bot 应在同一项目中处理审查反馈；达到 `collaborationMaxRounds` 后停止自动交接。
+5. QA 返回 `pass` 后不再派发；返回 `changes_requested` 后只有 Developer 收到返工任务；返回 `blocked` 后只有 Team Leader 收到升级任务。
+6. QA 报告中的 revision 必须与交接提示完全相同；在 QA 执行期间修改快照，应被闸门拒绝并升级。
 7. 向非目标 bot 转发这条通知、删除任务编号或重复投递时，目标 bot 都不应启动 CLI。
 
 ### 多轮对话验收
@@ -534,9 +535,10 @@ Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给�
 
 流程与语义：
 
-- **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败。
+- **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败，执行时继承编排 bot 的代理配置。
 - **派发方式（默认 `topic`，`same-topic` 为兼容降级）**：`cordis.yml` 的 `orchestration.dispatchMode` 决定。默认 `topic`：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在编排所在群内发一条独立根消息（独立话题）`@` 目标 bot——同一 bot 可跨话题并行承接多个子任务，两个子任务各走各的话题、互不阻塞。`same-topic` 为兼容降级：改在当前话题 `@` 目标 bot，此时同一 bot 的多个子任务会被整轮拒绝。`reviewBy` 交接链不受影响。
 - **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；面板通过 `/panel` 实时查看。
+- **工作区隔离**：每个子任务使用目标 bot 自己配置的 `workspace`；不同 bot 若指向同一可写目录，整轮拒绝并要求配置独立 worktree 或改为串行任务。
 - **生命周期边界**：子任务 ID 会 trim 后校验唯一性；派发接口未返回 `message_id` 会立即将子任务标记为失败并撤销交接单。同一派发尝试的重复 `task/result`/`task/failed` 事件只接受首个终态；run 默认等待结果 30 分钟，超时后未完成子任务自动标记为失败并清理交接单。
 - **失败重试**：面板卡片上为 `failed` 子任务渲染「重试」按钮（可选插件 `orchestration/actions` 提供，点击重新派发、带发起人鉴权/防重复/次数上限 `maxRetry`）；也可在话题中直接 `@` 目标 bot 发送“继续执行”让目标 bot 基于已保存的原始子任务重试。移除 `orchestration/actions` 即下线一键重试（无按钮），保留手动「继续执行」。
 - **插件化**：`orchestration`（服务）与 `commands/orchestrate`、`commands/panel`（命令）是独立插件，都在 `cordis.yml` 声明；移除 `orchestration` 即整体下线编排，`task/failed` 事件无监听者时自动退化为普通失败收尾。

@@ -81,6 +81,20 @@ test("原生 compact 在开始前已取消时不启动子进程", async () => {
   );
 });
 
+test("原生 compact 把 Bot 级环境注入子进程", async () => {
+  await assert.rejects(
+    compactCliSession({
+      adapter: fakeClaudeAdapter(
+        `process.stderr.write(process.env.AGENT_OS_TEST_PROXY || "missing"); process.exit(1);`,
+      ),
+      sessionId: "claude-session",
+      cwd: process.cwd(),
+      env: { AGENT_OS_TEST_PROXY: "proxy-marker" },
+    }),
+    /proxy-marker/,
+  );
+});
+
 test("Codex app-server compact 完成 contextCompaction 事件后返回成功", async () => {
   const script = [
     "const readline=require('node:readline');",

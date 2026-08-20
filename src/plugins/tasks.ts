@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { CliAdapter, CliEvent } from "../cli/types.js";
 import { CliRunError } from "../cli/runner.js";
-import { buildBotPrompt } from "../core/bot-registry.js";
+import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
 import {
   isRetryRequest,
   resolveRetryPrompt,
@@ -251,6 +251,10 @@ export class TasksService extends Service {
     progressHeartbeat.unref();
 
     // 不等待 CLI，确保长连接仍能接收 /status 和 /close 等控制消息。
+    // bot 配置了网络代理（如 agy 访问云端服务）时，把标准代理变量注入 CLI 子进程并
+    // 覆盖全局配置（bots.json 的 proxy 优先于 .env 的 HTTP_PROXY 等）；
+    // 不配置则继承父进程环境，.env 的全局代理变量自然生效。
+    const cliEnv = botCliEnvironment(botConfig);
     const execution = isCompacting
       ? this.ctx.cli
           .compact({
@@ -259,6 +263,7 @@ export class TasksService extends Service {
             cwd: session.workspaceDir,
             instructions: compactInstructions,
             signal: run.signal,
+            env: cliEnv,
           })
           .then((result) => ({
             answer: result.message ?? "",
@@ -271,6 +276,7 @@ export class TasksService extends Service {
           prompt,
           session,
           run.signal,
+          cliEnv,
           (event) => {
           if (event.type === "session") {
             // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
@@ -491,6 +497,7 @@ export class TasksService extends Service {
     prompt: string,
     session: Session,
     signal: AbortSignal,
+    env: Record<string, string> | undefined,
     onEvent: (event: CliEvent) => void,
   ) {
     console.log(
@@ -502,6 +509,7 @@ export class TasksService extends Service {
       cwd: session.workspaceDir,
       sessionId: session.cliSessionId,
       signal,
+      env,
       onEvent,
     });
   }

@@ -27,6 +27,8 @@ export interface RunCliOptions {
   /** 可选执行时限；未传入时不自动超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
+  /** 运行时注入子进程的额外环境变量（如 bot 配置的网络代理），与父进程环境合并。 */
+  env?: Record<string, string>;
   /** ACP 模式下的常驻进程；由调用方持有并负责生命周期与回收。 */
   acpDaemon?: AcpDaemon;
 }
@@ -53,6 +55,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     signal,
     timeoutMs,
     onEvent,
+    env,
   } = options;
 
   if (signal?.aborted) {
@@ -91,6 +94,8 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        // 调用方注入的环境变量（如 bot 配置的网络代理）与父进程环境合并。
+        ...(env ? { env: { ...process.env, ...env } } : {}),
       },
     );
     const lines = createInterface({ input: child.stdout });

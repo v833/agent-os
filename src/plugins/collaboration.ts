@@ -10,6 +10,7 @@ import {
   CollaborationInbox,
   collaborationTurnKey,
   type CollaborationMessage,
+  type QAReviewContext,
 } from "../core/collaboration.js";
 import type { BotConfig } from "../core/bot-registry.js";
 import type { Bot } from "../im/lark.js";
@@ -29,6 +30,8 @@ export interface SendDispatchOptions {
   maxRounds: number;
   workspaceDir: string;
   prompt: string;
+  /** 存在时交由 qa-gate 插件处理，普通 collaboration 不按轮次自动回传。 */
+  qaReview?: QAReviewContext;
 }
 
 /** 提供交接单、轮次去重与审查派发能力。 */
@@ -93,6 +96,7 @@ export class CollaborationService extends Service {
       maxRounds: options.maxRounds,
       workspaceDir: options.workspaceDir,
       prompt: options.prompt,
+      ...(options.qaReview ? { qaReview: options.qaReview } : {}),
     };
     this.inbox.register(collaboration);
     try {
@@ -137,15 +141,14 @@ export class CollaborationService extends Service {
   }
 
   /**
-   * 任务完成后的协作决策：未达轮次上限则回传来源 bot；
-   * 普通任务且配置了 reviewBy 则发起审查；否则向来源 bot 发送完成通知。
+   * 普通协作完成后的决策：未达轮次上限则回传来源 bot，否则通知来源；
+   * QA reviewBy 交接由可选 qa-gate 插件独占，避免两个监听器重复派发。
    */
   async handleTaskResult(payload: TaskResultPayload): Promise<void> {
     const {
       bot,
       botConfig,
       session,
-      requestedPrompt,
       answer,
       replyToMessageId,
       hasThread,
@@ -153,6 +156,7 @@ export class CollaborationService extends Service {
       senderRuntime,
     } = payload;
     try {
+      if (collaboration?.qaReview || (!collaboration && botConfig.reviewBy)) return;
       if (collaboration && collaboration.round < collaboration.maxRounds) {
         await this.sendDispatch({
           senderConfig: botConfig,
@@ -164,22 +168,6 @@ export class CollaborationService extends Service {
           maxRounds: collaboration.maxRounds,
           workspaceDir: session.workspaceDir,
           prompt: answer || "任务已完成，请检查当前工作目录。",
-        });
-      } else if (!collaboration && botConfig.reviewBy) {
-        await this.sendDispatch({
-          senderConfig: botConfig,
-          senderBot: bot,
-          replyToMessageId,
-          targetBotId: botConfig.reviewBy,
-          taskId: randomUUID(),
-          round: 1,
-          maxRounds: botConfig.collaborationMaxRounds,
-          workspaceDir: session.workspaceDir,
-          prompt: [
-            "请独立检查当前工作目录中刚完成的实现。",
-            `原始任务：${requestedPrompt}`,
-            "请直接读取代码和改动，指出明确问题；没有问题时说明检查通过。",
-          ].join("\n\n"),
         });
       } else if (collaboration && senderRuntime) {
         await bot.sendResultNotification({

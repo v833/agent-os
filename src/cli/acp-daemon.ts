@@ -119,6 +119,8 @@ export class AcpDaemon {
   constructor(
     private readonly adapter: CliAdapter,
     private readonly idleTimeoutMs: number = DEFAULT_IDLE_TIMEOUT_MS,
+    /** 常驻进程启动环境；同一 daemon 生命周期内保持不变。 */
+    private readonly env?: Record<string, string>,
   ) {}
 
   /** 当前常驻子进程 PID；未启动或已回收时为 undefined（也用于测试断言）。 */
@@ -157,6 +159,7 @@ export class AcpDaemon {
       {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        ...(this.env ? { env: { ...process.env, ...this.env } } : {}),
       },
     );
     this.child = child;

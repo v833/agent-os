@@ -58,6 +58,17 @@ test("解析启用 bot 的凭证、默认引擎、角色和团队负责人", () 
   assert.deepEqual(parseBotConfigs(registry(), credentials), parsed.bots);
 });
 
+test("可选 proxy 配置解析到 BotConfig，缺省时字段不存在", () => {
+  const withProxy = parseAgentOsConfig(
+    registry({ proxy: "http://127.0.0.1:10808" }),
+    credentials,
+  );
+  assert.equal(withProxy.bots[0].proxy, "http://127.0.0.1:10808");
+
+  const withoutProxy = parseAgentOsConfig(registry(), credentials);
+  assert.equal("proxy" in withoutProxy.bots[0], false);
+});
+
 test("可选字段使用默认值，停用 bot 不读取凭证", () => {
   const input = {
     teamLeader: "reviewer",

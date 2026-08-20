@@ -14,6 +14,8 @@ export interface OrchestrationSubTask {
   id: string;
   prompt: string;
   targetBotId: string;
+  /** 目标 bot 自己的隔离工作目录；派发与重试始终使用该目录。 */
+  workspaceDir?: string;
   status: OrchestrationSubTaskStatus;
   /** 子任务成功后的回答摘要。 */
   answer?: string;

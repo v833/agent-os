@@ -75,6 +75,75 @@ test("忽略日志噪音并把分段 stdout 还原成完整 JSONL", async () => 
   assert.deepEqual(result, { answer: "完成" });
 });
 
+test("调用方传入的 env 环境变量会注入子进程", async () => {
+  const parser = new ScriptAdapter("");
+  const adapter: CliAdapter = {
+    id: "agy",
+    command: process.execPath,
+    displayName: "测试 CLI",
+    buildArgs() {
+      return [
+        "-e",
+        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing" }));`,
+      ];
+    },
+    buildResumeArgs() {
+      throw new Error("不应构造续聊参数");
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
+    },
+    parseEvents: parser.parseEvents.bind(parser),
+  };
+
+  const result = await runCli({
+    adapter,
+    prompt: "测试",
+    cwd: process.cwd(),
+    env: { AGY_TEST_MARKER: "注入成功" },
+  });
+
+  assert.deepEqual(result, { answer: "注入成功" });
+});
+
+test("不传 env 时子进程继承父进程环境（.env 全局代理默认生效）", async () => {
+  const saved = process.env.AGY_INHERIT_MARKER;
+  process.env.AGY_INHERIT_MARKER = "继承成功";
+  try {
+    const result = await runScript(
+      `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_INHERIT_MARKER ?? "missing" }));`,
+    );
+    assert.deepEqual(result, { answer: "继承成功" });
+  } finally {
+    if (saved === undefined) delete process.env.AGY_INHERIT_MARKER;
+    else process.env.AGY_INHERIT_MARKER = saved;
+  }
+});
+
+test("传入的 env 覆盖父进程同名环境变量（bots.json 优先于 .env）", async () => {
+  const saved = process.env.AGY_TEST_MARKER;
+  process.env.AGY_TEST_MARKER = "全局值";
+  try {
+    const result = await runCli({
+      adapter: new ScriptAdapter(
+        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing" }));`,
+      ),
+      prompt: "测试",
+      cwd: process.cwd(),
+      env: { AGY_TEST_MARKER: "bot覆盖值" },
+    });
+    assert.deepEqual(result, { answer: "bot覆盖值" });
+  } finally {
+    if (saved === undefined) delete process.env.AGY_TEST_MARKER;
+    else process.env.AGY_TEST_MARKER = saved;
+  }
+});
+
 test("会话事件与结果分开发送时返回最新会话 ID", async () => {
   const result = await runScript(`
     console.log(JSON.stringify({ type: "session", sessionId: "new-session" }));

@@ -26,10 +26,23 @@
       "appIdEnv": "FEISHU_DEVELOPER_APP_ID",
       "appSecretEnv": "FEISHU_DEVELOPER_APP_SECRET",
       "defaultCli": "codex",
-      "workspace": "../agent-os-team-example",
-      "role": "开发工程师，负责完成实现，并组织内部审查与测试",
+      "workspace": "../agent-os-team-example-developer",
+      "role": "开发工程师，负责完成实现",
       "skills": [],
-      "systemPrompt": "保持实现直接、清楚，并在交付前完成代码审查与测试。",
+      "systemPrompt": "保持实现直接、清楚",
+      "reviewBy": "qa",
+      "collaborationMaxRounds": 16
+    },
+    {
+      "id": "qa",
+      "appIdEnv": "FEISHU_QA_APP_ID",
+      "appSecretEnv": "FEISHU_QA_APP_SECRET",
+      "defaultCli": "codex",
+      "accessMode": "headless",
+      "workspace": "../agent-os-team-example-qa",
+      "role": "测试与质量保障工程师，负责制定测试方案、编写测试用例、执行自动化测试与回归验证，并提出缺陷反馈",
+      "skills": [],
+      "systemPrompt": "专注于质量验证与测试覆盖。先读取项目文档和脚本，执行项目实际声明的测试与构建命令；针对边界场景编写或补充自动化用例，并按 QAResult 输出 verdict、revision、测试证据和结构化缺陷。默认只读业务代码，不直接修复生产逻辑。",
       "collaborationMaxRounds": 16
     }
   ]

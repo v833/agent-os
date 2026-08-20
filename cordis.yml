@@ -39,6 +39,10 @@ plugins:
   - name: commands/orchestrate
   - name: commands/panel
   - name: collaboration
+  # QA 质量闸门：解析 QAResult、固定 revision，并按通过/驳回/阻塞闭环路由。
+  # 移除此条目即可下线结构化 QA reviewBy，不影响普通 bot 协作。
+  - name: workspaces
+  - name: qa-gate
   - name: orchestration
     config:
       # 派发方式：topic=每个子任务在编排群内独立新话题派发（默认，同 bot 可跨话题并行承接多个子任务）；

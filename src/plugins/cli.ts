@@ -26,8 +26,8 @@ import type {
 
 /** 执行引擎注册与调度的统一出口。 */
 export class CliService extends Service {
-  /** 每个 acp 引擎的常驻进程；lazy 创建，插件卸载时统一关闭。 */
-  private readonly acpDaemons = new Map<CliId, AcpDaemon>();
+  /** 每个 acp 引擎 + 环境组合的常驻进程；不同代理不能共享同一子进程。 */
+  private readonly acpDaemons = new Map<string, AcpDaemon>();
 
   constructor(ctx: Context) {
     super(ctx, "cli");
@@ -46,12 +46,21 @@ export class CliService extends Service {
     return listCliAdapters();
   }
 
-  /** 获取（必要时拉起）某 acp 引擎的常驻进程。 */
-  private getAcpDaemon(adapter: CliAdapter): AcpDaemon {
-    let daemon = this.acpDaemons.get(adapter.id);
+  /** 获取（必要时拉起）某 acp 引擎和环境组合的常驻进程。 */
+  private getAcpDaemon(
+    adapter: CliAdapter,
+    env: Record<string, string> | undefined,
+  ): AcpDaemon {
+    const envKey = JSON.stringify(
+      Object.entries(env ?? {}).sort(([left], [right]) =>
+        left.localeCompare(right),
+      ),
+    );
+    const key = `${adapter.id}:${envKey}`;
+    let daemon = this.acpDaemons.get(key);
     if (!daemon) {
-      daemon = new AcpDaemon(adapter);
-      this.acpDaemons.set(adapter.id, daemon);
+      daemon = new AcpDaemon(adapter, undefined, env);
+      this.acpDaemons.set(key, daemon);
     }
     return daemon;
   }
@@ -62,7 +71,7 @@ export class CliService extends Service {
       // 注入共享常驻进程，让同引擎的后续任务复用连接而不是反复拉起进程。
       return runCliWithTransientRetry({
         ...options,
-        acpDaemon: this.getAcpDaemon(options.adapter),
+        acpDaemon: this.getAcpDaemon(options.adapter, options.env),
       });
     }
     return runCliWithTransientRetry(options);

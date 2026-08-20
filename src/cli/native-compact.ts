@@ -16,6 +16,8 @@ export interface CompactCliSessionOptions {
   instructions?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  /** 与父进程环境合并后注入 compact 子进程。 */
+  env?: Record<string, string>;
 }
 
 export interface CompactCliSessionResult {
@@ -72,6 +74,7 @@ function runClaudeCompact(
         cwd: options.cwd,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
+        ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
       },
     );
     const lines = createInterface({ input: child.stdout });
@@ -167,6 +170,7 @@ function runCodexCompact(
         cwd: options.cwd,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
       },
     );
     const lines = createInterface({ input: child.stdout });
@@ -271,4 +275,3 @@ export function compactCliSession(
     ? runClaudeCompact(plan, options)
     : runCodexCompact(plan, options);
 }
-

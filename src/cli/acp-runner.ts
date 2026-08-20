@@ -12,7 +12,7 @@ import type { CliRunResult } from "./types.js";
  * 完成本轮后立即关闭；需要复用进程请通过 RunCliOptions.acpDaemon 注入。
  */
 export async function runAcp(options: RunCliOptions): Promise<CliRunResult> {
-  const daemon = new AcpDaemon(options.adapter);
+  const daemon = new AcpDaemon(options.adapter, undefined, options.env);
   try {
     return await daemon.runTurn(options);
   } finally {

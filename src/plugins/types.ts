@@ -10,6 +10,7 @@ import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
 import type { OrchestrationRun } from "../core/orchestration.js";
+import type { QAResult } from "../core/qa-result.js";
 import type { Session } from "../core/session-manager.js";
 import type { CliAdapter, CliRunResult } from "../cli/types.js";
 import type { CardJson } from "../im/card.js";
@@ -34,6 +35,7 @@ import type { ScheduleService } from "./schedule.js";
 import type { SessionsService } from "./sessions.js";
 import type { TasksService } from "./tasks.js";
 import type { TeamService } from "./team.js";
+import type { WorkspacesService } from "./workspaces.js";
 
 declare module "cordis" {
   interface Context {
@@ -61,6 +63,8 @@ declare module "cordis" {
     schedule: ScheduleService;
     /** 多话题并行编排：拆解大任务、派发子任务并汇总结果（移除本插件即下线编排）。 */
     orchestration: OrchestrationService;
+    /** 工作区稳定 revision 指纹，供 QA Gate 固定和验证审查版本。 */
+    workspaces: WorkspacesService;
   }
 
   interface Events {
@@ -88,6 +92,8 @@ declare module "cordis" {
      * 与 task/result 语义区分（后者只在成功时广播），编排等插件据此标记子任务失败。
      */
     "task/failed"(payload: TaskResultPayload): void | Promise<void>;
+    /** QA Gate 已解析、校验并绑定实际 revision 的结构化审查结论。 */
+    "qa/result"(payload: QAResultPayload): void | Promise<void>;
     /** 编排运行状态更新广播；orchestration 服务发出，live-panel 插件消费并节流刷新面板卡片。 */
     "orchestration/update"(
       payload: OrchestrationUpdatePayload,
@@ -167,6 +173,11 @@ export interface TaskResultPayload {
   hasThread: boolean;
   collaboration?: CollaborationMessage;
   senderRuntime?: BotRuntime;
+}
+
+/** QA Gate 从普通 CLI 文本中解析出的结构化、可路由结论。 */
+export interface QAResultPayload extends TaskResultPayload {
+  qaResult: QAResult;
 }
 
 /** 实时面板挂卡片所需锚点：回复目标与话题参数，由编排服务创建 run 时记录。 */

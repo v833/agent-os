@@ -35,11 +35,13 @@ import * as larkPlugin from "./lark.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
+import * as qaGatePlugin from "./qa-gate.js";
 import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
 import * as teamPlugin from "./team.js";
+import * as workspacesPlugin from "./workspaces.js";
 
 /** 插件名 → 插件对象；新增插件时在这里登记名字，供 cordis.yml 引用。 */
 const pluginRegistry: Record<string, Plugin> = {
@@ -68,6 +70,8 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/orchestrate": orchestrateCommand,
   "commands/panel": panelCommand,
   collaboration: collaborationPlugin,
+  workspaces: workspacesPlugin,
+  "qa-gate": qaGatePlugin,
   orchestration: orchestrationPlugin,
   "orchestration/actions": orchestrationActions,
   "orchestration/live-panel": orchestrationLivePanel,

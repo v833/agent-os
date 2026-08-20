@@ -65,6 +65,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
 - `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
 - `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
+- `src/plugins/workspaces.ts`：workspaces 服务——创建/回收 QA 隔离快照并计算稳定工作树 revision
+- `src/plugins/qa-gate.ts`：QA 质量闸门——解析 QAResult、校验实际快照 revision，并按 pass/changes_requested/blocked 闭环路由
 - `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、命令派发与任务启动
 - `src/plugins/orchestration.ts`：orchestration 服务——把大任务拆解成子任务并行派发（topic/same-topic）、维护有界运行表、监听 task/result|failed 更新子任务状态，并提供失败子任务一键重试（retrySubTask，鉴权/去重/次数上限）
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
@@ -86,6 +88,12 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/orchestration.ts`：编排数据契约——run/子任务结构（ownerOpenId/retryCount）、拆解解析、taskId 编解码、一次性重试令牌与运行表裁剪
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
 - `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
+- `src/core/workspace-revision.ts`：基于 HEAD、dirty diff 与未跟踪文件内容生成稳定工作树指纹
+- `src/core/workspace-revision.test.ts`：HEAD、已跟踪改动与未跟踪内容指纹变化测试
+- `src/core/workspace-snapshot.ts`：把 Developer 交付版本物化为 QA 专用隔离 worktree/目录快照
+- `src/core/workspace-snapshot.test.ts`：dirty 快照物化、依赖复用与安全清理测试
+- `src/core/qa-result.ts`：QAResult Schema、结论动作与测试/缺陷语义一致性校验
+- `src/core/qa-result.test.ts`：三态结论、动作、测试状态与缺陷等级一致性测试
 - `src/core/session-manager.ts`：按 bot 隔离的话题映射、状态机与持久化协调
 - `src/core/session-manager.test.ts`：会话路由、恢复、回滚和状态流转测试
 - `src/core/session-store.ts`：会话 JSON 校验、重启恢复与原子写盘

@@ -4,9 +4,9 @@
  * 这里是“一切皆为插件”装配方式的端到端验证：替换 lark/cli 实现即可测试。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { platform, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { Context, Service } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
@@ -35,6 +35,7 @@ import * as commandsPlugin from "./commands.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
+import * as qaGatePlugin from "./qa-gate.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
 import * as statusCommand from "./commands/status.js";
@@ -43,6 +44,7 @@ import * as routerPlugin from "./router.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
 import * as teamPlugin from "./team.js";
+import * as workspacesPlugin from "./workspaces.js";
 import { waitForAllActive } from "./loader.js";
 import { retryToken } from "../core/orchestration.js";
 import type { BotRuntime } from "./types.js";
@@ -401,6 +403,15 @@ async function createHost(
   const sessionsDir = await mkdtemp(join(tmpdir(), "agent-os-host-"));
   const clarificationsPath = join(sessionsDir, "clarifications.json");
   tempDirs.push(sessionsDir);
+  // 编排安全边界要求不同 bot 使用不同工作目录；测试宿主为每个成员创建隔离目录，
+  // 需要验证冲突的用例可在挂载后显式构造同路径配置。
+  const configuredBots = await Promise.all(
+    bots.map(async (config) => {
+      const workspaceDir = join(sessionsDir, `workspace-${config.id}`);
+      await mkdir(workspaceDir, { recursive: true });
+      return { ...config, workspaceDir };
+    }),
+  );
 
   const configPlugin = {
     name: "config",
@@ -422,7 +433,7 @@ async function createHost(
   };
 
   await Promise.all([
-    root.plugin(configPlugin, { bots }),
+    root.plugin(configPlugin, { bots: configuredBots }),
     root.plugin(teamPlugin),
     root.plugin(cliPlugin),
     root.plugin(larkPlugin),
@@ -433,6 +444,8 @@ async function createHost(
     root.plugin(statusCommand),
     root.plugin(teamCommand),
     root.plugin(collaborationPlugin),
+    root.plugin(workspacesPlugin),
+    root.plugin(qaGatePlugin),
     root.plugin(orchestrationPlugin, orchestrationConfig),
     // live-panel 是可选的：不传即回退为“仅汇总文本”，保持现有 /orchestrate 行为。
     ...(livePanel ? [root.plugin(orchestrationLivePanel)] : []),
@@ -719,10 +732,270 @@ test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () 
   );
 });
 
+function qaAnswer(
+  revision: string,
+  verdict: "pass" | "changes_requested" | "blocked",
+): string {
+  const action = {
+    pass: "close",
+    changes_requested: "return_to_developer",
+    blocked: "escalate",
+  }[verdict];
+  return JSON.stringify({
+    verdict,
+    revision,
+    tests: [{ command: "pnpm test", status: "passed", exitCode: 0 }],
+    findings: verdict === "pass"
+      ? []
+      : [{
+          id: "QA-001",
+          severity: verdict === "changes_requested" ? "P1" : "P2",
+          location: "src/module.ts:10",
+          reproduction: "运行相关测试",
+          expected: "行为符合验收标准",
+          actual: "行为不符合或环境缺失",
+          recommendation: "修复后重新执行测试",
+        }],
+    nextAction: action,
+  });
+}
+
+async function beginQaReview(
+  host: Host,
+  developer: BotConfig,
+): Promise<CollaborationMessage> {
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: developer,
+    session: { ...fakeSession(), botId: developer.id },
+    requestedPrompt: "实现用户注册功能",
+    answer: "开发完成",
+    replyToMessageId: "m1",
+    hasThread: false,
+  });
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId, "QA 派发必须携带任务编号");
+  const collaboration = host.root.collaboration.consume(dispatchId, "qa");
+  assert.ok(collaboration?.qaReview?.revision, "QA 交接单必须携带 revision");
+  assert.notEqual(
+    collaboration.workspaceDir,
+    collaboration.qaReview.sourceWorkspaceDir,
+    "QA 必须在隔离快照中审查，而不是直接使用 Developer 工作区",
+  );
+  assert.equal(
+    collaboration.workspaceDir,
+    collaboration.qaReview.snapshotWorkspaceDir,
+  );
+  await access(collaboration.workspaceDir);
+  return collaboration;
+}
+
+async function qaGateHost() {
+  const leader: BotConfig = { ...baseBotConfig, id: "leader" };
+  const developer: BotConfig = {
+    ...baseBotConfig,
+    id: "developer",
+    reviewBy: "qa",
+  };
+  const qa: BotConfig = { ...baseBotConfig, id: "qa" };
+  const host = await createHost([leader, developer, qa]);
+  for (const config of [leader, developer, qa]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  return { host, leader, developer, qa };
+}
+
+test("QAResult pass 立即结束 reviewBy，不再交回 Developer", async () => {
+  const { host, developer, qa } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+  const revision = collaboration.qaReview!.revision;
+
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: qa,
+    session: { ...fakeSession(), botId: qa.id },
+    requestedPrompt: collaboration.prompt,
+    answer: qaAnswer(revision, "pass"),
+    replyToMessageId: "qa-message",
+    hasThread: true,
+    collaboration,
+  });
+
+  assert.ok(host.calls.mentions.some((text) => text.includes("QA 审查通过")));
+  assert.equal(
+    host.calls.mentions.filter((text) => text.includes("审查反馈已经返回")).length,
+    0,
+  );
+  await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
+});
+
+test("QAResult changes_requested 只生成给 Developer 的返工交接", async () => {
+  const { host, developer, qa } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: qa,
+    session: { ...fakeSession(), botId: qa.id },
+    requestedPrompt: collaboration.prompt,
+    answer: qaAnswer(collaboration.qaReview!.revision, "changes_requested"),
+    replyToMessageId: "qa-message",
+    hasThread: true,
+    collaboration,
+  });
+
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  const rework = host.root.collaboration.consume(dispatchId, "developer");
+  assert.equal(rework?.qaReview?.stage, "rework");
+  assert.equal(
+    rework?.workspaceDir,
+    collaboration.qaReview!.sourceWorkspaceDir,
+    "返工必须回到 Developer 源工作区",
+  );
+  assert.equal(host.root.collaboration.consume(dispatchId, "leader"), undefined);
+  await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
+});
+
+test("QAResult blocked 只升级 Team Leader，不回传 Developer", async () => {
+  const { host, developer, qa } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: qa,
+    session: { ...fakeSession(), botId: qa.id },
+    requestedPrompt: collaboration.prompt,
+    answer: qaAnswer(collaboration.qaReview!.revision, "blocked"),
+    replyToMessageId: "qa-message",
+    hasThread: true,
+    collaboration,
+  });
+
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  assert.ok(host.root.collaboration.consume(dispatchId, "leader"));
+  assert.equal(host.root.collaboration.consume(dispatchId, "developer"), undefined);
+  await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
+});
+
+test("QA 快照被修改时拒绝 pass 并升级 Team Leader", async () => {
+  const { host, developer, qa } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+  await writeFile(join(collaboration.workspaceDir, "qa-mutated.txt"), "changed", "utf8");
+
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: qa,
+    session: { ...fakeSession(), botId: qa.id },
+    requestedPrompt: collaboration.prompt,
+    answer: qaAnswer(collaboration.qaReview!.revision, "pass"),
+    replyToMessageId: "qa-message",
+    hasThread: true,
+    collaboration,
+  });
+
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  assert.ok(host.root.collaboration.consume(dispatchId, "leader"));
+  assert.equal(host.root.collaboration.consume(dispatchId, "developer"), undefined);
+});
+
+test("QA CLI 执行失败时生成 blocked 结论并升级 Team Leader", async () => {
+  const { host, developer, qa } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+
+  await host.root.parallel("task/failed", {
+    bot: host.bot,
+    botConfig: qa,
+    session: { ...fakeSession(), botId: qa.id },
+    requestedPrompt: collaboration.prompt,
+    answer: "",
+    replyToMessageId: "qa-message",
+    hasThread: true,
+    collaboration,
+  });
+
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  assert.ok(host.root.collaboration.consume(dispatchId, "leader"));
+  await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
+});
+
+test("Developer 返工后的复审快照创建失败时清理旧快照并升级 Team Leader", async () => {
+  const { host, developer } = await qaGateHost();
+  const collaboration = await beginQaReview(host, developer);
+  const rework: CollaborationMessage = {
+    ...collaboration,
+    fromBotId: "qa",
+    toBotId: developer.id,
+    round: 2,
+    maxRounds: 4,
+    workspaceDir: collaboration.qaReview!.sourceWorkspaceDir,
+    qaReview: { ...collaboration.qaReview!, stage: "rework" },
+  };
+  let emittedVerdict: string | undefined;
+  host.root.on("qa/result", (payload) => {
+    emittedVerdict = payload.qaResult.verdict;
+  });
+
+  const originalSnapshot = host.root.workspaces.snapshot.bind(
+    host.root.workspaces,
+  );
+  host.root.workspaces.snapshot = async () => {
+    throw new Error("模拟复审快照失败");
+  };
+  try {
+    await host.root.parallel("task/result", {
+      bot: host.bot,
+      botConfig: developer,
+      session: { ...fakeSession(), botId: developer.id },
+      requestedPrompt: rework.prompt,
+      answer: "返工完成",
+      replyToMessageId: "developer-message",
+      hasThread: true,
+      collaboration: rework,
+    });
+  } finally {
+    host.root.workspaces.snapshot = originalSnapshot;
+  }
+
+  assert.equal(emittedVerdict, "blocked");
+  await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  assert.ok(host.root.collaboration.consume(dispatchId, "leader"));
+  assert.equal(host.root.collaboration.consume(dispatchId, "qa"), undefined);
+  assert.ok(
+    !host.calls.replies.some((text) => text.includes("QA Gate 处理失败")),
+    "复审快照失败必须由 blocked 结论收口，而不是落入通用错误回复",
+  );
+});
+
 test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示", async () => {
+  const orchestratorConfig: BotConfig = {
+    ...baseBotConfig,
+    proxy: "http://127.0.0.1:10808",
+  };
   const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
   const productConfig: BotConfig = { ...baseBotConfig, id: "product" };
-  const host = await createHost([baseBotConfig, developerConfig, productConfig]);
+  const host = await createHost([orchestratorConfig, developerConfig, productConfig]);
   host.lark.runtimes.set("developer", {
     config: developerConfig,
     bot: host.bot,
@@ -741,12 +1014,17 @@ test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示",
       text: "/orchestrate 检查 TASK.md 的 A、B、C 三个模块",
     }),
     host.bot,
-    baseBotConfig,
+    orchestratorConfig,
   );
   await waitFor(() => host.cli.captured !== undefined);
   assert.ok(
     host.cli.captured?.prompt.includes("可派发的成员"),
     "拆解提示词必须列出可派发的成员",
+  );
+  assert.equal(
+    host.cli.captured?.env?.HTTPS_PROXY,
+    orchestratorConfig.proxy,
+    "编排拆解也必须继承发起 Bot 的代理环境",
   );
 
   // 编排 bot 的 CLI 返回结构化子任务清单。
@@ -810,6 +1088,49 @@ test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示",
   assert.ok(panel.includes("run-001"), "面板包含编排运行号");
   assert.ok(panel.includes("✅ 完成"), "已完成子任务显示完成标记");
   assert.ok(panel.includes("⏳ 等待"), "未完成子任务保持等待");
+});
+
+test("/orchestrate 拒绝通过目录别名共享同一物理工作区的不同 Bot", async (t) => {
+  if (platform() !== "win32") {
+    t.skip("junction 别名用例仅在 Windows 验证");
+    return;
+  }
+  const developerConfig: BotConfig = { ...baseBotConfig, id: "developer" };
+  const qaConfig: BotConfig = { ...baseBotConfig, id: "qa" };
+  const host = await createHost([baseBotConfig, developerConfig, qaConfig]);
+  const targetDir = host.root.config.bot("developer")!.workspaceDir;
+  const aliasDir = join(dirname(targetDir), "workspace-qa-alias");
+  await symlink(targetDir, aliasDir, "junction");
+  host.root.config.bot("qa")!.workspaceDir = aliasDir;
+  for (const config of [developerConfig, qaConfig]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/orchestrate 并行开发与测试" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  host.cli.finish({
+    answer: JSON.stringify({
+      tasks: [
+        { id: "dev", prompt: "实现", bot: "developer" },
+        { id: "qa", prompt: "测试", bot: "qa" },
+      ],
+    }),
+  });
+
+  await waitFor(() =>
+    host.calls.replies.some((text) => text.includes("共享可写工作目录")),
+  );
+  assert.equal(host.root.orchestration.list().length, 0);
+  assert.equal(host.calls.sentToChat.length, 0);
 });
 
 test("/panel 只展示当前 chatId 与 botId 的 run，不泄露其他租户内容", async () => {

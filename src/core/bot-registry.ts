@@ -24,12 +24,31 @@ export interface BotConfig {
   reviewBy?: string;
   /** 一次 bot 协作允许发生的最大交接次数。 */
   collaborationMaxRounds: number;
+  /**
+   * 该 bot 执行 CLI 时注入的网络代理 URL（可选）；配置后会把 HTTP_PROXY/
+   * HTTPS_PROXY/ALL_PROXY 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用。
+   * 不配置则不注入，保持直连。
+   */
+  proxy?: string;
 }
 
 /** 完整团队配置：负责人的稳定 ID 与全部启用的成员。 */
 export interface AgentOsConfig {
   teamLeaderId: string;
   bots: BotConfig[];
+}
+
+/** 把 bot 级代理配置转换为标准 CLI 子进程环境；缺省时继承父进程环境。 */
+export function botCliEnvironment(
+  config: BotConfig,
+): Record<string, string> | undefined {
+  if (!config.proxy) return undefined;
+  return {
+    HTTP_PROXY: config.proxy,
+    HTTPS_PROXY: config.proxy,
+    ALL_PROXY: config.proxy,
+    NO_PROXY: "localhost,127.0.0.1,::1",
+  };
 }
 
 type Environment = Record<string, string | undefined>;
@@ -66,6 +85,8 @@ const BotSchema = z.object({
     .max(32)
     .optional()
     .default(16),
+  // 网络代理 URL（可选）：bot 执行 CLI 时注入 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY。
+  proxy: z.string().url().optional(),
   enabled: z.boolean().optional().default(true),
 });
 
@@ -115,6 +136,7 @@ export function parseAgentOsConfig(
         systemPrompt: bot.systemPrompt,
         ...(bot.reviewBy ? { reviewBy: bot.reviewBy } : {}),
         collaborationMaxRounds: bot.collaborationMaxRounds,
+        ...(bot.proxy ? { proxy: bot.proxy } : {}),
         workspaceDir: resolveWorkspacePath(
           bot.workspace ??
             (env.CLI_WORKDIR?.trim() ||

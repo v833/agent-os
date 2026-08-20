@@ -33,7 +33,7 @@ lines.on("line", (line) => {
   const sessionId = message.params.sessionId;
   send({
     method: "session/update",
-    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "答-" + sessionId } } }
+    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.AGENT_OS_TEST_PROXY || ("答-" + sessionId) } } }
   });
   send({ id: message.id, result: { stopReason: "end_turn", usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } } });
 });
@@ -102,6 +102,18 @@ test("AcpDaemon 常驻复用：多轮任务共享同一子进程", async () => {
     assert.equal(daemon.pid, pidAfterFirst, "第二轮应复用同一进程而不是重新拉起");
     assert.equal(second.sessionId, "acp-session-1");
     assert.equal(second.answer, "答-acp-session-1");
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("AcpDaemon 把 Bot 级环境注入常驻子进程", async () => {
+  const daemon = new AcpDaemon(new AcpScriptAdapter(), undefined, {
+    AGENT_OS_TEST_PROXY: "proxy-marker",
+  });
+  try {
+    const result = await daemon.runTurn({ prompt: "检查环境", cwd: process.cwd() });
+    assert.equal(result.answer, "proxy-marker");
   } finally {
     await daemon.close();
   }

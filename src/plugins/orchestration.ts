@@ -2,7 +2,8 @@
  * orchestration 编排服务插件：把一个大任务拆成多个子任务并行派发给不同 bot，
  * 并汇总子任务结果供 /panel 展示。派发方式由插件 config 的 dispatchMode 决定：
  * 默认 topic（每个子任务在编排群内发一条新根消息 @ 目标 bot，形成独立话题，
- * 同一 bot 可跨话题并行承接多个子任务）；same-topic 是 P0 降级方案（在当前话题
+ * 同一 bot 可跨话题并行承接多个子任务）；不同 bot 必须配置不同 workspace，
+ * 避免并发写入同一工作树；same-topic 是 P0 降级方案（在当前话题
  * 回复派发）。每个子任务构造协作交接单（round=1/maxRounds=1）经 ctx.collaboration
  * 注册，再由 @ 消息派发——目标 bot 走现有 router 的协作识别启动任务；
  * 成功/失败分别由 task/result、task/failed 事件驱动子任务状态。
@@ -22,7 +23,9 @@
  */
 import { Service, type Context } from "cordis";
 import { randomUUID } from "node:crypto";
-import type { BotConfig } from "../core/bot-registry.js";
+import { realpath } from "node:fs/promises";
+import { normalize } from "node:path";
+import { botCliEnvironment, type BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import {
   MAX_RUNS,
@@ -85,7 +88,6 @@ interface RunDispatchContext {
   chatId: string;
   replyToMessageId: string;
   hasThread: boolean;
-  workspaceDir: string;
 }
 
 /** 启动一次编排所需的全部输入，由 /orchestrate 命令插件组装。 */
@@ -216,8 +218,7 @@ export class OrchestrationService extends Service {
     }
 
     // same-topic 降级：同一目标 bot 在同一话题同一时刻只能执行一个任务，多个子任务派给
-    // 同一 bot 时，router 的 busy 检查会拒绝第二个（交接单已消费、任务未启动），造成静默
-    // 丢子任务，因此派发前整轮拒绝。topic 模式每个子任务独立新话题，同 bot 可并行，不拒绝。
+    // 同一 bot 时，router 的 busy 检查会拒绝第二个，因此派发前整轮拒绝。
     const duplicatedBots = [
       ...new Set(
         specs
@@ -234,13 +235,52 @@ export class OrchestrationService extends Service {
       return;
     }
 
+    // 不同 bot 并行写同一目录会造成覆盖和误测。子任务实际使用目标 bot 的 workspace；
+    // 不同成员共享目录时整轮拒绝，要求配置独立 worktree 或重新拆成串行任务。
+    const workspaces = new Map<string, string[]>();
+    for (const spec of specs) {
+      const workspaceDir = this.ctx.config.bot(spec.bot)!.workspaceDir;
+      // realpath 折叠 junction/符号链接别名；仅比较字符串会漏掉两个配置路径实际指向
+      // 同一物理目录的情况，仍会产生并发覆盖。
+      let canonicalDir: string;
+      try {
+        canonicalDir = await realpath(workspaceDir);
+      } catch (error) {
+        await bot.reply(
+          message.messageId,
+          `成员 ${spec.bot} 的工作目录不可用：${(error as Error).message}`,
+          hasThread,
+        );
+        return;
+      }
+      const key = process.platform === "win32"
+        ? normalize(canonicalDir).toLowerCase()
+        : normalize(canonicalDir);
+      const members = workspaces.get(key) ?? [];
+      members.push(`${spec.bot}#${spec.id}`);
+      workspaces.set(key, members);
+    }
+    const sharedWorkspaces = [...workspaces.entries()].filter(
+      ([, members]) =>
+        new Set(members.map((member) => member.split("#", 1)[0])).size > 1,
+    );
+    if (sharedWorkspaces.length) {
+      await bot.reply(
+        message.messageId,
+        `以下并行子任务共享可写工作目录：${sharedWorkspaces
+          .map(([path, members]) => `${members.join("/")} -> ${path}`)
+          .join("；")}。请为对应 bot 配置不同 worktree，或改为串行任务。`,
+        hasThread,
+      );
+      return;
+    }
+
     const run = this.createRun(prompt, specs, message.senderOpenId, {
       bot,
       fromBotId: botConfig.id,
       chatId: message.chatId,
       replyToMessageId: message.messageId,
       hasThread,
-      workspaceDir: session.workspaceDir,
     });
     const failures: string[] = [];
     for (const sub of run.subTasks) {
@@ -253,7 +293,6 @@ export class OrchestrationService extends Service {
           message.chatId,
           message.messageId,
           hasThread,
-          session.workspaceDir,
         );
       } catch (error) {
         sub.status = "failed";
@@ -300,13 +339,14 @@ export class OrchestrationService extends Service {
         id: spec.id,
         prompt: spec.prompt,
         targetBotId: spec.bot,
+        workspaceDir: this.ctx.config.bot(spec.bot)!.workspaceDir,
         status: "pending",
         retryCount: 0,
         attempt: 0,
       })),
     };
     this.runs.set(run.runId, run);
-    // 记录派发上下文：失败子任务重试时复用同一派发路径（目标/话题/工作目录不变）。
+    // 记录派发上下文：失败子任务重试时复用同一派发路径；工作目录保存在子任务自身。
     this.runContexts.set(run.runId, context);
     // 每次创建 run 后触发淘汰：把已完成的旧 run 清理到 MAX_RUNS 以内，
     // 覆盖“子任务同步派发失败、未走事件即终态”的运行也能被清理的场景。
@@ -407,6 +447,7 @@ export class OrchestrationService extends Service {
       cwd: session.workspaceDir,
       // 拆解是编排 bot 的一次独立规划，不复用用户会话上下文，避免污染后续任务。
       timeoutMs: DECOMPOSE_TIMEOUT_MS,
+      env: botCliEnvironment(botConfig),
       onEvent: () => {},
     });
     return parseSubTaskSpecs(result.answer);
@@ -421,7 +462,6 @@ export class OrchestrationService extends Service {
     chatId: string,
     replyToMessageId: string,
     hasThread: boolean,
-    workspaceDir: string,
   ): Promise<void> {
     // 派发入口先清空 currentDispatchId：任何失败路径（含目标 bot 未就绪、注册前抛错）都
     // 不能残留上一 attempt 的交接单号，否则重试后旧 attempt 的迟到结果可能错误命中。
@@ -439,7 +479,10 @@ export class OrchestrationService extends Service {
       toBotId: sub.targetBotId,
       round: 1,
       maxRounds: 1,
-      workspaceDir,
+      workspaceDir:
+        sub.workspaceDir ??
+        this.ctx.config.bot(sub.targetBotId)?.workspaceDir ??
+        process.cwd(),
       prompt: sub.prompt,
     };
     // 复用协作交接单：router 对 bot@bot 消息只认已注册的交接单，注册失败会丢消息。
@@ -568,7 +611,6 @@ export class OrchestrationService extends Service {
         context.chatId,
         context.replyToMessageId,
         context.hasThread,
-        context.workspaceDir,
       );
     } catch (error) {
       // 派发失败回滚为 failed 并记录原因；令牌已消费，用户刷新面板后用新令牌再试。
