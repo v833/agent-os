@@ -1,6 +1,6 @@
 # Agent OS
 
-当前阶段支持从飞书话题真实调度 Codex、Claude Code 或 DimAgent，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎、接入模式和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
+当前阶段支持从飞书话题真实调度 Codex、Claude Code、DimAgent 或 agy，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎、接入模式和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## Cordis 插件架构（一切皆为插件）
 
@@ -180,6 +180,18 @@ claude
 
 Codex 通过 `codex exec --json --sandbox danger-full-access --skip-git-repo-check` 运行，拥有完整系统访问权限；同一话题追问使用带 `--sandbox danger-full-access` 的 `codex exec resume`。Claude Code 通过 `claude -p --output-format stream-json --verbose` 运行，权限和模型后端沿用用户级 Claude Code 配置。
 
+### Antigravity（agy headless）
+
+安装并完成 agy 登录后，可在 `config/bots.json` 中把 bot 的 `defaultCli` 设置为 `agy`。agy 的 `-p/--print` headless 模式会加载 MCP；Agent OS 每轮启动前会把插件注册的 stdio Server 合并到当前工作区 `.agents/mcp_config.json`，保留用户已有的其他 Server，因此 `request_clarification` 也能进入飞书表单链路。agy 的全局 MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
+
+```powershell
+agy --version
+agy mcp list
+pnpm probe:tool agy .
+```
+
+agy 当前没有原生 `/compact` 协议；话题仍可发送普通任务继续整理上下文。
+
 ### DimAgent（headless / ACP）
 
 安装并先在交互界面完成 provider、模型和 MCP 配置：
@@ -190,6 +202,8 @@ dim
 ```
 
 DimAgent 的官方 CLI 入口是 `dim`；如果使用自定义命令名，可在 `.env` 中通过 `DIMAGENT_COMMAND` 覆盖。
+
+官方 CLI 支持 stdio 与 HTTP MCP：`dim mcp add` 管理 `~/.dimcode/v2/mcp.json`，项目级配置为 `<project>/.mcp.json`；`dim exec` 默认加载配置中的 MCP，也可用 `--mcp-server <id>` 选择 Server。Agent OS 每轮 headless 执行前会把 `request_clarification` Server 增量写入当前项目的 `.mcp.json`，保留已有 Server；设置 `DIMAGENT_MCP_CONFIG_PATH` 可覆盖写入位置。
 
 bot 通过 `accessMode` 选择接入方式，未填写时默认 `headless`：
 
@@ -204,8 +218,20 @@ bot 通过 `accessMode` 选择接入方式，未填写时默认 `headless`：
 
 - `headless`：每轮调用 `dim exec --json --policy full-access`，续聊使用 `dim exec resume <session-id>`。
 - `acp`：由 `engines/acp` 插件以标准 ACP 协议接入——维护单个常驻 `dim acp` 进程，任务在同一进程上并发执行，新建或恢复 session 后把消息分片、工具状态与 token 用量映射到实时卡片；空闲自动回收、崩溃自动重连。
-- ACP 和 headless 都复用 `~/.dimcode/v2/` 中的 provider、模型、MCP 与凭据配置。
-- 飞书没有同步权限确认界面；ACP 遇到权限请求时会自动选择 `allow_always` 或 `allow_once`，与 headless 的 `full-access` 行为保持一致。只应配置可信且可回退的工作目录。
+- ACP 与 headless 都复用 `~/.dimcode/v2/` 中的 provider、模型和凭据配置。`initialize` 不调用 `authenticate`，直接使用已有 Dim OAuth 登录。`session/new`、`resume`、`load` 的 `cwd` 会统一解析为绝对路径。
+- Dim ACP 恢复按 `session/load` 走跨进程续接，要求 `dim >= 0.3.10`；旧会话锁仍在释放时会有限退避重试，找不到会话则清理失效指针并提示重新建立。
+- `engines/acp` 的 `session.configOptions` 会在建 session 后按声明顺序调用 `session/set_config_option`；当前 DimAgent 配置为 `permission=full-access`、`mode=agent`，否则写入和进程工具会被只读预设静默拒绝。配置失败会终止本轮，不会假装继续执行。
+- 可选的 `session.model` 会先校验 `session/new` 返回的 `models.availableModels`（兼容标准 `configOptions` 模型选项），再调用 DimCode 扩展 `session/set_model`。例如：
+
+```yaml
+session:
+  configOptions:
+    permission: full-access
+    mode: agent
+  model: dimcode-api-oauth/deepseek-v4-pro
+```
+
+- 官方 CLI 文档支持 stdio，但本机 `dimcode 0.3.16` 的 ACP `session/new` 会拒绝 stdio MCP；Agent OS 因此为 ACP 额外启动仅监听 `127.0.0.1` 的 HTTP MCP 入口，并把同一个 `request_clarification` 工具通过该入口注入。这样切换 `accessMode` 仍保持飞书澄清链路一致。只应配置可信且可回退的工作目录。
 - 同一话题会自动续接 DimAgent session；当前 `/resume` 不枚举 DimAgent 自身数据库中的历史会话，`/compact` 也暂不调用 DimAgent 原生整理协议。
 
 新话题可发送 `/dimagent <任务>` 显式选择 DimAgent；接入模式仍取该 bot 的 `accessMode` 配置。`engines/acp` 插件通过 `cordis.yml` 的 `engines` 列表声明 ACP 引擎（`id`/`command`/`args`），因此任何提供 ACP server 的 CLI 都能以相同方式接入；未注册的引擎与接入模式组合会在运行时明确报错。

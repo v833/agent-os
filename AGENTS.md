@@ -27,7 +27,7 @@
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
 - `pnpm test`：运行 CLI、飞书消息、卡片与会话模型测试
 - `pnpm probe:cli`：从标准输入读取 Codex/Claude/DimAgent JSONL 并输出时间线
-- `pnpm probe:tool <claude|codex> [工作目录]`：不经飞书直接驱动 CLI 调用 `request_clarification`，验证 MCP 工具链与 Schema 校验
+- `pnpm probe:tool <claude|codex|dimagent|agy> [工作目录]`：不经飞书直接驱动 CLI 调用 `request_clarification`，验证 MCP 工具链与 Schema 校验
 
 ## CLI Headless 调试
 
@@ -51,15 +51,14 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/prompt-context、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/message、task/prompt-context、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
 - `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
 - `src/plugins/sessions.ts`：sessions 服务——把 SessionManager 与 JsonSessionStore 挂到 ctx.sessions
-- `src/plugins/application-tools.ts`：应用工具注册服务——插件声明 stdio MCP Server，执行引擎只消费通用描述
-- `src/plugins/clarification.ts`：澄清插件——认领结构化工具调用、展示飞书表单、持久化回答并恢复 CLI 会话
-- `src/plugins/clarification-store.ts`：待澄清记录的校验与原子持久化
-- `src/plugins/clarification-tool.ts`：澄清插件提供给 CLI 探针和 MCP 注入的 server 描述
+- `src/plugins/application-tools.ts`：应用工具注册服务——插件声明 stdio MCP Server 及可选 ACP HTTP 入口，执行引擎只消费通用描述
+- `src/plugins/clarification.ts`：澄清插件——启动 loopback HTTP MCP、认领结构化工具调用、展示逐题飞书表单、处理同话题补充并恢复 CLI 会话（流程仅存内存，重启后旧卡失效）
+- `src/plugins/clarification-tool.ts`：澄清插件提供给 CLI 探针和 MCP 注入的 Server 描述
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
@@ -67,7 +66,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
 - `src/plugins/workspaces.ts`：workspaces 服务——创建/回收 QA 隔离快照并计算稳定工作树 revision
 - `src/plugins/qa-gate.ts`：QA 质量闸门——解析 QAResult、校验实际快照 revision，并按 pass/changes_requested/blocked 闭环路由
-- `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、命令派发与任务启动
+- `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、task/message 改写、命令派发与任务启动
 - `src/plugins/orchestration.ts`：orchestration 服务——把大任务拆解成子任务并行派发（topic/same-topic）、维护有界运行表、监听 task/result|failed 更新子任务状态，并提供失败子任务一键重试（retrySubTask，鉴权/去重/次数上限）
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
 - `src/plugins/orchestration/actions.ts`：面板动作子插件（可选）——启动时置位重试能力，认领 retry_subtask 卡片动作并映射 toast；移除即无重试按钮
@@ -106,23 +105,28 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/core/clarification.ts`：澄清请求数据结构——Zod Schema 约束 Agent 结构化提问，既是 MCP 工具参数也是飞书卡片输入
 - `src/core/clarification.test.ts`：Schema 边界校验与工具调用历史提取测试
+- `src/core/topic-task.ts`：按群 ID 与话题 ID 生成稳定任务编号
+- `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
-- `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args 配置驱动）以标准接入方式登记，与具体供应商解耦
-- `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、展示名回退、compact 与失效会话识别测试
+- `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args/session 配置驱动）以标准接入方式登记，与具体供应商解耦
+- `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、会话配置、展示名回退、compact 与失效会话识别测试
 - `src/cli/registry.ts`：多引擎注册表（registerCliAdapter 供引擎插件登记）、查找与 CLI ID 校验
 - `src/cli/registry.test.ts`：注册表、默认 Codex 和非法配置测试
-- `src/cli/app-tools.ts`：应用工具公共契约——把插件注册的 MCP Server 转换为各 CLI 的启动参数并识别工具调用
+- `src/cli/app-tools.ts`：应用工具公共契约——把插件注册的 MCP Server 转换为各 CLI/ACP 的启动参数并识别工具调用
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
-- `src/cli/acp-daemon.ts`：DimAgent ACP 常驻进程——单进程多会话并发、空闲回收、崩溃重连与软取消
-- `src/cli/acp-daemon.test.ts`：常驻复用、并发路由、空闲回收与崩溃重连测试
+- `src/cli/acp-daemon.ts`：通用 ACP 常驻进程——绝对 cwd、会话权限/模式/模型配置、单进程多会话并发、空闲回收、崩溃重连与软取消
+- `src/cli/acp-daemon.test.ts`：会话配置顺序、绝对 cwd、常驻复用、并发路由、空闲回收与崩溃重连测试
 - `src/cli/acp-runner.ts`：在 AcpDaemon 上执行一轮 ACP 的入口；无注入时创建临时 daemon 跑完即回收
 - `src/cli/acp-runner.test.ts`：ACP 握手、会话续接、工具通知与消息分片测试
 - `src/cli/process-tree.ts`：headless/ACP Runner 共用的跨平台子进程树清理
-- `src/cli/dimagent-adapter.ts`：DimAgent headless 参数、JSONL 事件与 ACP 启动入口
+- `src/cli/dimagent-adapter.ts`：DimAgent headless 参数、项目级 MCP 配置、JSONL 事件与工具调用翻译
+- `src/cli/dim-mcp-config.ts`：DimAgent headless 用户/项目 MCP 配置增量合并
 - `src/cli/dimagent-adapter.test.ts`：DimAgent 两种接入模式、事件翻译和能力边界测试
-- `src/cli/agy-adapter.ts`：Antigravity CLI (agy) 适配器——headless 参数、stream-json 事件翻译、会话失效判定；无命令行 MCP 注入点故不接入应用工具，无原生 compact 协议故 /compact 明确拒绝
-- `src/cli/agy-adapter.test.ts`：agy 参数构造、事件翻译、compact 拒绝与失效会话识别测试
+- `src/cli/agy-adapter.ts`：Antigravity CLI (agy) 适配器——headless 参数、工作区 MCP 配置准备、stream-json 事件翻译、应用工具识别与会话失效判定；无原生 compact 协议故 /compact 明确拒绝
+- `src/cli/agy-mcp-config.ts`：agy 工作区及 DimAgent 项目 MCP 配置的插件 Server 合并与原子写入
+- `src/cli/agy-adapter.test.ts`：agy 参数构造、MCP 工具事件、事件翻译、compact 拒绝与失效会话识别测试
+- `src/cli/agy-mcp-config.test.ts`、`src/cli/dim-mcp-config.test.ts`：headless MCP 配置原子合并、幂等更新和格式边界测试
 - `src/cli/native-sessions.ts`：原生会话入口——按 adapter 声明的 listNativeSessions 分发，未声明即不支持；具体协议实现归属各引擎适配器
 - `src/cli/native-sessions.test.ts`：原生会话目录过滤、标题回退和排序测试
 - `src/cli/native-compact.ts`：驱动 Claude/Codex 原生上下文整理协议
@@ -133,9 +137,11 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli/cli-adapters.test.ts`：双 CLI 参数、多事件和协议解析测试
 - `src/cli-events.ts`：Codex/Claude/DimAgent 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
-- `src/probe-app-tool.ts`：应用工具探针——不经飞书驱动 Claude/Codex 调用澄清工具并校验结果
+- `src/probe-app-tool.ts`：应用工具探针——不经飞书驱动 Claude/Codex/agy 调用澄清工具并校验结果
 - `src/cli-events.test.ts`：事件解析器测试
-- `src/mcp/clarification-server.ts`：本地 MCP Server——通过 stdio 向 Claude Code 与 Codex 提供 `request_clarification` 工具
+- `src/mcp/clarification-server.ts`：本地 stdio MCP Server——向 Claude Code、Codex、DimAgent headless 与 agy 提供 `request_clarification` 工具
+- `src/mcp/clarification-tools.ts`：stdio 与 HTTP MCP 复用的 `request_clarification` 注册定义
+- `src/mcp/clarification-http-server.ts`：仅监听 loopback 的无状态 HTTP MCP Server，兼容不接受 ACP stdio MCP 的 DimAgent 版本
 - `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新、消息资源下载与结果提醒（sendResultNotification）
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取

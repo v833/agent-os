@@ -353,6 +353,13 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
 
 test("角色提示词组装角色、系统原则、团队上下文与 Skill", () => {
   const teamContext = "你所在的 Agent 团队：\n- product：产品经理";
+  const feishuOutputPolicy = [
+    "飞书输出规则（必须遵守）：",
+    "- 最终回复控制在 1200 个中文字符以内，先给结论，再给必要依据和下一步。",
+    "- 不在回复中粘贴完整代码、长日志或整份产品文档，也不要输出 Markdown 表格。",
+    "- 详细产物写入当前工作区文件。回复只提供简短摘要和文件路径。",
+    "- 需要用户决策时，必须调用 request_clarification 工具；不要用大段文字列出问题。工具调用后停止继续推断，等待用户回答。",
+  ].join("\n");
   assert.equal(
     buildBotPrompt(
       {
@@ -367,7 +374,14 @@ test("角色提示词组装角色、系统原则、团队上下文与 Skill", ()
       "你的角色：产品经理",
       "不要直接实现代码",
       teamContext,
-      "本次任务必须按项目 Skill 执行：$grill-me",
+      [
+        "项目 Skill 加载规则（优先级不可颠倒）：",
+        "- 先读取当前工作区 .agents/skills/<skill>/SKILL.md。",
+        "- 不存在时再读取 .claude/skills/<skill>/SKILL.md。",
+        "- 只有两个工作区路径都不存在时，才允许回退到用户级或全局同名 Skill。",
+        "本次必须执行：$grill-me",
+      ].join("\n"),
+      feishuOutputPolicy,
       "当前任务：澄清这个需求",
     ].join("\n\n"),
   );
@@ -377,6 +391,6 @@ test("角色提示词组装角色、系统原则、团队上下文与 Skill", ()
       { role: "开发", skills: [], systemPrompt: "  " },
       "写代码",
     ),
-    "你的角色：开发\n\n当前任务：写代码",
+    ["你的角色：开发", feishuOutputPolicy, "当前任务：写代码"].join("\n\n"),
   );
 });
