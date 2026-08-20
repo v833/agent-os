@@ -4,8 +4,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ClarificationFlowStore,
   ClarificationRequestSchema,
   findClarificationRequest,
+  formatClarificationAnswers,
+  formatClarificationMessage,
 } from "./clarification.js";
 
 test("合法澄清请求通过校验并填充默认值", () => {
@@ -119,4 +122,102 @@ test("findClarificationRequest 提取最近一次合法澄清请求", () => {
     findClarificationRequest([{ toolName: "Bash", input: {} }]),
     undefined,
   );
+});
+
+test("逐题保存用户答案并允许 Agent 采用当前或全部剩余推荐", () => {
+  const store = new ClarificationFlowStore();
+  const flow = store.create({
+    taskId: "task-1",
+    botId: "product",
+    sessionId: "session-1",
+    ownerOpenId: "ou_owner",
+    originalMessageId: "om_root",
+    requestedPrompt: "增加用户详情页",
+    replyInThread: true,
+    request: {
+      title: "确认详情页",
+      intro: "请确认关键范围。",
+      questions: [
+        {
+          id: "scope",
+          prompt: "首期范围？",
+          recommendedOptionId: "basic",
+          options: [
+            { id: "basic", label: "只读基础信息" },
+            { id: "full", label: "包含编辑" },
+          ],
+        },
+        {
+          id: "entry",
+          prompt: "从哪里进入？",
+          recommendedOptionId: "list",
+          options: [
+            { id: "list", label: "用户列表" },
+            { id: "search", label: "全局搜索" },
+          ],
+        },
+        {
+          id: "permission",
+          prompt: "谁可以查看？",
+          recommendedOptionId: "admin",
+          options: [
+            { id: "admin", label: "仅管理员" },
+            { id: "staff", label: "全部员工" },
+          ],
+        },
+      ],
+    },
+  });
+
+  const first = store.answer(flow.token, "scope", "只读基础信息");
+  assert.equal(first?.complete, false);
+  assert.equal(first?.flow.currentIndex, 1);
+  assert.equal(first?.flow.answers[0]?.source, "user");
+
+  const second = store.answerWithRecommendation(flow.token, false);
+  assert.equal(second?.complete, false);
+  assert.equal(second?.flow.answers[1]?.answer, "用户列表");
+  assert.equal(second?.flow.answers[1]?.source, "agent");
+
+  const completed = store.answerWithRecommendation(flow.token, true);
+  assert.equal(completed?.complete, true);
+  assert.equal(completed?.flow.answers[2]?.answer, "仅管理员");
+  assert.match(formatClarificationAnswers(flow), /Agent 采用推荐方案：用户列表/);
+});
+
+test("同一任务的新流程替换旧 token，文字补充保留已确认答案", () => {
+  const store = new ClarificationFlowStore();
+  const create = () =>
+    store.create({
+      taskId: "task-1",
+      botId: "product",
+      sessionId: "session-1",
+      ownerOpenId: "ou_owner",
+      originalMessageId: "om_root",
+      requestedPrompt: "增加用户详情页",
+      replyInThread: true,
+      request: {
+        title: "确认范围",
+        intro: "",
+        questions: [
+          {
+            id: "scope",
+            prompt: "首期范围？",
+            options: [
+              { id: "basic", label: "基础信息" },
+              { id: "full", label: "完整信息" },
+            ],
+          },
+        ],
+      },
+    });
+  const first = create();
+  store.answer(first.token, "scope", "基础信息");
+  const supplement = formatClarificationMessage(first, "还要展示注册时间");
+  assert.match(supplement, /用户回答：基础信息/);
+  assert.match(supplement, /还要展示注册时间/);
+
+  const replacement = create();
+  assert.equal(store.get(first.token), undefined);
+  assert.equal(store.findForTask("task-1", "product"), replacement);
 });

@@ -7,7 +7,7 @@ import { CLARIFICATION_TOOL_NAME } from "../core/clarification.js";
 import type { ApplicationToolServer } from "../cli/app-tools.js";
 
 /** 生成 clarification 插件注册到 application-tools 服务的 server 描述。 */
-export function clarificationToolServer(): ApplicationToolServer {
+export function clarificationToolServer(acpUrl?: string): ApplicationToolServer {
   const runningFromTypeScript = import.meta.url.endsWith(".ts");
   const server = fileURLToPath(
     new URL(
@@ -33,5 +33,8 @@ export function clarificationToolServer(): ApplicationToolServer {
     command: invocation.command,
     args: invocation.args,
     tools: [CLARIFICATION_TOOL_NAME],
+    ...(acpUrl
+      ? { acp: { type: "http" as const, url: acpUrl, headers: [] } }
+      : {}),
   };
 }

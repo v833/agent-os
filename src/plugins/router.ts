@@ -9,6 +9,7 @@ import {
   parseCommand,
 } from "../core/command-parser.js";
 import { ensureWorkspaceDirectory } from "../core/workspace.js";
+import { topicTaskId } from "../core/topic-task.js";
 import {
   extractResourceKeys,
   leadingMentionName,
@@ -168,6 +169,7 @@ async function handleMessage(
     collaboration = pending;
   }
   const hasThread = Boolean(message.threadId || message.rootId);
+  const taskId = topicTaskId(message);
   const command = parseCommand(resolved);
   const cliRequest = parseCliRequest(
     resolved,
@@ -198,7 +200,7 @@ async function handleMessage(
     session = await ctx.sessions.manager.transition(session.id, "idle");
   }
   const cliAdapter = ctx.cli.get(session.cliId, session.accessMode ?? "headless");
-  const requestedPrompt = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
+  let requestedPrompt = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
 
   console.log(
     `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,
@@ -272,6 +274,17 @@ async function handleMessage(
     );
     return;
   }
+
+  const messageOutcome = !collaboration
+    ? await ctx.serial("task/message", {
+      bot,
+      botConfig,
+      message,
+      taskId,
+      requestedPrompt,
+      })
+    : undefined;
+  if (messageOutcome) requestedPrompt = messageOutcome.requestedPrompt;
   if (collaboration && session.workspaceDir !== collaboration.workspaceDir) {
     await ensureWorkspaceDirectory(collaboration.workspaceDir);
     session = await ctx.sessions.manager.setWorkspaceDir(
@@ -287,7 +300,10 @@ async function handleMessage(
     hasThread,
     replyToMessageId: message.messageId,
     senderOpenId: message.senderOpenId,
+    senderUnionId: message.senderUnionId,
+    taskId,
     requestedPrompt,
+    originalRequestedPrompt: messageOutcome?.originalRequestedPrompt,
     isCompacting: false,
     collaboration,
     senderRuntime,

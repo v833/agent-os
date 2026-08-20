@@ -9,7 +9,8 @@ import {
   answerContinuation,
   answerNeedsContinuation,
   buildClarificationCard,
-  buildClarificationCompletedCard,
+  buildClarificationContinuingCard,
+  buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
   buildResumeCard,
@@ -172,8 +173,19 @@ test("累计上下文超过窗口时不伪造上下文百分比", () => {
   assert.doesNotMatch(serialized, /当前上下文/);
 });
 
-test("澄清卡片用表单提交全部答案并生成只读完成态", () => {
-  const request = {
+test("澄清卡片逐题展示选项、自定义输入和已确认答案", () => {
+  const flow: any = {
+    token: "clarify-token",
+    taskId: "task-1",
+    botId: "product",
+    sessionId: "session-1",
+    ownerOpenId: "ou_owner",
+    originalMessageId: "om_root",
+    requestedPrompt: "增加优先级",
+    replyInThread: true,
+    currentIndex: 0,
+    answers: [],
+    request: {
     title: "确认范围",
     intro: "请选择实现方式。",
     questions: [
@@ -186,30 +198,46 @@ test("澄清卡片用表单提交全部答案并生成只读完成态", () => {
           { id: "custom", label: "自定义" },
         ],
       },
+      {
+        id: "entry",
+        prompt: "从哪里进入？",
+        recommendedOptionId: "list",
+        options: [
+          { id: "list", label: "列表" },
+          { id: "menu", label: "菜单" },
+        ],
+      },
     ],
+    },
   };
-  const waiting = buildClarificationCard({
-    clarificationId: "clarify-1",
-    runId: "run-1",
-    request,
-  }) as any;
-  const form = waiting.body.elements[1];
+  const waiting = buildClarificationCard({ flow }) as any;
+  const serialized = JSON.stringify(waiting);
+  assert.match(serialized, /优先级支持几档/);
+  assert.doesNotMatch(serialized, /从哪里进入/);
+  assert.match(serialized, /三档（推荐）/);
+  assert.match(serialized, /按推荐方案继续/);
+  const form = waiting.body.elements.find((element: any) => element.tag === "form");
   assert.equal(form.tag, "form");
-  assert.equal(form.elements[1].name, "priority");
-  assert.equal(form.elements[2].form_action_type, "submit");
-  assert.deepEqual(form.elements[2].behaviors[0].value, {
-    action: "submit_clarification",
-    clarificationId: "clarify-1",
-    runId: "run-1",
+  assert.equal(form.elements[0].name, "custom_answer");
+  assert.deepEqual(form.elements[1].value, {
+    action: "answer_clarification",
+    flowToken: "clarify-token",
+    questionId: "priority",
+    custom: true,
   });
 
-  const completed = buildClarificationCompletedCard({
-    request,
-    answers: { priority: "three" },
-  }) as any;
-  assert.equal(completed.header.template, "green");
-  assert.match(completed.body.elements[0].content, /三档/);
-  assert.doesNotMatch(JSON.stringify(completed), /select_static/);
+  flow.currentIndex = 1;
+  flow.answers.push({
+    questionId: "priority",
+    prompt: "优先级支持几档？",
+    answer: "三档",
+    source: "user",
+  });
+  const next = JSON.stringify(buildClarificationCard({ flow }));
+  assert.match(next, /已确认 1 项/);
+  assert.match(next, /从哪里进入/);
+  assert.match(JSON.stringify(buildClarificationContinuingCard(flow)), /正在整理/);
+  assert.match(JSON.stringify(buildClarificationSupersededCard(flow)), /已更新/);
 });
 
 test("恢复卡片展示历史会话并为非当前记录生成安全回调参数", () => {

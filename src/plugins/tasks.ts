@@ -81,6 +81,8 @@ export class TasksService extends Service {
       hasThread,
       replyToMessageId,
       senderOpenId,
+      senderUnionId,
+      taskId,
       requestedPrompt,
       originalRequestedPrompt,
       isCompacting,
@@ -88,6 +90,7 @@ export class TasksService extends Service {
       collaboration,
       senderRuntime,
       resources,
+      suppressHandoff,
     } = input;
     const cliAdapter = this.getSessionAdapter(session);
     const taskTitle = isCompacting ? "整理上下文" : cliAdapter.displayName;
@@ -337,6 +340,8 @@ export class TasksService extends Service {
           hasThread,
           collaboration,
           senderRuntime,
+          taskId,
+          suppressHandoff,
         };
         if (!isCompacting && result.toolCalls?.length) {
           const toolPayload: TaskToolCallsPayload = {
@@ -344,6 +349,8 @@ export class TasksService extends Service {
             result,
             runId: activeRun.runId,
             senderOpenId,
+            senderUnionId,
+            cardMessageId: cardId,
           };
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
           if (outcome) {
@@ -467,6 +474,8 @@ export class TasksService extends Service {
             hasThread,
             collaboration,
             senderRuntime,
+            taskId,
+            suppressHandoff,
           });
         }
       })

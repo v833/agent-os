@@ -7,7 +7,8 @@ import {
   answerContinuation,
   answerNeedsContinuation,
   buildClarificationCard,
-  buildClarificationCompletedCard,
+  buildClarificationContinuingCard,
+  buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
   buildResumeCard,
@@ -18,7 +19,7 @@ import {
   ThrottledCardUpdater,
   type CardJson,
   type ClarificationCardOptions,
-  type ClarificationCompletedCardOptions,
+  type ClarificationStateCardOptions,
   type CollaborationCardOptions,
   type OrchestrationPanelOptions,
   type ResumeCardOptions,
@@ -49,8 +50,12 @@ export class CardsService extends Service {
     return buildClarificationCard(options);
   }
 
-  clarificationCompleted(options: ClarificationCompletedCardOptions): CardJson {
-    return buildClarificationCompletedCard(options);
+  clarificationContinuing(options: ClarificationStateCardOptions): CardJson {
+    return buildClarificationContinuingCard(options.flow);
+  }
+
+  clarificationSuperseded(options: ClarificationStateCardOptions): CardJson {
+    return buildClarificationSupersededCard(options.flow);
   }
 
   collaboration(options: CollaborationCardOptions): CardJson {

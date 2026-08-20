@@ -3,7 +3,7 @@
  * 并负责高频任务卡片更新的节流与串行化。
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
-import type { ClarificationRequest } from "../core/clarification.js";
+import type { ClarificationFlow } from "../core/clarification.js";
 import { retryToken, type OrchestrationRun } from "../core/orchestration.js";
 import type {
   TaskActivity,
@@ -26,14 +26,11 @@ export interface TaskCardOptions {
 }
 
 export interface ClarificationCardOptions {
-  clarificationId: string;
-  runId: string;
-  request: ClarificationRequest;
+  flow: ClarificationFlow;
 }
 
-export interface ClarificationCompletedCardOptions {
-  request: ClarificationRequest;
-  answers: Readonly<Record<string, string>>;
+export interface ClarificationStateCardOptions {
+  flow: ClarificationFlow;
 }
 
 export interface ResumeCardOptions {
@@ -445,109 +442,212 @@ function formatSessionTime(value: string): string {
   }).format(date);
 }
 
-/** 生成结构化澄清表单；一个表单一次性提交全部问题答案。 */
-export function buildClarificationCard(
-  options: ClarificationCardOptions,
-): CardJson {
-  const questionElements = options.request.questions.flatMap((question, index) => [
-    {
-      tag: "markdown",
-      content: `**${index + 1}. ${escapeFeishuMarkdown(question.prompt)}**${question.recommendedOptionId ? "\n_已标注推荐项_" : ""}`,
+function clarificationButton(
+  flow: ClarificationFlow,
+  option: { id: string; label: string },
+): Record<string, unknown> {
+  const question = flow.request.questions[flow.currentIndex]!;
+  const recommendedOptionId =
+    question.recommendedOptionId ?? question.options[0]?.id;
+  return {
+    tag: "button",
+    text: {
+      tag: "plain_text",
+      content:
+        option.id === recommendedOptionId
+          ? option.label.includes("推荐")
+            ? option.label
+            : `${option.label}（推荐）`
+          : option.label,
     },
-    {
-      tag: "select_static",
-      name: question.id,
-      required: true,
-      width: "fill",
-      placeholder: { tag: "plain_text", content: "请选择" },
-      options: question.options.map((option) => ({
-        text: {
-          tag: "plain_text",
-          content:
-            option.id === question.recommendedOptionId
-              ? `${option.label}（推荐）`
-              : option.label,
+    type: option.id === recommendedOptionId ? "primary" : "default",
+    width: "fill",
+    size: "medium",
+    behaviors: [
+      {
+        type: "callback",
+        value: {
+          action: "answer_clarification",
+          flowToken: flow.token,
+          questionId: question.id,
+          optionId: option.id,
         },
-        value: option.id,
-      })),
+      },
+    ],
+  };
+}
+
+function clarificationDecisionButton(
+  flow: ClarificationFlow,
+  decisionMode: "current" | "remaining",
+): Record<string, unknown> {
+  const question = flow.request.questions[flow.currentIndex]!;
+  return {
+    tag: "button",
+    text: {
+      tag: "plain_text",
+      content:
+        decisionMode === "current" ? "这一题交给 Agent 决定" : "按推荐方案继续",
     },
-  ]);
+    type: decisionMode === "remaining" ? "primary" : "default",
+    width: "fill",
+    size: "medium",
+    behaviors: [
+      {
+        type: "callback",
+        value: {
+          action: "answer_clarification",
+          flowToken: flow.token,
+          questionId: question.id,
+          decisionMode,
+        },
+      },
+    ],
+  };
+}
+
+function clarificationAnswerSummary(flow: ClarificationFlow): string {
+  return flow.answers
+    .map((answer, index) =>
+      [
+        `${index + 1}. **${escapeFeishuMarkdown(answer.prompt)}**`,
+        `${answer.source === "agent" ? "Agent 推荐" : "你的选择"}：${escapeFeishuMarkdown(answer.answer)}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+}
+
+function buildFlowClarificationCard(flow: ClarificationFlow): CardJson {
+  const question = flow.request.questions[flow.currentIndex];
+  if (!question) return buildClarificationContinuingCard(flow);
+  const current = flow.currentIndex + 1;
+  const total = flow.request.questions.length;
   return {
     schema: "2.0",
     config: {
       update_multi: true,
-      summary: { content: `${options.request.title}：等待回答` },
+      summary: { content: `${flow.request.title}（${current}/${total}）` },
     },
     header: {
-      template: "orange",
-      title: { tag: "plain_text", content: options.request.title },
-      subtitle: { tag: "plain_text", content: "需要你的选择才能继续" },
+      template: "blue",
+      title: { tag: "plain_text", content: flow.request.title },
+      subtitle: { tag: "plain_text", content: `${current} / ${total}` },
     },
     body: {
       direction: "vertical",
       vertical_spacing: "12px",
       elements: [
-        ...(options.request.intro
+        ...(flow.request.intro && flow.currentIndex === 0
+          ? [{ tag: "markdown", content: escapeFeishuMarkdown(flow.request.intro) }]
+          : []),
+        ...(flow.answers.length
           ? [
               {
                 tag: "markdown",
-                content: escapeFeishuMarkdown(options.request.intro),
+                content: `**已确认 ${flow.answers.length} 项**\n\n${clarificationAnswerSummary(flow)}`,
               },
+              { tag: "hr" },
             ]
           : []),
         {
+          tag: "markdown",
+          content: `**${escapeFeishuMarkdown(question.prompt)}**\n\n选择最符合预期的一项：`,
+        },
+        ...question.options.map((option) => clarificationButton(flow, option)),
+        clarificationDecisionButton(flow, "current"),
+        { tag: "hr" },
+        {
           tag: "form",
-          name: "clarification_answers",
-          element_id: `clarification_${options.clarificationId}`,
-          direction: "vertical",
-          vertical_spacing: "12px",
+          name: `clarify_${flow.token.slice(0, 8)}`,
+          vertical_spacing: "8px",
           elements: [
-            ...questionElements,
+            {
+              tag: "input",
+              name: "custom_answer",
+              placeholder: { tag: "plain_text", content: "都不合适？在这里写下你的答案" },
+              max_length: 500,
+            },
             {
               tag: "button",
-              name: "submit_clarification",
-              text: { tag: "plain_text", content: "提交并继续" },
-              type: "primary_filled",
+              name: "submit_custom",
+              action_type: "form_submit",
+              text: { tag: "plain_text", content: "提交自定义答案" },
+              type: "primary",
               width: "default",
-              form_action_type: "submit",
-              behaviors: [
-                {
-                  type: "callback",
-                  value: {
-                    action: "submit_clarification",
-                    clarificationId: options.clarificationId,
-                    runId: options.runId,
-                  },
-                },
-              ],
+              size: "medium",
+              value: {
+                action: "answer_clarification",
+                flowToken: flow.token,
+                questionId: question.id,
+                custom: true,
+              },
             },
           ],
+        },
+        { tag: "hr" },
+        {
+          tag: "markdown",
+          content: "不想逐项选择？Agent 会保留你已经确认的答案，并为剩余问题采用推荐方案。",
+        },
+        clarificationDecisionButton(flow, "remaining"),
+      ],
+    },
+  };
+}
+
+/** 生成只展示当前问题的逐题澄清表单。 */
+export function buildClarificationCard(
+  options: ClarificationCardOptions,
+): CardJson {
+  return buildFlowClarificationCard(options.flow);
+}
+
+/** 生成逐题回答完成后立即展示的整理中状态卡。 */
+export function buildClarificationContinuingCard(
+  flow: ClarificationFlow,
+): CardJson {
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: `${flow.request.title}：正在整理` } },
+    header: { template: "blue", title: { tag: "plain_text", content: `${flow.request.title} · 正在整理` } },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            "**答案已收到**",
+            "正在基于这些选择整理产品说明，无需重复点击。",
+            `**已确认 ${flow.answers.length} 项**\n\n${clarificationAnswerSummary(flow)}`,
+          ].join("\n\n"),
         },
       ],
     },
   };
 }
 
-/** 生成提交后的只读答案卡片，替换原表单以阻止重复提交。 */
-export function buildClarificationCompletedCard(
-  options: ClarificationCompletedCardOptions,
+/** 生成同话题文字补充后旧卡片的失效状态。 */
+export function buildClarificationSupersededCard(
+  flow: ClarificationFlow,
 ): CardJson {
-  const lines = options.request.questions.map((question, index) => {
-    const optionId = options.answers[question.id];
-    const label = question.options.find((option) => option.id === optionId)?.label;
-    return `${index + 1}. **${escapeFeishuMarkdown(question.prompt)}**\n${escapeFeishuMarkdown(label ?? optionId ?? "")}`;
-  });
   return {
     schema: "2.0",
-    config: { summary: { content: `${options.request.title}：已提交` } },
-    header: {
-      template: "green",
-      title: { tag: "plain_text", content: "回答已提交，继续执行" },
-    },
+    config: { update_multi: true, summary: { content: `${flow.request.title}：已收到新的补充` } },
+    header: { template: "grey", title: { tag: "plain_text", content: `${flow.request.title} · 已更新` } },
     body: {
       direction: "vertical",
       vertical_spacing: "12px",
-      elements: [{ tag: "markdown", content: lines.join("\n\n") }],
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            "**已收到你在话题里的新消息**",
+            "这张卡片已经失效，Agent OS 正在沿用同一个任务上下文处理新的补充。",
+            flow.answers.length ? `此前已确认 ${flow.answers.length} 项，相关答案会一并带入。` : "",
+          ].filter(Boolean).join("\n\n"),
+        },
+      ],
     },
   };
 }

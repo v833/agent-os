@@ -145,6 +145,7 @@ export class CollaborationService extends Service {
    * QA reviewBy 交接由可选 qa-gate 插件独占，避免两个监听器重复派发。
    */
   async handleTaskResult(payload: TaskResultPayload): Promise<void> {
+    if (payload.suppressHandoff) return;
     const {
       bot,
       botConfig,

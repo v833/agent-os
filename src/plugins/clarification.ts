@@ -1,60 +1,59 @@
 /**
- * clarification 澄清插件：注册 request_clarification MCP Server，认领对应工具结果，
- * 发送飞书问题表单并持久化 run/session 关联；用户提交后续接原 CLI 会话。
+ * clarification 澄清插件：注册 request_clarification MCP Server，认领工具结果，
+ * 在飞书逐题收集答案，并沿用原会话继续 CLI。流程只保存在内存，服务重启后旧卡失效。
  */
 import { Service, type Context } from "cordis";
-import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
 import {
+  ClarificationFlowStore,
   findClarificationRequest,
-  type ClarificationRequest,
+  formatClarificationAnswers,
+  formatClarificationMessage,
+  type ClarificationFlow,
 } from "../core/clarification.js";
 import type { CardAction, CardActionResponse } from "../im/lark.js";
+import { clarificationToolServer } from "./clarification-tool.js";
+import { startClarificationHttpServer } from "../mcp/clarification-http-server.js";
 import type {
+  TaskMessageOutcome,
+  TaskMessagePayload,
   TaskToolCallsOutcome,
   TaskToolCallsPayload,
 } from "./types.js";
-import {
-  ClarificationStore,
-  type PendingClarification,
-} from "./clarification-store.js";
-import { clarificationToolServer } from "./clarification-tool.js";
 
-function answerPrompt(
-  request: ClarificationRequest,
-  answers: ReadonlyMap<string, string>,
-): string {
-  const rows = request.questions.map((question) => {
-    const optionId = answers.get(question.id)!;
-    const option = question.options.find((candidate) => candidate.id === optionId)!;
-    return `- ${question.prompt}\n  用户选择：${option.label}（${option.id}）`;
-  });
-  return [
-    "用户已经回答上一轮 request_clarification。",
-    ...rows,
-    "请基于这些答案继续原始任务，不要重复询问已经回答的问题。",
-  ].join("\n\n");
-}
-
-/** 澄清生产链路服务：待回答记录以插件自己的 JSON 文件持久化。 */
+/** 逐题澄清生产链路；同一任务的新请求会替换旧 token。 */
 export class ClarificationService extends Service {
-  private readonly pending = new Map<string, PendingClarification>();
+  readonly flows = new ClarificationFlowStore();
 
-  constructor(
-    ctx: Context,
-    private readonly store: ClarificationStore,
-  ) {
+  constructor(ctx: Context) {
     super(ctx, "clarification");
   }
 
-  async load(): Promise<void> {
-    for (const record of await this.store.load()) {
-      this.pending.set(record.id, record);
-    }
+  findForTask(taskId: string, botId: string): ClarificationFlow | undefined {
+    return this.flows.findForTask(taskId, botId);
   }
 
-  private persist(): Promise<void> {
-    return this.store.save([...this.pending.values()]);
+  /** 同话题文字会使旧卡失效，并带着已确认答案续接原任务。 */
+  async handleTaskMessage(
+    payload: TaskMessagePayload,
+  ): Promise<TaskMessageOutcome | undefined> {
+    const flow = this.flows.findForTask(payload.taskId, payload.botConfig.id);
+    if (!flow) return undefined;
+    this.flows.delete(flow.token);
+    if (flow.cardMessageId) {
+      try {
+        await payload.bot.updateCard(
+          flow.cardMessageId,
+          this.ctx.cards.clarificationSuperseded({ flow }),
+        );
+      } catch (error) {
+        // 卡片状态更新失败不能吞掉用户的新消息；token 已失效，后续点击仍会被拒绝。
+        console.error("[澄清] 旧卡片失效状态更新失败:", (error as Error).message);
+      }
+    }
+    return {
+      requestedPrompt: formatClarificationMessage(flow, payload.requestedPrompt),
+      originalRequestedPrompt: flow.requestedPrompt,
+    };
   }
 
   async handleToolCalls(
@@ -62,125 +61,142 @@ export class ClarificationService extends Service {
   ): Promise<TaskToolCallsOutcome | undefined> {
     const request = findClarificationRequest(payload.result.toolCalls);
     if (!request) return undefined;
-    const cliSessionId = payload.result.sessionId ?? payload.session.cliSessionId;
-    if (!cliSessionId) {
+    if (!(payload.result.sessionId ?? payload.session.cliSessionId)) {
       throw new Error("澄清工具已调用，但执行引擎没有返回可恢复的会话 ID");
     }
-    const pending: PendingClarification = {
-      id: randomUUID(),
+    const flow = this.flows.create({
+      taskId: payload.taskId ?? payload.session.id,
       botId: payload.botConfig.id,
       sessionId: payload.session.id,
-      runId: payload.runId,
-      cliSessionId,
       ownerOpenId: payload.senderOpenId,
-      replyToMessageId: payload.replyToMessageId,
-      hasThread: payload.hasThread,
+      ownerUnionId: payload.senderUnionId,
+      originalMessageId: payload.replyToMessageId,
       requestedPrompt: payload.requestedPrompt,
+      cardMessageId: payload.cardMessageId,
+      replyInThread: payload.hasThread,
       request,
       collaboration: payload.collaboration,
-      createdAt: new Date().toISOString(),
-    };
-    // 同一 session 只允许等待一份回答；新请求替换旧记录，旧卡片随后会被判失效。
-    for (const [id, record] of this.pending) {
-      if (record.sessionId === pending.sessionId) this.pending.delete(id);
-    }
-    this.pending.set(pending.id, pending);
-    try {
-      await this.persist();
-    } catch (error) {
-      this.pending.delete(pending.id);
-      throw error;
-    }
-    return {
-      card: this.ctx.cards.clarification({
-        clarificationId: pending.id,
-        runId: pending.runId,
-        request: pending.request,
-      }),
-    };
+    });
+    return { card: this.ctx.cards.clarification({ flow }) };
   }
 
   async handleCardAction(
     action: CardAction,
     botId: string,
   ): Promise<CardActionResponse | undefined> {
-    if (action.value.action !== "submit_clarification") return undefined;
-    const id =
-      typeof action.value.clarificationId === "string"
-        ? action.value.clarificationId
-        : "";
-    const runId =
-      typeof action.value.runId === "string" ? action.value.runId : "";
-    const pending = this.pending.get(id);
-    if (!pending || pending.botId !== botId || pending.runId !== runId) {
-      return { toast: { type: "error", content: "这份澄清请求已经失效。" } };
+    if (action.value.action !== "answer_clarification") return undefined;
+    const token =
+      typeof action.value.flowToken === "string" ? action.value.flowToken : "";
+    const questionId =
+      typeof action.value.questionId === "string" ? action.value.questionId : "";
+    const flow = this.flows.get(token);
+    if (
+      !flow ||
+      flow.botId !== botId ||
+      (flow.cardMessageId && flow.cardMessageId !== action.messageId)
+    ) {
+      return { toast: { type: "error", content: "这组澄清问题已经失效。" } };
     }
-    if (action.operatorOpenId !== pending.ownerOpenId) {
+    if (
+      action.operatorOpenId !== flow.ownerOpenId &&
+      (!flow.ownerUnionId || action.operatorUnionId !== flow.ownerUnionId)
+    ) {
+      return { toast: { type: "warning", content: "只有任务发起人可以回答。" } };
+    }
+
+    const question = flow.request.questions[flow.currentIndex];
+    if (!question || question.id !== questionId) {
       return {
-        toast: { type: "warning", content: "只有任务发起人可以提交回答。" },
+        toast: { type: "warning", content: "问题已经更新，请按当前卡片作答。" },
       };
     }
-    const session = this.ctx.sessions.manager.get(pending.sessionId);
-    if (!session || session.status === "closed") {
-      return { toast: { type: "error", content: "原会话已经关闭或不存在。" } };
-    }
-    if (session.status === "active") {
-      return { toast: { type: "warning", content: "当前会话正在执行，请稍后再提交。" } };
-    }
-
-    const answers = new Map<string, string>();
-    for (const question of pending.request.questions) {
-      const selected = action.formValue?.[question.id];
-      if (
-        typeof selected !== "string" ||
-        !question.options.some((option) => option.id === selected)
-      ) {
-        return { toast: { type: "error", content: "请为每个问题选择一个有效答案。" } };
+    const decisionMode =
+      action.value.decisionMode === "current" ||
+      action.value.decisionMode === "remaining"
+        ? action.value.decisionMode
+        : undefined;
+    const willComplete =
+      decisionMode === "remaining" ||
+      flow.currentIndex === flow.request.questions.length - 1;
+    if (willComplete) {
+      const session = this.ctx.sessions.manager.get(flow.sessionId);
+      if (!session || session.status === "closed" || !this.ctx.lark.bot(botId)) {
+        return { toast: { type: "error", content: "对应的 CLI 会话已经失效。" } };
       }
-      answers.set(question.id, selected);
+      if (session.status === "active") {
+        return {
+          toast: { type: "warning", content: "当前会话仍在执行，请稍后重试。" },
+        };
+      }
     }
 
-    // 先删除并落盘，防止重复回调并发启动两轮；启动失败仍可由用户提交新任务恢复。
-    this.pending.delete(id);
-    try {
-      await this.persist();
-      const updatedSession = await this.ctx.sessions.manager.setCliSessionId(
-        pending.sessionId,
-        pending.cliSessionId,
+    let answered;
+    if (decisionMode) {
+      answered = this.flows.answerWithRecommendation(
+        token,
+        decisionMode === "remaining",
       );
-      const runtime = this.ctx.lark.bot(pending.botId);
-      if (!runtime) throw new Error(`澄清 bot 尚未就绪: ${pending.botId}`);
-      this.ctx.tasks.startTask({
-        bot: runtime.bot,
-        botConfig: runtime.config,
-        session: updatedSession,
-        hasThread: pending.hasThread,
-        replyToMessageId: pending.replyToMessageId,
-        senderOpenId: pending.ownerOpenId,
-        requestedPrompt: answerPrompt(pending.request, answers),
-        originalRequestedPrompt: pending.requestedPrompt,
-        isCompacting: false,
-        collaboration: pending.collaboration,
-        senderRuntime: pending.collaboration
-          ? this.ctx.lark.bot(pending.collaboration.fromBotId)
-          : undefined,
-        resources: [],
-      });
-    } catch (error) {
-      this.pending.set(id, pending);
-      await this.persist().catch(() => undefined);
-      return { toast: { type: "error", content: (error as Error).message } };
+    } else {
+      const custom = action.value.custom === true;
+      const optionId =
+        typeof action.value.optionId === "string" ? action.value.optionId : "";
+      const selected = question.options.find((option) => option.id === optionId);
+      const customAnswer =
+        typeof action.formValue?.custom_answer === "string"
+          ? action.formValue.custom_answer.trim()
+          : "";
+      const answer = custom ? customAnswer : (selected?.label ?? "");
+      if (!answer) {
+        return {
+          toast: {
+            type: "warning",
+            content: custom ? "请先输入你的答案。" : "这个选项已经失效。",
+          },
+        };
+      }
+      answered = this.flows.answer(token, questionId, answer);
+    }
+    if (!answered) {
+      return { toast: { type: "warning", content: "答案没有保存，请重试。" } };
+    }
+    if (!answered.complete) {
+      return {
+        toast: { type: "success", content: "已记录，继续下一题。" },
+        card: {
+          type: "raw",
+          data: this.ctx.cards.clarification({ flow: answered.flow }),
+        },
+      };
     }
 
-    const answerRecord = Object.fromEntries(answers);
+    const session = this.ctx.sessions.manager.get(answered.flow.sessionId)!;
+    const runtime = this.ctx.lark.bot(botId)!;
+    this.flows.delete(token);
+    this.ctx.tasks.startTask({
+      bot: runtime.bot,
+      botConfig: runtime.config,
+      session,
+      hasThread: answered.flow.replyInThread,
+      replyToMessageId: answered.flow.originalMessageId,
+      senderOpenId: answered.flow.ownerOpenId,
+      senderUnionId: answered.flow.ownerUnionId,
+      taskId: answered.flow.taskId,
+      requestedPrompt: formatClarificationAnswers(answered.flow),
+      originalRequestedPrompt: answered.flow.requestedPrompt,
+      isCompacting: false,
+      collaboration: answered.flow.collaboration,
+      senderRuntime: answered.flow.collaboration
+        ? this.ctx.lark.bot(answered.flow.collaboration.fromBotId)
+        : undefined,
+      resources: [],
+      // 仍广播 task/result 给编排汇总，但普通协作与 QA 自动交接到此为止。
+      suppressHandoff: true,
+    });
     return {
-      toast: { type: "success", content: "回答已提交，正在继续执行。" },
+      toast: { type: "success", content: "答案已收到。" },
       card: {
         type: "raw",
-        data: this.ctx.cards.clarificationCompleted({
-          request: pending.request,
-          answers: answerRecord,
-        }),
+        data: this.ctx.cards.clarificationContinuing({ flow: answered.flow }),
       },
     };
   }
@@ -195,20 +211,17 @@ export const inject = [
   "cards",
 ];
 
-export interface Config {
-  storePath?: string;
-}
-
-export async function apply(ctx: Context, config: Config = {}) {
-  const service = new ClarificationService(
-    ctx,
-    new ClarificationStore(
-      resolve(process.cwd(), config.storePath ?? "data/clarifications.json"),
-    ),
+export async function apply(ctx: Context) {
+  const service = new ClarificationService(ctx);
+  // DimAgent ACP 只声明 HTTP/SSE MCP；stdio 继续服务 Claude/Codex/Dim headless/agy。
+  // HTTP 入口仅绑定 loopback，并随插件卸载关闭，避免扩大工具暴露面。
+  const httpServer = await startClarificationHttpServer();
+  const unregister = ctx.applicationTools.register(
+    clarificationToolServer(httpServer.url),
   );
-  await service.load();
-  const unregister = ctx.applicationTools.register(clarificationToolServer());
+  ctx.effect(() => () => httpServer.close(), "clarification MCP HTTP");
   ctx.on("task/tool-calls", (payload) => service.handleToolCalls(payload));
+  ctx.on("task/message", (payload) => service.handleTaskMessage(payload));
   ctx.on("bot/card-action", (action, _bot, botConfig) =>
     service.handleCardAction(action, botConfig.id),
   );

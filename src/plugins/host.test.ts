@@ -4,7 +4,7 @@
  * 这里是“一切皆为插件”装配方式的端到端验证：替换 lark/cli 实现即可测试。
  */
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -303,30 +303,28 @@ function abortValueOf(card: Record<string, unknown>): Record<string, unknown> {
   throw new Error("卡片里找不到 abort 按钮");
 }
 
-function clarificationValueOf(card: Record<string, unknown>): Record<string, unknown> {
+function clarificationValueOf(
+  card: Record<string, unknown>,
+  optionId?: string,
+): Record<string, unknown> {
   const elements = (card.body as { elements?: unknown[] } | undefined)
     ?.elements ?? [];
   for (const element of elements) {
-    const formElements =
-      (element as { tag?: string; elements?: unknown[] }).tag === "form"
-        ? (element as { elements?: unknown[] }).elements ?? []
-        : [];
-    for (const formElement of formElements) {
-      const behaviors = (formElement as { behaviors?: { value?: unknown }[] })
-        .behaviors ?? [];
-      for (const behavior of behaviors) {
-        const value = behavior.value;
-        if (
-          typeof value === "object" &&
-          value !== null &&
-          (value as { action?: string }).action === "submit_clarification"
-        ) {
-          return value as Record<string, unknown>;
-        }
+    const behaviors = (element as { behaviors?: { value?: unknown }[] })
+      .behaviors ?? [];
+    for (const behavior of behaviors) {
+      const value = behavior.value as
+        | { action?: string; optionId?: string }
+        | undefined;
+      if (
+        value?.action === "answer_clarification" &&
+        (!optionId || value.optionId === optionId)
+      ) {
+        return value as Record<string, unknown>;
       }
     }
   }
-  throw new Error("卡片里找不到澄清提交按钮");
+  throw new Error("卡片里找不到澄清回答按钮");
 }
 
 /** 从编排面板卡片里取出「重试」按钮携带的 runId/subTaskId/retryToken。 */
@@ -361,7 +359,7 @@ function cardSummaryContains(
 
 async function waitFor(
   predicate: () => boolean,
-  timeoutMs = 2_000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
@@ -378,7 +376,6 @@ interface Host {
   lark: FakeLarkService;
   bot: ReturnType<typeof createFakeBot>["bot"];
   calls: ReturnType<typeof createFakeBot>["calls"];
-  clarificationsPath: string;
 }
 
 /** 组装一个最小 Agent OS 宿主：真实服务插件 + 假 cli/lark/config。 */
@@ -401,7 +398,6 @@ async function createHost(
   let cli!: FakeCliService;
   let lark!: FakeLarkService;
   const sessionsDir = await mkdtemp(join(tmpdir(), "agent-os-host-"));
-  const clarificationsPath = join(sessionsDir, "clarifications.json");
   tempDirs.push(sessionsDir);
   // 编排安全边界要求不同 bot 使用不同工作目录；测试宿主为每个成员创建隔离目录，
   // 需要验证冲突的用例可在挂载后显式构造同路径配置。
@@ -454,7 +450,7 @@ async function createHost(
     root.plugin(orchestrateCommand),
     root.plugin(panelCommand),
     root.plugin(tasksPlugin),
-    root.plugin(clarificationPlugin, { storePath: clarificationsPath }),
+    root.plugin(clarificationPlugin),
     root.plugin(routerPlugin),
   ]);
   // mount fiber 不等待深层 inject 级联，必须等全部插件 ACTIVE 再发事件。
@@ -472,7 +468,6 @@ async function createHost(
     lark,
     bot: fakeBot.bot,
     calls: fakeBot.calls,
-    clarificationsPath,
   };
 }
 
@@ -589,7 +584,7 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   );
 });
 
-test("澄清工具调用进入等待卡片，用户回答后续接原 CLI 会话", async () => {
+test("澄清工具逐题收集答案并续接原 CLI 会话", async () => {
   const host = await createHost();
   const message = incomingMessage({
     text: "实现优先级功能",
@@ -618,6 +613,15 @@ test("澄清工具调用进入等待卡片，用户回答后续接原 CLI 会话
               ],
               recommendedOptionId: "three",
             },
+            {
+              id: "entry",
+              prompt: "从哪里进入？",
+              options: [
+                { id: "list", label: "用户列表" },
+                { id: "menu", label: "操作菜单" },
+              ],
+              recommendedOptionId: "list",
+            },
           ],
         },
       },
@@ -625,31 +629,39 @@ test("澄清工具调用进入等待卡片，用户回答后续接原 CLI 会话
   });
 
   await waitFor(() =>
-    host.calls.updates.some((card) => cardSummaryContains(card, "等待回答")),
+    host.calls.updates.some((card) => cardSummaryContains(card, "确认优先级范围")),
   );
   assert.equal(host.calls.mentions.length, 0, "等待澄清时不能发送任务完成通知");
-  const persisted = JSON.parse(
-    await readFile(host.clarificationsPath, "utf8"),
-  ) as Array<Record<string, unknown>>;
-  assert.equal(persisted.length, 1, "待澄清状态必须持久化");
-  assert.equal(typeof persisted[0]?.runId, "string");
-  assert.equal(persisted[0]?.cliSessionId, "sess-clarification");
 
   const waitingCard = host.calls.updates.find((card) =>
-    cardSummaryContains(card, "等待回答"),
+    cardSummaryContains(card, "优先级需要支持几档"),
   )!;
+  const first = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "card-1",
+      value: clarificationValueOf(waitingCard, "three"),
+    },
+    host.bot,
+    baseBotConfig,
+  );
+  assert.equal(first?.toast?.content, "已记录，继续下一题。");
+  assert.match(JSON.stringify(first?.card?.data), /从哪里进入/);
+  assert.match(JSON.stringify(first?.card?.data), /已确认 1 项/);
+
   const response = await host.root.serial(
     "bot/card-action",
     {
       operatorOpenId: "ou_owner",
       messageId: "card-1",
-      value: clarificationValueOf(waitingCard),
-      formValue: { priority_scope: "three" },
+      value: clarificationValueOf(first?.card?.data ?? {}, "list"),
     },
     host.bot,
     baseBotConfig,
   );
-  assert.equal(response?.toast?.content, "回答已提交，正在继续执行。");
+  assert.equal(response?.toast?.content, "答案已收到。");
+  assert.match(JSON.stringify(response?.card?.data), /正在整理/);
   await waitFor(() => host.cli.captures.length === 2);
   assert.equal(
     host.cli.captures[1]?.sessionId,
@@ -657,15 +669,82 @@ test("澄清工具调用进入等待卡片，用户回答后续接原 CLI 会话
     "回答必须恢复原始 CLI 会话",
   );
   assert.match(host.cli.captures[1]?.prompt ?? "", /高、中、低三档/);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /用户列表/);
 
   host.cli.finish({ answer: "已按三档实现。", sessionId: "sess-clarification" });
   await waitFor(() =>
     host.calls.mentions.some((text) => text.includes("任务已完成")),
   );
-  assert.deepEqual(
-    JSON.parse(await readFile(host.clarificationsPath, "utf8")),
-    [],
-    "回答后必须删除待澄清记录",
+});
+
+test("同话题文字补充使旧澄清卡失效并继续同一会话", async () => {
+  const host = await createHost();
+  const original = incomingMessage({
+    messageId: "m-root",
+    text: "增加用户详情页",
+    senderOpenId: "ou_owner",
+  });
+  await host.root.parallel("bot/message", original, host.bot, baseBotConfig);
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "等待补充。",
+    sessionId: "sess-follow-up",
+    toolCalls: [
+      {
+        toolUseId: "tool-follow-up",
+        toolName: "request_clarification",
+        input: {
+          title: "确认详情字段",
+          questions: [
+            {
+              id: "fields",
+              prompt: "展示哪些字段？",
+              options: [
+                { id: "basic", label: "基础信息" },
+                { id: "all", label: "全部信息" },
+              ],
+              recommendedOptionId: "basic",
+            },
+          ],
+        },
+      },
+    ],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "确认详情字段")),
+  );
+  const oldCard = host.calls.updates.at(-1)!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-follow-up",
+      rootId: "m-root",
+      text: "需要展示注册时间和最近登录时间",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-follow-up");
+  assert.match(host.cli.captures[1]?.prompt ?? "", /需要展示注册时间和最近登录时间/);
+  assert.ok(host.calls.updates.some((card) => cardSummaryContains(card, "已更新")));
+
+  const expired = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "card-1",
+      value: clarificationValueOf(oldCard, "basic"),
+    },
+    host.bot,
+    baseBotConfig,
+  );
+  assert.equal(expired?.toast?.content, "这组澄清问题已经失效。");
+  host.cli.finish({ answer: "字段已确认。", sessionId: "sess-follow-up" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
   );
 });
 

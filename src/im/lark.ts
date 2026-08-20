@@ -29,6 +29,7 @@ export interface IncomingMessage {
   threadId: string;
   senderType: string;
   senderOpenId: string;
+  senderUnionId?: string;
   mentions: Mention[];
 }
 
@@ -52,6 +53,7 @@ export interface BotOptions {
 /** 飞书卡片动作中业务层唯一需要信任的平台字段。 */
 export interface CardAction {
   operatorOpenId: string;
+  operatorUnionId?: string;
   messageId: string;
   /** 表单组件随卡片动作一起提交的值；普通按钮回调没有该字段。 */
   formValue?: Record<string, unknown>;
@@ -192,6 +194,11 @@ export function parseCardAction(data: unknown): CardAction {
         : typeof legacyOperator.open_id === "string"
           ? legacyOperator.open_id
           : "",
+    ...(typeof operator.union_id === "string"
+      ? { operatorUnionId: operator.union_id }
+      : typeof legacyOperator.union_id === "string"
+        ? { operatorUnionId: legacyOperator.union_id }
+        : {}),
     messageId:
       typeof context.open_message_id === "string"
         ? context.open_message_id
@@ -400,6 +407,9 @@ export function startBot(options: BotOptions): Bot {
         threadId: message.thread_id ?? "",
         senderType: data.sender.sender_type ?? "",
         senderOpenId: data.sender.sender_id?.open_id ?? "",
+        ...(typeof data.sender.sender_id?.union_id === "string"
+          ? { senderUnionId: data.sender.sender_id.union_id }
+          : {}),
         mentions: parseMentions(message.mentions),
       };
 

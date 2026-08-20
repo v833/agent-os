@@ -36,6 +36,7 @@ import type { SessionsService } from "./sessions.js";
 import type { TasksService } from "./tasks.js";
 import type { TeamService } from "./team.js";
 import type { WorkspacesService } from "./workspaces.js";
+import type { ClarificationService } from "./clarification.js";
 
 declare module "cordis" {
   interface Context {
@@ -65,6 +66,8 @@ declare module "cordis" {
     orchestration: OrchestrationService;
     /** 工作区稳定 revision 指纹，供 QA Gate 固定和验证审查版本。 */
     workspaces: WorkspacesService;
+    /** 需求澄清：逐题飞书流程、同话题替代与原 CLI 会话续接。 */
+    clarification: ClarificationService;
   }
 
   interface Events {
@@ -85,6 +88,10 @@ declare module "cordis" {
     "task/tool-calls"(
       payload: TaskToolCallsPayload,
     ): Promise<TaskToolCallsOutcome | undefined>;
+    /** 普通消息启动任务前的可选改写点；澄清插件用它让同话题补充替代旧卡片。 */
+    "task/message"(
+      payload: TaskMessagePayload,
+    ): Promise<TaskMessageOutcome | undefined>;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
     /**
@@ -140,6 +147,9 @@ export interface StartTaskInput {
   hasThread: boolean;
   replyToMessageId: string;
   senderOpenId: string;
+  senderUnionId?: string;
+  /** 同一飞书话题的稳定任务编号；旧的定时/协作入口可以不提供。 */
+  taskId?: string;
   requestedPrompt: string;
   /** 应用工具恢复轮次使用；CLI 收到 requestedPrompt，最终结果仍关联最初任务。 */
   originalRequestedPrompt?: string;
@@ -148,6 +158,23 @@ export interface StartTaskInput {
   collaboration?: CollaborationMessage;
   senderRuntime?: BotRuntime;
   resources: MessageResource[];
+  /** 应用工具恢复任务可禁止普通协作与 QA 自动交接，但仍广播结果供编排汇总。 */
+  suppressHandoff?: boolean;
+}
+
+/** router 准备启动普通消息时交给可选业务插件的上下文。 */
+export interface TaskMessagePayload {
+  bot: Bot;
+  botConfig: BotConfig;
+  message: IncomingMessage;
+  taskId: string;
+  requestedPrompt: string;
+}
+
+/** 可选业务插件对本轮提示词和原始任务归属的改写。 */
+export interface TaskMessageOutcome {
+  requestedPrompt: string;
+  originalRequestedPrompt?: string;
 }
 
 /** 应用工具插件认领任务结果后返回的替代终态卡片。 */
@@ -160,6 +187,9 @@ export interface TaskToolCallsPayload extends TaskResultPayload {
   result: CliRunResult;
   runId: string;
   senderOpenId: string;
+  senderUnionId?: string;
+  /** 当前运行卡片的 message_id，供流程卡片严格绑定回调来源。 */
+  cardMessageId: string;
 }
 
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */
@@ -173,6 +203,8 @@ export interface TaskResultPayload {
   hasThread: boolean;
   collaboration?: CollaborationMessage;
   senderRuntime?: BotRuntime;
+  taskId?: string;
+  suppressHandoff?: boolean;
 }
 
 /** QA Gate 从普通 CLI 文本中解析出的结构化、可路由结论。 */

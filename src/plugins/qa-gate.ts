@@ -43,6 +43,7 @@ export class QAGate {
   constructor(private readonly ctx: Context) {}
 
   async handleTaskResult(payload: TaskResultPayload): Promise<void> {
+    if (payload.suppressHandoff) return;
     const review = payload.collaboration?.qaReview;
     if (!review) {
       if (!payload.collaboration && payload.botConfig.reviewBy) {
@@ -60,6 +61,7 @@ export class QAGate {
 
   /** CLI 失败无法生成 QAResult 时，按 blocked 处理并升级负责人。 */
   async handleTaskFailed(payload: TaskResultPayload): Promise<void> {
+    if (payload.suppressHandoff) return;
     const review = payload.collaboration?.qaReview;
     if (!review) return;
     const actualRevision = await this.safeRevision(
