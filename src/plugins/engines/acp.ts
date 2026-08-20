@@ -8,7 +8,7 @@ import type { Context } from "cordis";
 import { AcpAdapter, type AcpEngineConfig } from "../../cli/acp-adapter.js";
 
 export const name = "engines/acp";
-export const inject = ["cli"];
+export const inject = ["cli", "applicationTools"];
 
 export interface Config {
   /** 要注册的 ACP 引擎列表；缺省时注册 DimAgent 的 ACP 接入。 */
@@ -17,11 +17,22 @@ export interface Config {
 
 /** 默认 ACP 引擎：DimAgent 的 `dim acp` stdio server。 */
 const DEFAULT_ACP_ENGINES: AcpEngineConfig[] = [
-  { id: "dimagent", command: "dim", args: ["acp"], displayName: "DimAgent" },
+  {
+    id: "dimagent",
+    command: "dim",
+    args: ["acp"],
+    displayName: "DimAgent",
+    resumeMethod: "load",
+    minAgentVersion: "0.3.10",
+    acpMcpTransports: ["http", "sse"],
+    session: {
+      configOptions: { permission: "full-access", mode: "agent" },
+    },
+  },
 ];
 
 export function apply(ctx: Context, config: Config = {}) {
   for (const engine of config.engines ?? DEFAULT_ACP_ENGINES) {
-    ctx.cli.register(new AcpAdapter(engine));
+    ctx.cli.register(new AcpAdapter(engine, () => ctx.applicationTools.list()));
   }
 }

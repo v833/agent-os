@@ -3,7 +3,7 @@
  * 负责首次/续聊参数构造、stream-json 事件翻译与会话失效判定；
  * 不参与子进程生命周期管理（由通用 Runner 驱动）。
  *
- * 事件语义基于 agy 1.1.x 真实 stream-json 协议（已用本机 agy 1.1.15 探针校准）：
+ * 事件语义基于 agy 1.1.x 真实 stream-json 协议（已用本机 agy 1.1.16 探针校准）：
  *   - 顶层以 event 字段判别：init / step_update / result；
  *   - 数据嵌套在 event 同名子对象中（init / step_update / result）；
  *   - step_update 用 step_type + state（ACTIVE=开始 / DONE=结束）描述步骤；
@@ -11,10 +11,13 @@
  *   - 终态 result.response 即最终回答，result.usage 为 token 统计。
  *
  * 能力边界（与 Claude/Codex/DimAgent 的差异）：
- *   - agy 1.1.x 没有命令行 MCP 注入点（MCP server 走全局/项目配置发现），
- *     因此不注入 Agent OS 应用工具（request_clarification 等无法通过 agy 触发）；
+ *   - agy 1.1.x 没有命令行 MCP 注入点，适配器会在启动前把应用工具合并到
+ *     当前工作区 `.agents/mcp_config.json`，由 agy print/headless 自动发现；
  *   - agy 没有原生 compact 事件协议，buildCompactPlan 明确抛错拒绝 /compact。
  */
+import type { ApplicationToolProvider } from "./app-tools.js";
+import { findAgyApplicationTool } from "./app-tools.js";
+import { ensureAgyMcpConfig } from "./agy-mcp-config.js";
 import type { CliAdapter, CliCompactPlan, CliEvent, CliRunStats } from "./types.js";
 
 const TOOL_LABELS: Record<string, string> = {
@@ -90,6 +93,14 @@ export class AgyAdapter implements CliAdapter {
   readonly command = "agy";
   readonly displayName = "Antigravity";
   readonly accessMode = "headless" as const;
+
+  constructor(
+    private readonly applicationTools: ApplicationToolProvider = () => [],
+  ) {}
+
+  async prepareRun(cwd: string): Promise<void> {
+    await ensureAgyMcpConfig(cwd, this.applicationTools());
+  }
 
   /** 构造首次执行的命令行参数 */
   buildArgs(prompt: string): string[] {
@@ -180,6 +191,22 @@ export class AgyAdapter implements CliAdapter {
             toolName,
             label,
           });
+          const applicationToolName = [
+            step.tool_name,
+            step.tool_info?.name,
+          ]
+            .map((candidate) =>
+              findAgyApplicationTool(this.applicationTools(), candidate),
+            )
+            .find((candidate): candidate is string => candidate !== undefined);
+          if (applicationToolName) {
+            events.push({
+              type: "tool_call",
+              toolUseId,
+              toolName: applicationToolName,
+              input: step.tool_info?.parameters ?? {},
+            });
+          }
         }
       }
       if (step.usage) {

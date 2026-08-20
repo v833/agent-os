@@ -206,6 +206,47 @@ test("传入会话 ID 时 Runner 使用适配器的续聊参数", async () => {
   });
 });
 
+test("Runner 在构造 CLI 参数前等待适配器准备工作区配置", async () => {
+  let prepared = false;
+  const parser = new ScriptAdapter("");
+  const adapter: CliAdapter = {
+    id: "agy",
+    command: process.execPath,
+    displayName: "测试 CLI",
+    async prepareRun(cwd) {
+      assert.equal(cwd, process.cwd());
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      prepared = true;
+    },
+    buildArgs() {
+      assert.equal(prepared, true);
+      return [
+        "-e",
+        `console.log(JSON.stringify({ type: "result", answer: "配置已准备" }));`,
+      ];
+    },
+    buildResumeArgs() {
+      throw new Error("不应构造续聊参数");
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
+    },
+    parseEvents: parser.parseEvents.bind(parser),
+  };
+
+  const result = await runCli({
+    adapter,
+    prompt: "测试",
+    cwd: process.cwd(),
+  });
+  assert.deepEqual(result, { answer: "配置已准备" });
+});
+
 test("续聊时 stderr 提示会话已失效会把静默新建会话判为失败", async () => {
   const parser = new ScriptAdapter("");
   const adapter: CliAdapter = {

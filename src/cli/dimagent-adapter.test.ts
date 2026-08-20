@@ -105,7 +105,6 @@ test("DimAgent 翻译工具调用与上下文事件", () => {
         label: "运行命令",
         detail: "gh issue list",
       },
-      { type: "tool_call", toolUseId: "call-1", toolName: "exec", input: { command: "gh issue list" } },
     ],
   );
   assert.deepEqual(
@@ -127,6 +126,50 @@ test("DimAgent 翻译工具调用与上下文事件", () => {
       }),
     ),
     [{ type: "tool_end", toolUseId: "call-1", failed: false }],
+  );
+});
+
+test("DimAgent 识别已注册 MCP 工具并翻译为统一 tool_call", () => {
+  const adapter = new DimagentAdapter(() => [
+    {
+      id: "agent_os_clarification",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["request_clarification"],
+    },
+  ]);
+  const sid = "sess_mcp";
+
+  adapter.parseEvents(
+    JSON.stringify({ eventType: "run:accepted", sessionId: sid, payload: {} }),
+  );
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        eventType: "tool:started",
+        sessionId: sid,
+        payload: {
+          toolCallId: "call-mcp",
+          toolName: "agent_os_clarification__request_clarification",
+          toolInput: { questions: [] },
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "call-mcp",
+        toolName: "agent_os_clarification__request_clarification",
+        label: "调用 agent_os_clarification__request_clarification",
+        detail: JSON.stringify({ questions: [] }),
+      },
+      {
+        type: "tool_call",
+        toolUseId: "call-mcp",
+        toolName: "request_clarification",
+        input: { questions: [] },
+      },
+    ],
   );
 });
 

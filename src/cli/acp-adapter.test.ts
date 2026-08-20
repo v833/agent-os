@@ -5,21 +5,77 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AcpAdapter } from "./acp-adapter.js";
+import { acpMcpServers } from "./app-tools.js";
 
 test("AcpAdapter 用配置构造启动参数与展示名", () => {
+  const applicationTools = [
+    {
+      id: "agent_os_clarification",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["request_clarification"],
+    },
+  ];
   const adapter = new AcpAdapter({
     id: "dimagent",
     command: "dim",
     args: ["acp"],
     displayName: "DimAgent",
-  });
+    session: {
+      configOptions: { permission: "full-access", mode: "agent" },
+      model: "dimcode-api-oauth/deepseek-v4-pro",
+    },
+  }, () => applicationTools);
 
   assert.equal(adapter.id, "dimagent");
   assert.equal(adapter.command, "dim");
   assert.equal(adapter.accessMode, "acp");
   assert.deepEqual(adapter.buildArgs("提示词不进启动参数"), ["acp"]);
   assert.deepEqual(adapter.buildResumeArgs("继续", "sess-1"), ["acp"]);
+  assert.deepEqual(adapter.getApplicationTools(), applicationTools);
+  assert.deepEqual(adapter.getAcpSessionConfig(), {
+    configOptions: { permission: "full-access", mode: "agent" },
+    model: "dimcode-api-oauth/deepseek-v4-pro",
+  });
   assert.deepEqual(adapter.parseEvents('{"type":"result"}'), []);
+});
+
+test("ACP MCP 同时支持 stdio 与 DimAgent 所需的 HTTP 描述", () => {
+  assert.deepEqual(
+    acpMcpServers([
+      {
+        id: "stdio-server",
+        command: "node",
+        args: ["server.js"],
+        tools: ["stdio_tool"],
+      },
+      {
+        id: "http-server",
+        command: "node",
+        args: ["server.js"],
+        tools: ["http_tool"],
+        acp: {
+          type: "http",
+          url: "http://127.0.0.1:12345/mcp",
+          headers: [],
+        },
+      },
+    ]),
+    [
+      {
+        name: "stdio-server",
+        command: "node",
+        args: ["server.js"],
+        env: [],
+      },
+      {
+        type: "http",
+        name: "http-server",
+        url: "http://127.0.0.1:12345/mcp",
+        headers: [],
+      },
+    ],
+  );
 });
 
 test("AcpAdapter 缺省参数与展示名自动回退", () => {

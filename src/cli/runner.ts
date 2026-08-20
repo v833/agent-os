@@ -80,12 +80,16 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     });
   }
 
-  const executable = resolveCliCommand(adapter.command);
-  const adapterArgs = sessionId
-    ? adapter.buildResumeArgs(prompt, sessionId)
-    : adapter.buildArgs(prompt);
+  const startHeadless = () => {
+    if (signal?.aborted) {
+      return Promise.reject(new Error(`${adapter.displayName} 执行已取消`));
+    }
+    const executable = resolveCliCommand(adapter.command);
+    const adapterArgs = sessionId
+      ? adapter.buildResumeArgs(prompt, sessionId)
+      : adapter.buildArgs(prompt);
 
-  return new Promise((resolve, reject) => {
+    return new Promise<CliRunResult>((resolve, reject) => {
     // shell=false 且参数分离，飞书文本无法逃逸成额外系统命令。
     const child = spawn(
       executable.command,
@@ -253,7 +257,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         ...(toolCalls.length > 0 ? { toolCalls } : {}),
       });
     });
-  });
+    });
+  };
+
+  // 配置准备失败时不启动 CLI，错误直接回到任务层展示；重试时会再次执行幂等准备。
+  return Promise.resolve()
+    .then(() => adapter.prepareRun?.(cwd))
+    .then(startHeadless);
 }
 
 function isTransientStreamDisconnect(error: unknown): boolean {

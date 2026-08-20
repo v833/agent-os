@@ -2,12 +2,29 @@
  * CLI 适配层公共契约：统一 Codex、Claude Code 与 DimAgent 的参数构造和事件语义，
  * 让 Agent OS 的进程控制与具体供应商协议彼此独立。
  */
+import type { ApplicationToolServer } from "./app-tools.js";
 
 /** 引擎标识；内置引擎保持字面量提示，同时允许插件注册任意扩展 id（如 ACP 引擎）。 */
 export type CliId = "codex" | "claude" | "dimagent" | (string & {});
 
 /** DimAgent 的接入协议；其他引擎目前只支持 headless。 */
 export type CliAccessMode = "headless" | "acp";
+
+/** ACP 恢复已有会话时使用的协议方法。auto 会优先使用 resume，再退回 load。 */
+export type AcpResumeMethod = "auto" | "load" | "resume";
+
+/** ACP 引擎声明支持的 MCP 传输；stdio 是未声明 acp 入口的应用工具默认传输。 */
+export type AcpMcpTransport = "stdio" | "http" | "sse";
+
+/** ACP 会话创建后需要应用的引擎配置；具体值由 ACP 引擎插件声明。 */
+export interface AcpSessionConfig {
+  /** 通过标准 session/set_config_option 顺序设置的配置项。 */
+  configOptions?: Readonly<Record<string, string>>;
+  /** 通过标准 session/set_mode 设置的模式；通常可由 configOptions.mode 替代。 */
+  modeId?: string;
+  /** DimCode 等 ACP 扩展支持的模型覆盖；值必须来自 session/new 的模型目录。 */
+  model?: string;
+}
 
 export interface CliRunStats {
   durationMs?: number;
@@ -75,6 +92,18 @@ export interface CliAdapter {
   readonly accessMode?: CliAccessMode;
   buildArgs(prompt: string): string[];
   buildResumeArgs(prompt: string, sessionId: string): string[];
+  /** 启动 headless 进程前准备工作区级配置；例如 agy 的 MCP 配置文件。 */
+  prepareRun?(cwd: string): Promise<void> | void;
+  /** ACP/ headless 适配器提供插件注册的应用工具；未声明表示没有注入工具。 */
+  getApplicationTools?(): readonly ApplicationToolServer[];
+  /** ACP 适配器声明 session/new 后必须应用的会话配置；headless 适配器不实现。 */
+  getAcpSessionConfig?(): AcpSessionConfig | undefined;
+  /** ACP 恢复方式；未声明时按能力自动选择。 */
+  getAcpResumeMethod?(): AcpResumeMethod;
+  /** ACP server 的最低版本；声明后 initialize 必须返回不低于该版本的 agentInfo。 */
+  getAcpMinAgentVersion?(): string | undefined;
+  /** ACP server 支持的 MCP 传输；未声明时保留所有应用工具传输。 */
+  getAcpMcpTransports?(): readonly AcpMcpTransport[] | undefined;
   buildCompactPlan(sessionId: string, instructions?: string): CliCompactPlan;
   parseEvents(line: string): CliEvent[];
   /** 判断失败信息是否明确表示恢复指针已经失效。 */

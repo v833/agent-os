@@ -3,7 +3,7 @@
  * 验证 headless 参数构造、stream-json 事件翻译（真实 1.1.x 协议：
  * event 判别 + init/step_update/result 嵌套、state=ACTIVE/DONE 工具配对、
  * result.response 终态回答）、会话续接、compact 边界与失效会话识别。
- * 事件样例基于本机 agy 1.1.15 探针校准。
+ * 事件样例基于本机 agy 1.1.16 探针校准。
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -109,6 +109,82 @@ test("AgyAdapter 用 state=ACTIVE/DONE 配对工具调用", () => {
   assert.deepEqual(adapter.parseEvents(JSON.stringify(done)), [
     { type: "tool_end", toolUseId: "step-3", failed: false },
   ]);
+});
+
+test("AgyAdapter 识别工作区 MCP 的应用工具调用", () => {
+  const adapter = new AgyAdapter(() => [
+    {
+      id: "agent_os_clarification",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["request_clarification"],
+    },
+  ]);
+
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "conv-abc",
+          step_index: 4,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: "mcp__agent_os_clarification__request_clarification",
+          tool_info: {
+            parameters: {
+              title: "需求澄清",
+              questions: [],
+            },
+          },
+        },
+      }),
+    ),
+    [
+      {
+        type: "tool_start",
+        toolUseId: "step-4",
+        toolName: "mcp__agent_os_clarification__request_clarification",
+        label: "调用 mcp__agent_os_clarification__request_clarification",
+      },
+      {
+        type: "tool_call",
+        toolUseId: "step-4",
+        toolName: "request_clarification",
+        input: { title: "需求澄清", questions: [] },
+      },
+    ],
+  );
+});
+
+test("AgyAdapter 兼容 tool_name 与 tool_info.name 分开提供 MCP 工具名", () => {
+  const adapter = new AgyAdapter(() => [
+    {
+      id: "agent_os_clarification",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["request_clarification"],
+    },
+  ]);
+  const events = adapter.parseEvents(
+    JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 5,
+        state: "ACTIVE",
+        step_type: "tool",
+        tool_name: "MCP",
+        tool_info: {
+          name: "agent_os_clarification/request_clarification",
+          parameters: { title: "澄清" },
+        },
+      },
+    }),
+  );
+  assert.equal(
+    events.find((event) => event.type === "tool_call")?.toolName,
+    "request_clarification",
+  );
 });
 
 test("AgyAdapter 解析终态 result（response 为最终回答）", () => {

@@ -34,6 +34,10 @@ lines.on("line", (line) => {
     send({ id: message.id, result: {} });
     return;
   }
+  if (message.method === "session/close") {
+    send({ id: message.id, result: {} });
+    return;
+  }
   if (message.method !== "session/prompt") return;
   const sessionId = message.params.sessionId;
   send({
@@ -155,4 +159,3 @@ test("ACP Runner 使用 session/resume 续接已有会话", async () => {
   assert.equal(result.sessionId, "existing-session");
   assert.equal(result.answer, "任务完成");
 });
-

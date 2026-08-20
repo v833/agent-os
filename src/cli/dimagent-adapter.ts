@@ -11,6 +11,9 @@ import type {
   CliEvent,
   CliRunStats,
 } from "./types.js";
+import type { ApplicationToolProvider } from "./app-tools.js";
+import { findAcpApplicationTool } from "./app-tools.js";
+import { ensureDimagentProjectMcpConfig } from "./dim-mcp-config.js";
 
 interface DimagentEvent {
   type?: unknown;
@@ -128,6 +131,19 @@ export class DimagentAdapter implements CliAdapter {
 
   private readonly runStates = new Map<string, DimRunState>();
 
+  constructor(
+    private readonly applicationTools: ApplicationToolProvider = () => [],
+  ) {}
+
+  /** 每轮启动前把插件 Server 增量合并到当前项目的 `.mcp.json`。 */
+  async prepareRun(cwd: string): Promise<void> {
+    await ensureDimagentProjectMcpConfig(cwd, this.applicationTools());
+  }
+
+  getApplicationTools() {
+    return this.applicationTools();
+  }
+
   buildArgs(prompt: string): string[] {
     return ["exec", "--json", "--policy", "full-access", prompt];
   }
@@ -182,6 +198,10 @@ export class DimagentAdapter implements CliAdapter {
       const toolUseId = asString(payload.toolCallId);
       const toolName = asString(payload.toolName) ?? "Tool";
       if (toolUseId) {
+        const applicationToolName = findAcpApplicationTool(
+          this.applicationTools(),
+          toolName,
+        );
         events.push({
           type: "tool_start",
           toolUseId,
@@ -192,12 +212,16 @@ export class DimagentAdapter implements CliAdapter {
             : {}),
         });
         // tool_call 让 Runner 记录本轮成功调用的应用工具（失败的会在 tool_end 剔除）。
-        events.push({
-          type: "tool_call",
-          toolUseId,
-          toolName,
-          input: payload.toolInput,
-        });
+        // 只有插件注册的 MCP 工具进入澄清/应用工具结果链路；文件、命令等
+        // 内建工具仍只展示进度，避免把所有工具调用误当作业务工具。
+        if (applicationToolName) {
+          events.push({
+            type: "tool_call",
+            toolUseId,
+            toolName: applicationToolName,
+            input: payload.toolInput ?? {},
+          });
+        }
       }
     } else if (type === "tool:completed") {
       const toolUseId = asString(payload.toolCallId);

@@ -7,8 +7,8 @@ import type { Context } from "cordis";
 import { DimagentAdapter } from "../../cli/dimagent-adapter.js";
 
 export const name = "engines/dimagent";
-export const inject = ["cli"];
+export const inject = ["cli", "applicationTools"];
 
 export function apply(ctx: Context) {
-  ctx.cli.register(new DimagentAdapter());
+  ctx.cli.register(new DimagentAdapter(() => ctx.applicationTools.list()));
 }
