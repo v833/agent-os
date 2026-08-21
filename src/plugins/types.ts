@@ -37,6 +37,7 @@ import type { TasksService } from "./tasks.js";
 import type { TeamService } from "./team.js";
 import type { WorkspacesService } from "./workspaces.js";
 import type { ClarificationService } from "./clarification.js";
+import type { ProductSpecService } from "./product-spec.js";
 
 declare module "cordis" {
   interface Context {
@@ -68,6 +69,8 @@ declare module "cordis" {
     workspaces: WorkspacesService;
     /** 需求澄清：逐题飞书流程、同话题替代与原 CLI 会话续接。 */
     clarification: ClarificationService;
+    /** 产品方案确认：真实产物校验、发起人确认和卡片状态流转。 */
+    productSpec: ProductSpecService;
   }
 
   interface Events {
@@ -186,6 +189,8 @@ export interface TaskToolCallsOutcome {
   notificationText?: string;
   /** 完成型工具结果是否禁止普通协作/QA 自动交接。 */
   suppressHandoff?: boolean;
+  /** 最终卡片成功更新后提交插件内存状态；失败时不会调用。 */
+  afterCardPublished?: () => void | Promise<void>;
 }
 
 /** 一轮 CLI 的应用工具调用及恢复任务所需上下文。 */

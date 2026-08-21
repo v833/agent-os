@@ -9,6 +9,9 @@ import test from "node:test";
 import {
   assertProductSpecDocuments,
   findProductSpecRequest,
+  isProductSpecOwner,
+  productSpecDocumentRevision,
+  ProductSpecFlowStore,
   ProductSpecRequestSchema,
 } from "./product-spec.js";
 
@@ -103,4 +106,66 @@ test("只在 Spec 与至少一个 Markdown Ticket 真实落盘后通过", async 
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("产品文档内容指纹会区分 Spec 或 Ticket 的修改", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "agent-os-product-revision-"));
+  try {
+    const featureDir = join(workspace, ".scratch", "revision");
+    const ticketsDir = join(featureDir, "issues");
+    await mkdir(ticketsDir, { recursive: true });
+    await writeFile(join(featureDir, "spec.md"), "# Spec v1\n", "utf8");
+    await writeFile(join(ticketsDir, "01.md"), "# Ticket v1\n", "utf8");
+    const first = await productSpecDocumentRevision(workspace, {
+      ...validRequest,
+      specPath: ".scratch/revision/spec.md",
+      ticketsPath: ".scratch/revision/issues",
+    });
+    await writeFile(join(ticketsDir, "01.md"), "# Ticket v2\n", "utf8");
+    const second = await productSpecDocumentRevision(workspace, {
+      ...validRequest,
+      specPath: ".scratch/revision/spec.md",
+      ticketsPath: ".scratch/revision/issues",
+    });
+    assert.notEqual(first, second);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test("产品方案 Flow 会替换旧待确认状态，并且确认只写入一次时间", () => {
+  const store = new ProductSpecFlowStore();
+  const first = store.create({
+    taskId: "task-1",
+    botId: "product",
+    ownerOpenId: "ou_owner",
+    workspaceDir: "C:\\workspace",
+    documentRevision: "revision-1",
+    request: validRequest,
+  });
+  const second = store.create({
+    taskId: "task-1",
+    botId: "product",
+    ownerOpenId: "ou_owner",
+    workspaceDir: "C:\\workspace",
+    documentRevision: "revision-2",
+    request: { ...validRequest, title: "用户详情页 v2" },
+  });
+
+  assert.equal(store.get(first.token)?.status, "expired");
+  const approved = store.approve(second.token);
+  assert.equal(approved?.status, "approved");
+  assert.ok(approved?.approvedAt);
+  assert.equal(store.approve(second.token), undefined);
+  assert.equal(
+    isProductSpecOwner(second, { operatorOpenId: "ou_other" }),
+    false,
+  );
+  assert.equal(
+    isProductSpecOwner(
+      { ...second, ownerUnionId: "on_owner" },
+      { operatorOpenId: "ou_other", operatorUnionId: "on_owner" },
+    ),
+    true,
+  );
 });

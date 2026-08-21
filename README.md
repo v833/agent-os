@@ -123,7 +123,7 @@ Copy-Item config/bots.example.json config/bots.json
 
 产品经理依次使用 `grill-me`、`to-spec` 和 `to-tickets` 完成需求澄清、Spec 生成与纵向 Ticket 拆分。这三项 Skill 已随 Agent OS 内置，不需要复制到 `../agent-os-team-example`；如产品项目需要定制，可在其 `.agents/skills/` 或 `.claude/skills/` 放置同名版本覆盖内置内容。本地工作项格式见 `docs/agents/issue-tracker.md`。
 
-Spec 与 Tickets 写入 `.scratch/<feature>/` 后，产品经理调用 `request_spec_approval`。`product-spec` 插件只认领启用了 `to-spec` 的 bot，并在确认 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件后，才把任务卡更新为只读“待确认”产物卡；本阶段不会自动派给开发者。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线这条能力。
+Spec 与 Tickets 写入 `.scratch/<feature>/` 后，产品经理调用 `request_spec_approval`。`product-spec` 插件只认领启用了 `to-spec` 的 bot，并在确认 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件后，才把任务卡更新为带“确认产品方案”按钮的待确认产物卡；只有任务发起人确认后才记录产品阶段就绪，本阶段不会自动派给开发者。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线这条能力。
 
 ## 启动与验证
 

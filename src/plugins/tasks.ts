@@ -355,6 +355,7 @@ export class TasksService extends Service {
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
           if (outcome) {
             await cardUpdater.finish(outcome.card);
+            await outcome.afterCardPublished?.();
             if (outcome.notificationText && !collaboration) {
               await bot.sendResultNotification({
                 replyToMessageId,

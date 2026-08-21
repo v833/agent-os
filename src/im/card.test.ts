@@ -13,7 +13,9 @@ import {
   buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
-  buildProductSpecReadyCard,
+  buildProductSpecApprovalCard,
+  buildProductSpecApprovedCard,
+  buildProductSpecExpiredCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -284,15 +286,24 @@ test("会话提示卡片使用指定状态颜色", () => {
   assert.match(card.body.elements[0].content, /CLI 会话 ID/);
 });
 
-test("产品文档卡片只展示转义后的真实路径且不包含确认按钮", () => {
-  const card = buildProductSpecReadyCard({
-    request: {
-      title: "用户 <at id=ou_fake></at> 详情页",
-      summary: "只读展示基础信息。",
-      specPath: ".scratch/user-detail/spec.md",
-      ticketsPath: ".scratch/user-detail/issues",
-    },
-  }) as any;
+const productSpecFlow = {
+  token: "product-spec-token",
+  taskId: "task-1",
+  botId: "product",
+  ownerOpenId: "ou_owner",
+  workspaceDir: "C:\\workspace",
+  documentRevision: "revision-1",
+  request: {
+    title: "用户 <at id=ou_fake></at> 详情页",
+    summary: "只读展示基础信息。",
+    specPath: ".scratch/user-detail/spec.md",
+    ticketsPath: ".scratch/user-detail/issues",
+  },
+  status: "pending",
+} as const;
+
+test("产品文档待确认卡展示转义路径并携带确认按钮", () => {
+  const card = buildProductSpecApprovalCard(productSpecFlow) as any;
 
   assert.equal(card.header.template, "blue");
   assert.equal(card.header.title.content, "产品文档已生成");
@@ -300,8 +311,25 @@ test("产品文档卡片只展示转义后的真实路径且不包含确认按�
   assert.match(JSON.stringify(card), /\.scratch\/user-detail\/spec\.md/);
   assert.equal(
     card.body.elements.some((element: any) => element.tag === "button"),
-    false,
+    true,
   );
+});
+
+test("产品文档已确认和已失效卡分别展示终态", () => {
+  const approved = buildProductSpecApprovedCard({
+    ...productSpecFlow,
+    status: "approved",
+    approvedAt: "2026-08-21T00:00:00.000Z",
+  }) as any;
+  const expired = buildProductSpecExpiredCard({
+    ...productSpecFlow,
+    status: "expired",
+  }) as any;
+
+  assert.equal(approved.header.template, "green");
+  assert.match(JSON.stringify(approved), /2026-08-21T00:00:00.000Z/);
+  assert.equal(expired.header.template, "grey");
+  assert.match(JSON.stringify(expired), /已经提交了更新的产品方案/);
 });
 
 test("交接卡片展示来源、目标、项目和审查说明", () => {

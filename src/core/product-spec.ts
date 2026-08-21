@@ -2,7 +2,8 @@
  * 产品文档提交契约：约束 request_spec_approval 的结构化参数，并在展示前
  * 校验 Spec 与 Tickets 确实落在当前工作区。它是产品文档插件的可信边界。
  */
-import { readdir, realpath, stat } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import { z } from "zod";
 
@@ -72,6 +73,125 @@ export const ProductSpecRequestSchema = z.object({
 });
 
 export type ProductSpecRequest = z.infer<typeof ProductSpecRequestSchema>;
+
+/** 已落盘、等待任务发起人确认的产品方案流程状态。 */
+export interface ProductSpecFlow {
+  token: string;
+  taskId: string;
+  botId: string;
+  ownerOpenId: string;
+  ownerUnionId?: string;
+  cardMessageId?: string;
+  workspaceDir: string;
+  request: ProductSpecRequest;
+  /** 提交时 Spec 与 Tickets 内容的指纹；确认时必须仍然一致。 */
+  documentRevision: string;
+  status: "pending" | "approved" | "expired";
+  approvedAt?: string;
+}
+
+/** 创建产品方案确认流程所需的任务、操作者、卡片和文档信息。 */
+export interface CreateProductSpecFlowOptions {
+  taskId: string;
+  botId: string;
+  ownerOpenId: string;
+  ownerUnionId?: string;
+  cardMessageId?: string;
+  workspaceDir: string;
+  request: ProductSpecRequest;
+  documentRevision: string;
+}
+
+/** 判断操作者是否与提交产品方案的任务发起人一致。 */
+export function isProductSpecOwner(
+  flow: Pick<ProductSpecFlow, "ownerOpenId" | "ownerUnionId">,
+  operator: { operatorOpenId: string; operatorUnionId?: string },
+): boolean {
+  if (flow.ownerUnionId && operator.operatorUnionId) {
+    return flow.ownerUnionId === operator.operatorUnionId;
+  }
+  return flow.ownerOpenId === operator.operatorOpenId;
+}
+
+/** 产品方案确认状态的内存 Store；服务重启后旧 token 会自然失效。 */
+export class ProductSpecFlowStore {
+  private readonly flows = new Map<string, ProductSpecFlow>();
+
+  create(options: CreateProductSpecFlowOptions): ProductSpecFlow {
+    const flow = this.prepare(options);
+    this.publish(flow.token);
+    return flow;
+  }
+
+  /** 先创建待发布 Flow；卡片发布成功后再调用 publish 提交替换。 */
+  prepare(options: CreateProductSpecFlowOptions): ProductSpecFlow {
+    const flow: ProductSpecFlow = {
+      token: randomUUID().replaceAll("-", ""),
+      ...options,
+      status: "pending",
+    };
+    this.flows.set(flow.token, flow);
+    return flow;
+  }
+
+  publish(token: string): ProductSpecFlow | undefined {
+    const flow = this.flows.get(token);
+    if (!flow || flow.status !== "pending") return undefined;
+    const { taskId, botId } = flow;
+    for (const flow of this.flows.values()) {
+      if (
+        flow.token !== token &&
+        flow.taskId === taskId &&
+        flow.botId === botId &&
+        flow.status === "pending"
+      ) {
+        flow.status = "expired";
+      }
+    }
+    return flow;
+  }
+
+  get(token: string): ProductSpecFlow | undefined {
+    return this.flows.get(token);
+  }
+
+  approve(token: string): ProductSpecFlow | undefined {
+    const flow = this.flows.get(token);
+    if (!flow || flow.status !== "pending") return undefined;
+    flow.status = "approved";
+    flow.approvedAt = new Date().toISOString();
+    return flow;
+  }
+}
+
+/** 计算已校验 Spec 与 Tickets Markdown 文件的稳定内容指纹。 */
+export async function productSpecDocumentRevision(
+  workspaceDir: string,
+  request: ProductSpecRequest,
+): Promise<string> {
+  const specPath = await resolveExistingWorkspacePath(workspaceDir, request.specPath);
+  const ticketsPath = await resolveExistingWorkspacePath(workspaceDir, request.ticketsPath);
+  const entries = (await readdir(ticketsPath, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .map((entry) => entry.name)
+    .sort();
+  if (!entries.length) {
+    throw new Error("Tickets 目录至少需要一个 Markdown 文件");
+  }
+  const hash = createHash("sha256");
+  hash.update(request.specPath);
+  hash.update("\0");
+  hash.update(request.ticketsPath);
+  hash.update("\0");
+  hash.update(await readFile(specPath));
+  for (const name of entries) {
+    hash.update("\0");
+    hash.update(name);
+    hash.update("\0");
+    hash.update(await readFile(resolve(ticketsPath, name)));
+  }
+  return hash.digest("hex");
+}
 
 /** 从工具调用历史中提取最近一次通过校验的产品文档提交。 */
 export function findProductSpecRequest(

@@ -59,7 +59,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/application-tools.ts`：应用工具注册服务——插件声明 stdio MCP Server 及可选 ACP HTTP 入口，执行引擎只消费通用描述
 - `src/plugins/clarification.ts`：澄清插件——启动 loopback HTTP MCP、认领结构化工具调用、展示逐题飞书表单、处理同话题补充并恢复 CLI 会话（流程仅存内存，重启后旧卡失效）
 - `src/plugins/clarification-tool.ts`：澄清插件提供给 CLI 探针和 MCP 注入的 Server 描述
-- `src/plugins/product-spec.ts`：产品文档插件——注册 `request_spec_approval`、校验 Spec/Tickets 真实落盘，并把任务终态替换为只读待确认卡
+- `src/plugins/product-spec.ts`：产品文档插件——注册 `request_spec_approval`、校验 Spec/Tickets 真实落盘，并管理发起人确认卡的三态流转
 - `src/plugins/product-spec-tool.ts`：产品文档插件提供给 stdio/ACP MCP 注入的 Server 描述
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
@@ -109,8 +109,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/task-progress.test.ts`：并发工具、上下文起点、耗时和记录上限测试
 - `src/core/clarification.ts`：澄清请求数据结构——Zod Schema 约束 Agent 结构化提问，既是 MCP 工具参数也是飞书卡片输入
 - `src/core/clarification.test.ts`：Schema 边界校验与工具调用历史提取测试
-- `src/core/product-spec.ts`：产品文档提交契约——校验结构化参数、工作区路径边界与 Spec/Tickets 真实产物
-- `src/core/product-spec.test.ts`：产品文档 Schema、路径安全与真实落盘检查测试
+- `src/core/product-spec.ts`：产品文档提交契约——校验结构化参数、工作区路径边界、真实产物与确认 Flow
+- `src/core/product-spec.test.ts`：产品文档 Schema、路径安全、真实落盘与确认状态测试
 - `src/core/topic-task.ts`：按群 ID 与话题 ID 生成稳定任务编号
 - `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约

@@ -202,6 +202,7 @@ function createFakeBot(
   failOptions: {
     replyCard?: boolean;
     updateCard?: boolean;
+    failUpdateCardAt?: number;
     sendMention?: boolean;
     emptyReplyMention?: boolean;
     emptySendMention?: boolean;
@@ -214,6 +215,7 @@ function createFakeBot(
     sentToChat: [] as { chatId: string; target: BotIdentity; text: string }[],
     updates: [] as Record<string, unknown>[],
   };
+  let updateCardAttempts = 0;
   const bot = {
     client: {},
     getConnectionState: () => connectionState,
@@ -257,7 +259,13 @@ function createFakeBot(
       );
     },
     updateCard: async (_id: string, card: Record<string, unknown>) => {
-      if (failOptions.updateCard) throw new Error("模拟：更新卡片失败");
+      updateCardAttempts += 1;
+      if (
+        failOptions.updateCard ||
+        failOptions.failUpdateCardAt === updateCardAttempts
+      ) {
+        throw new Error("模拟：更新卡片失败");
+      }
       calls.updates.push(card);
     },
     downloadResource: async () => join(process.cwd(), "data", "downloads", "x"),
@@ -328,6 +336,29 @@ function clarificationValueOf(
   throw new Error("卡片里找不到澄清回答按钮");
 }
 
+/** 从产品方案待确认卡里取出一次性确认 token。 */
+function productSpecValueOf(
+  card: Record<string, unknown>,
+): Record<string, unknown> {
+  const elements = (card.body as { elements?: unknown[] } | undefined)
+    ?.elements ?? [];
+  for (const element of elements) {
+    const behaviors = (element as { behaviors?: { value?: unknown }[] })
+      ?.behaviors ?? [];
+    for (const behavior of behaviors) {
+      const value = behavior.value;
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        (value as { action?: string }).action === "approve_product_spec"
+      ) {
+        return value as Record<string, unknown>;
+      }
+    }
+  }
+  throw new Error("卡片里找不到产品方案确认按钮");
+}
+
 /** 从编排面板卡片里取出「重试」按钮携带的 runId/subTaskId/retryToken。 */
 function retrySubtaskValueOf(
   card: Record<string, unknown>,
@@ -389,6 +420,7 @@ async function createHost(
   botFailOptions: {
     replyCard?: boolean;
     updateCard?: boolean;
+    failUpdateCardAt?: number;
     sendMention?: boolean;
     emptyReplyMention?: boolean;
     emptySendMention?: boolean;
@@ -678,7 +710,7 @@ test("澄清工具逐题收集答案并续接原 CLI 会话", async () => {
   );
 });
 
-test("产品经理直接生成真实 Spec 与 Tickets 后展示只读待确认卡", async () => {
+test("产品经理直接生成真实 Spec 与 Tickets 后可由发起人确认", async () => {
   const productConfig: BotConfig = {
     ...baseBotConfig,
     skills: ["grill-me", "to-spec", "to-tickets"],
@@ -740,7 +772,212 @@ test("产品经理直接生成真实 Spec 与 Tickets 后展示只读待确认�
     cardSummaryContains(card, "产品文档已生成"),
   )!;
   assert.match(JSON.stringify(readyCard), /\.scratch\/user-detail\/spec\.md/);
-  assert.doesNotMatch(JSON.stringify(readyCard), /button/);
+  const value = productSpecValueOf(readyCard);
+  assert.equal(
+    (await host.root.serial(
+      "bot/card-action",
+      {
+        operatorOpenId: "ou_other",
+        messageId: "card-1",
+        value,
+      },
+      host.bot,
+      runtimeConfig,
+    ))?.toast?.content,
+    "只有任务发起人可以确认。",
+  );
+  await writeFile(join(featureDir, "spec.md"), "# 用户详情页 v2\n", "utf8");
+  const changed = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "card-1", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(changed?.toast?.content, "产品文档已发生变化，请重新提交方案。");
+  await writeFile(join(featureDir, "spec.md"), "# 用户详情页\n", "utf8");
+  const approved = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "card-1", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(approved?.toast?.content, "产品方案已确认。");
+  assert.equal(approved?.card?.data && (approved.card.data as any).header.template, "green");
+  const replay = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "card-1", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(replay?.toast?.content, "产品方案已经确认。");
+});
+
+test("同一话题提交更新方案后，旧产品确认卡变为失效状态", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "to-spec", "to-tickets"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "approval-revision");
+  const ticketsDir = join(featureDir, "issues");
+  await mkdir(ticketsDir, { recursive: true });
+  await writeFile(join(featureDir, "spec.md"), "# 方案\n", "utf8");
+  await writeFile(join(ticketsDir, "01-plan.md"), "# 任务\n", "utf8");
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ messageId: "m-approval-root", text: "创建方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "方案已生成。",
+    sessionId: "sess-approval-revision",
+    toolCalls: [{
+      toolUseId: "tool-spec-1",
+      toolName: "request_spec_approval",
+      input: {
+        title: "方案 v1",
+        summary: "第一版方案。",
+        specPath: ".scratch/approval-revision/spec.md",
+        ticketsPath: ".scratch/approval-revision/issues",
+      },
+    }],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "方案 v1：待确认")),
+  );
+  const oldCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "方案 v1：待确认"),
+  )!;
+  const oldValue = productSpecValueOf(oldCard);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-approval-follow-up",
+      rootId: "m-approval-root",
+      text: "更新方案",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  host.cli.finish({
+    answer: "方案已更新。",
+    sessionId: "sess-approval-revision",
+    toolCalls: [{
+      toolUseId: "tool-spec-2",
+      toolName: "request_spec_approval",
+      input: {
+        title: "方案 v2",
+        summary: "更新后的方案。",
+        specPath: ".scratch/approval-revision/spec.md",
+        ticketsPath: ".scratch/approval-revision/issues",
+      },
+    }],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "方案 v2：待确认")),
+  );
+
+  const expired = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "card-1", value: oldValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(expired?.toast?.content, "这份产品方案已经失效。");
+  assert.equal(
+    (expired?.card?.data as any)?.header?.template,
+    "grey",
+  );
+});
+
+test("新产品确认卡发布失败时，旧确认卡仍可确认", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "to-spec", "to-tickets"],
+  };
+  const host = await createHost(
+    [productConfig],
+    "connected",
+    {},
+    false,
+    false,
+    { failUpdateCardAt: 2 },
+  );
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "publish-failure");
+  const ticketsDir = join(featureDir, "issues");
+  await mkdir(ticketsDir, { recursive: true });
+  await writeFile(join(featureDir, "spec.md"), "# 方案\n", "utf8");
+  await writeFile(join(ticketsDir, "01-plan.md"), "# 任务\n", "utf8");
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ messageId: "m-publish-root", text: "创建方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "方案已生成。",
+    sessionId: "sess-publish-failure",
+    toolCalls: [{
+      toolUseId: "tool-publish-1",
+      toolName: "request_spec_approval",
+      input: {
+        title: "方案 v1",
+        summary: "第一版方案。",
+        specPath: ".scratch/publish-failure/spec.md",
+        ticketsPath: ".scratch/publish-failure/issues",
+      },
+    }],
+  });
+  await waitFor(() => host.calls.updates.some((card) => cardSummaryContains(card, "方案 v1：待确认")));
+  const oldCard = host.calls.updates.find((card) => cardSummaryContains(card, "方案 v1：待确认"))!;
+  const oldValue = productSpecValueOf(oldCard);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ messageId: "m-publish-follow-up", rootId: "m-publish-root", text: "更新方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  host.cli.finish({
+    answer: "方案更新失败发布。",
+    sessionId: "sess-publish-failure",
+    toolCalls: [{
+      toolUseId: "tool-publish-2",
+      toolName: "request_spec_approval",
+      input: {
+        title: "方案 v2",
+        summary: "更新方案。",
+        specPath: ".scratch/publish-failure/spec.md",
+        ticketsPath: ".scratch/publish-failure/issues",
+      },
+    }],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(host.calls.updates.some((card) => cardSummaryContains(card, "方案 v2：待确认")), false);
+
+  const approved = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "card-1", value: oldValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(approved?.toast?.content, "产品方案已确认。");
+  assert.equal((approved?.card?.data as any)?.header?.template, "green");
 });
 
 test("完成澄清后沿用原 CLI 会话提交产品文档", async () => {

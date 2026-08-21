@@ -3,6 +3,7 @@
  * 让任务编排与命令插件统一通过服务出口生成卡片，而不是直接导入渲染实现。
  */
 import { Service, type Context } from "cordis";
+import type { ProductSpecFlow } from "../core/product-spec.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
@@ -11,7 +12,9 @@ import {
   buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
-  buildProductSpecReadyCard,
+  buildProductSpecApprovalCard,
+  buildProductSpecApprovedCard,
+  buildProductSpecExpiredCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -23,7 +26,6 @@ import {
   type ClarificationStateCardOptions,
   type CollaborationCardOptions,
   type OrchestrationPanelOptions,
-  type ProductSpecCardOptions,
   type ResumeCardOptions,
   type SessionNoticeCardOptions,
   type TaskCardOptions,
@@ -60,8 +62,16 @@ export class CardsService extends Service {
     return buildClarificationSupersededCard(options.flow);
   }
 
-  productSpecReady(options: ProductSpecCardOptions): CardJson {
-    return buildProductSpecReadyCard(options);
+  productSpecApproval(flow: ProductSpecFlow): CardJson {
+    return buildProductSpecApprovalCard(flow);
+  }
+
+  productSpecApproved(flow: ProductSpecFlow): CardJson {
+    return buildProductSpecApprovedCard(flow);
+  }
+
+  productSpecExpired(flow: ProductSpecFlow): CardJson {
+    return buildProductSpecExpiredCard(flow);
   }
 
   collaboration(options: CollaborationCardOptions): CardJson {
