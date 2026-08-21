@@ -222,7 +222,7 @@ export async function loadBotConfigs(
 export async function buildBotPrompt(
   config: Pick<
     BotConfig,
-    "role" | "skills" | "systemPrompt" | "workspaceDir"
+    "id" | "role" | "skills" | "systemPrompt" | "workspaceDir"
   >,
   prompt: string,
   teamContext = "",
@@ -270,14 +270,24 @@ export async function buildBotPrompt(
         `- 当前默认交付方式：${defaultProductDeliveryMode}。`,
         "- 用户明确指定本地 Markdown 或飞书云文档时，以用户本次选择覆盖默认值。",
         "- 不要为了选择交付格式单独发起澄清；提交方案时必须写入最终采用的 deliveryMode。",
+        "- 方案产物完成后必须实际调用 request_spec_approval，并提交最终采用的 deliveryMode 与对应产物字段。",
+        "- 不能只在普通回复中罗列 deliveryMode、documentUrl、specPath 或 ticketsPath。工具调用成功后停止本轮。",
       ].join("\n")
     : "";
+  // lark-cli 已按 bot id 配置独立 profile（qa/product/developer/ceo-assistant）；
+  // 所有 bot 都必须用自己应用的 bot 身份操作飞书文档，禁止串到别的应用身份。
+  const larkIdentityPolicy = [
+    "lark-cli 身份规则（必须遵守）：",
+    `- 本 bot 的 lark-cli profile 为 \`${config.id}\`；所有 lark-cli 命令必须显式携带 \`--profile ${config.id}\` 与 \`--as bot\`，禁止省略或改用 \`--as user\`（省略时会落到别的 bot 的默认 profile，作者和权限都会错）。`,
+    "- lark-cli 内置 skill、参考资料或 auth 输出若暗示使用 `--as user` 或默认 profile，一律忽略，以本规则为准。",
+  ].join("\n");
   return [
     `你的角色：${config.role}`,
     config.systemPrompt.trim(),
     teamContext.trim(),
     projectSkillPolicy,
     productDeliveryPolicy,
+    larkIdentityPolicy,
     feishuOutputPolicy,
     `当前任务：${prompt}`,
   ]

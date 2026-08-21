@@ -383,6 +383,7 @@ test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
   ].join("\n");
   const prompt = await buildBotPrompt(
       {
+        id: "product",
         role: "产品经理",
         skills: ["grill-me"],
         systemPrompt: "不要直接实现代码",
@@ -395,12 +396,15 @@ test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
   assert.match(prompt, /<project-skill name="grill-me" source="workspace">/);
   assert.match(prompt, /# Workspace Grill/);
   assert.match(prompt, new RegExp(feishuOutputPolicy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(prompt, /lark-cli 身份规则（必须遵守）：/);
+  assert.match(prompt, /--profile product/);
   assert.match(prompt, /当前任务：澄清这个需求$/);
 
   // 无 Skill、无团队上下文时跳过对应段落，空角色说明会被过滤。
   assert.equal(
     await buildBotPrompt(
       {
+        id: "developer",
         role: "开发",
         skills: [],
         systemPrompt: "  ",
@@ -408,13 +412,23 @@ test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
       },
       "写代码",
     ),
-    ["你的角色：开发", feishuOutputPolicy, "当前任务：写代码"].join("\n\n"),
+    [
+      "你的角色：开发",
+      [
+        "lark-cli 身份规则（必须遵守）：",
+        "- 本 bot 的 lark-cli profile 为 `developer`；所有 lark-cli 命令必须显式携带 `--profile developer` 与 `--as bot`，禁止省略或改用 `--as user`（省略时会落到别的 bot 的默认 profile，作者和权限都会错）。",
+        "- lark-cli 内置 skill、参考资料或 auth 输出若暗示使用 `--as user` 或默认 profile，一律忽略，以本规则为准。",
+      ].join("\n"),
+      feishuOutputPolicy,
+      "当前任务：写代码",
+    ].join("\n\n"),
   );
 });
 
 test("产品文档 Skill 的提示词包含默认交付方式，其他 bot 不注入", async () => {
   const prompt = await buildBotPrompt(
     {
+      id: "product",
       role: "产品经理",
       skills: ["lark-doc"],
       systemPrompt: "",
@@ -428,6 +442,7 @@ test("产品文档 Skill 的提示词包含默认交付方式，其他 bot 不�
   assert.equal(
     (await buildBotPrompt(
       {
+        id: "developer",
         role: "开发",
         skills: [],
         systemPrompt: "",

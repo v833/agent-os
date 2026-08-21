@@ -54,7 +54,7 @@ plugins:
 ## 飞书开放平台配置
 
 1. 在[飞书开放平台](https://open.feishu.cn/)创建“飞书智能体应用”。
-2. 确认应用已启用机器人能力，并订阅 `im.message.receive_v1` 事件。
+2. 确认应用已启用机器人能力，并订阅 `im.message.receive_v1` 与 `drive.notice.comment_add_v1` 事件；后者用于接收产品方案云文档评论。
 3. 事件接收方式选择“使用长连接接收事件”。
 4. 创建一个话题群，在群设置的“群机器人”中加入该应用。
 5. 为每台 bot 创建应用并把 App ID、App Secret 写入本地 `.env`。bot 的对应关系在 `config/bots.json` 中维护。
@@ -121,9 +121,80 @@ Copy-Item config/bots.example.json config/bots.json
 
 ## 产品文档工作流
 
-产品经理使用 `grill-me` 完成澄清，再按全局 `defaultProductDeliveryMode` 选择唯一的方案交付方式：`local` 继续使用 `to-spec` 与 `to-tickets` 生成 `.scratch/<feature>/spec.md` 和 `issues`；`lark-doc` 使用用户级 `lark-doc` Skill 通过 `lark-cli docs +create --as user` 生成或更新飞书云文档。用户在单次任务中明确选择的方式会覆盖全局默认值，但不会同时维护两份方案。
+产品经理使用 `grill-me` 完成澄清，再按全局 `defaultProductDeliveryMode` 选择唯一的方案交付方式：`local` 继续使用 `to-spec` 与 `to-tickets` 生成 `.scratch/<feature>/spec.md` 和 `issues`；`lark-doc` 使用用户级 `lark-doc` Skill 通过 `lark-cli docs +create --profile <botId> --as bot` 生成或更新飞书云文档。用户在单次任务中明确选择的方式会覆盖全局默认值，但不会同时维护两份方案。
 
 两种方式都通过 `request_spec_approval` 提交。`product-spec` 插件认领启用了 `to-spec` 或 `lark-doc` 的 bot：本地模式会校验 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件并记录内容指纹；飞书模式校验 `documentUrl` 使用 HTTPS、可信飞书系域名及 `/docx/` 或 `/wiki/` 路径，不读取本地文件。旧版本只提交 `specPath` 与 `ticketsPath` 的本地调用会自动按 `local` 兼容处理。随后任务卡只展示选中的唯一产物和“确认产品方案”按钮；只有任务发起人确认后才记录产品阶段就绪，本阶段不会自动派给开发者。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线这条能力。
+
+## lark-cli 多应用（profile）与授权流程
+
+Agent 使用 `lark-cli` 操作飞书云文档时，必须按“一个 bot = 一个 profile = 一个应用”工作，否则会出现文档归属错误（落到别的 bot 应用）或身份错误（以 `--as user` 创建时作者变成授权用户本人，且机器人在文档中不可被 @）。以下流程在首次部署或新增/更换 bot 时执行一次；配置完成后，Agent OS 会把 `--profile <botId> --as bot` 写进每个 bot 的任务提示词，无需手动干预。
+
+### 1. 为每台 bot 添加 profile
+
+`lark-cli` 的 profile 是独立的“应用凭证 + token”集合，名称必须与 `config/bots.json` 中的 bot `id` 一一对应（`qa`、`product`、`developer`、`ceo-assistant`）：
+
+```powershell
+# 从 .env 读取真实密钥，经 stdin 传入，避免出现在进程列表中
+$secret = (Get-Content .env | Where-Object { $_ -match '^FEISHU_PRODUCT_APP_SECRET=' }) -split '=', 2 | Select-Object -Last 1
+$secret | lark-cli profile add --name product --app-id cli_aaf077ee4e3adcce --app-secret-stdin
+
+# 全部配置完成后查看：
+lark-cli profile list
+lark-cli whoami
+```
+
+注意：
+- 一个 App ID 只能属于一个 profile；如果默认 profile 的名字是 App ID（如 `cli_aa0f399505b81cc8`），可以用 `lark-cli profile rename` 改成与 bot id 一致，例如 `lark-cli profile rename cli_aa0f399505b81cc8 qa`。
+- CLI 明确禁止同一 App ID 重复添加 profile。
+
+### 2. 开放平台申请文档 scope
+
+在每个应用的开发者后台申请并**发布版本**后，该应用的 bot 身份才能创建/读写文档（“已申请”不等于“已生效”）：
+
+```text
+docx:document
+docx:document:create
+docx:document:readonly
+docx:document:write_only
+docs:document.comment:read
+```
+
+申请失败时错误信息会给出直达链接，形如 `https://open.feishu.cn/page/scope-apply?clientID=<appId>&scopes=docx:document,docx:document:create`。用 `lark-cli --profile <botId> auth scopes` 可确认每个应用是否已开通对应权限。
+
+### 3. 为 profile 绑定你的飞书账号（user 授权）
+
+user 授权只用于“机器人创建文档后，自动把你添加为 `full_access` 协作者”（permission_grant）；没有它文档也能创建，但你需要手动加协作者才能看到：
+
+```powershell
+# 发起非阻塞授权，拿到 device_code 与 verification_url
+lark-cli --profile product auth login --domain docs --domain drive --domain im --no-wait --json
+
+# 把上面的 verification_url 生成二维码给用户扫描（或直接打开链接）
+lark-cli auth qrcode "https://accounts.feishu.cn/oauth/v1/device/verify?..." -o product-qr.png
+
+# 用户扫码确认后，用同一个 device_code 完成轮询
+lark-cli --profile product auth login --device-code <DEVICE_CODE> --json
+```
+
+device flow 约 10 分钟有效；完成后 `lark-cli --profile <botId> auth status` 应看到 `user: ready`。
+
+### 4. 验证全链路
+
+```powershell
+# 每台 bot 逐一验证：状态、权限、真实建删
+lark-cli --profile qa auth status
+lark-cli --profile qa auth scopes
+lark-cli --profile qa docs +create --as bot --title "verify" --content "验证"   # 成功后记下 document_id
+lark-cli --profile qa drive +delete --file-token <document_id> --type docx --as bot --yes
+```
+
+验证要点：创建响应的 `permission_grant.status` 为 `granted`（说明已自动给你 full_access）；`drive +search` 确认验证文档已清理。
+
+### 注意事项
+
+- 任务提示词已注入“lark-cli 命令必须显式携带 `--profile <botId> --as bot`”的强制规则；请勿手动改回 `--as user`，否则新文档作者会变成你本人且 @ 不到机器人。
+- 除非要彻底移除某个 bot，不要用 `lark-cli profile use` 全局切换默认 profile，命令显式 `--profile` 即可，避免其他任务误用。
+- user token 到期后状态会是 `needs_refresh`，`lark-cli` 会自动刷新，通常无需重新扫码。
 
 ## 启动与验证
 
