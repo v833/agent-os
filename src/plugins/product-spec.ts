@@ -30,15 +30,21 @@ export class ProductSpecService extends Service {
   async handleToolCalls(
     payload: TaskToolCallsPayload,
   ): Promise<TaskToolCallsOutcome | undefined> {
-    if (!payload.botConfig.skills.includes("to-spec")) return undefined;
+    if (
+      !payload.botConfig.skills.includes("to-spec") &&
+      !payload.botConfig.skills.includes("lark-doc")
+    ) return undefined;
     const request = findProductSpecRequest(payload.result.toolCalls);
     if (!request) return undefined;
 
-    await assertProductSpecDocuments(payload.session.workspaceDir, request);
-    const documentRevision = await productSpecDocumentRevision(
-      payload.session.workspaceDir,
-      request,
-    );
+    let documentRevision: string | undefined;
+    if (request.deliveryMode === "local") {
+      await assertProductSpecDocuments(payload.session.workspaceDir, request);
+      documentRevision = await productSpecDocumentRevision(
+        payload.session.workspaceDir,
+        request,
+      );
+    }
     const flow = this.flows.prepare({
       taskId: payload.taskId ?? payload.session.id,
       botId: payload.botConfig.id,
@@ -50,12 +56,14 @@ export class ProductSpecService extends Service {
       documentRevision,
     });
     console.log(
-      `[产品文档] 已校验 Spec=${request.specPath} Tickets=${request.ticketsPath}`,
+      request.deliveryMode === "local"
+        ? `[产品文档] 已校验 Spec=${request.specPath} Tickets=${request.ticketsPath}`
+        : `[产品文档] 已接收飞书云文档 ${request.documentUrl}`,
     );
     return {
       card: this.ctx.cards.productSpecApproval(flow),
       completion: "completed",
-      notificationText: "Spec 和 Tickets 已经落盘，请查看上方确认卡片。",
+      notificationText: "产品方案已生成，请查看上方确认卡片。",
       suppressHandoff: true,
       afterCardPublished: () => {
         this.flows.publish(flow.token);
@@ -95,11 +103,13 @@ export class ProductSpecService extends Service {
       return { toast: { type: "warning", content: "只有任务发起人可以确认。" } };
     }
     try {
-      if (
-        await productSpecDocumentRevision(flow.workspaceDir, flow.request) !==
-        flow.documentRevision
-      ) {
-        return { toast: { type: "warning", content: "产品文档已发生变化，请重新提交方案。" } };
+      if (flow.request.deliveryMode === "local") {
+        if (
+          await productSpecDocumentRevision(flow.workspaceDir, flow.request) !==
+          flow.documentRevision
+        ) {
+          return { toast: { type: "warning", content: "产品文档已发生变化，请重新提交方案。" } };
+        }
       }
     } catch {
       return { toast: { type: "warning", content: "产品文档已发生变化，请重新提交方案。" } };

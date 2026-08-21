@@ -1,6 +1,6 @@
 /**
- * 产品文档提交契约：约束 request_spec_approval 的结构化参数，并在展示前
- * 校验 Spec 与 Tickets 确实落在当前工作区。它是产品文档插件的可信边界。
+ * 产品文档提交契约：约束 request_spec_approval 的本地/飞书互斥参数，并在
+ * 展示本地产物前校验 Spec 与 Tickets。它是产品文档插件的可信边界。
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
@@ -25,13 +25,24 @@ const WorkspaceDocumentPathSchema = z
     );
   }, "文档路径必须位于当前工作目录内");
 
-/** 已完成澄清、可交给任务发起人审阅的一组产品产物。 */
-export const ProductSpecRequestSchema = z.object({
+const ProductSpecBaseSchema = z.object({
   title: z.string().trim().min(1).max(80),
   summary: z.string().trim().min(1).max(500),
+});
+
+function hasRecordProperty(
+  value: Record<string, unknown>,
+  property: string,
+): boolean {
+  return Object.prototype.hasOwnProperty.call(value, property);
+}
+
+/** 本地 Markdown 方案；Spec 与 Tickets 必须属于同一个 feature。 */
+export const LocalProductSpecRequestSchema = ProductSpecBaseSchema.extend({
+  deliveryMode: z.literal("local"),
   specPath: WorkspaceDocumentPathSchema,
   ticketsPath: WorkspaceDocumentPathSchema,
-}).superRefine((request, ctx) => {
+}).strict().superRefine((request, ctx) => {
   const specSegments = request.specPath.replaceAll("\\", "/").split("/");
   const ticketsSegments = request.ticketsPath.replaceAll("\\", "/").split("/");
   const validSpecLayout =
@@ -72,7 +83,89 @@ export const ProductSpecRequestSchema = z.object({
   }
 });
 
+const LARK_DOCUMENT_HOSTS = ["feishu.cn", "larksuite.com", "doubao.com"];
+
+/** 只允许 HTTPS 飞书系文档链接，避免把任意外部协议渲染成可信产物。 */
+const LarkDocumentUrlSchema = z
+  .string()
+  .trim()
+  .max(2_048, "documentUrl 不能超过 2048 个字符")
+  .url()
+  .superRefine((value, ctx) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return;
+    }
+    const hostname = url.hostname.toLowerCase();
+    const trustedHost = LARK_DOCUMENT_HOSTS.some(
+      (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+    );
+    if (url.protocol !== "https:") {
+      ctx.addIssue({
+        code: "custom",
+        message: "documentUrl 必须使用 HTTPS",
+      });
+    }
+    if (!trustedHost) {
+      ctx.addIssue({
+        code: "custom",
+        message: "documentUrl 必须使用飞书、Lark 或豆包文档域名",
+      });
+    }
+    if (url.username || url.password || url.port) {
+      ctx.addIssue({
+        code: "custom",
+        message: "documentUrl 不能包含账号、密码或自定义端口",
+      });
+    }
+    if (!/^\/(?:docx|wiki)\//.test(url.pathname)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "documentUrl 路径必须以 /docx/ 或 /wiki/ 开头",
+      });
+    }
+  });
+
+/** 飞书方案只提交已创建文档的 URL，不接受本地路径。 */
+export const LarkProductSpecRequestSchema = ProductSpecBaseSchema.extend({
+  deliveryMode: z.literal("lark-doc"),
+  documentUrl: LarkDocumentUrlSchema,
+}).strict();
+
+/** 已完成澄清、可交给任务发起人审阅的唯一产品方案产物。 */
+const ProductSpecDiscriminatedUnionSchema = z.discriminatedUnion("deliveryMode", [
+  LocalProductSpecRequestSchema,
+  LarkProductSpecRequestSchema,
+]);
+
+/**
+ * 兼容上一版本只提交 specPath/ticketsPath 的本地调用；归一化后仍只向
+ * 产品流程暴露带 deliveryMode 的新契约，避免旧 bot 的工具调用静默丢失。
+ */
+export const ProductSpecRequestSchema = z.preprocess(
+  (input) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return input;
+    }
+    const record = input as Record<string, unknown>;
+    if (
+      !hasRecordProperty(record, "deliveryMode") &&
+      hasRecordProperty(record, "specPath") &&
+      hasRecordProperty(record, "ticketsPath")
+    ) {
+      return { ...record, deliveryMode: "local" };
+    }
+    return input;
+  },
+  ProductSpecDiscriminatedUnionSchema,
+);
+
 export type ProductSpecRequest = z.infer<typeof ProductSpecRequestSchema>;
+export type LocalProductSpecRequest = z.infer<
+  typeof LocalProductSpecRequestSchema
+>;
 
 /** 已落盘、等待任务发起人确认的产品方案流程状态。 */
 export interface ProductSpecFlow {
@@ -84,8 +177,8 @@ export interface ProductSpecFlow {
   cardMessageId?: string;
   workspaceDir: string;
   request: ProductSpecRequest;
-  /** 提交时 Spec 与 Tickets 内容的指纹；确认时必须仍然一致。 */
-  documentRevision: string;
+  /** 本地模式提交时的内容指纹；确认时必须仍然一致。 */
+  documentRevision?: string;
   status: "pending" | "approved" | "expired";
   approvedAt?: string;
 }
@@ -99,7 +192,7 @@ export interface CreateProductSpecFlowOptions {
   cardMessageId?: string;
   workspaceDir: string;
   request: ProductSpecRequest;
-  documentRevision: string;
+  documentRevision?: string;
 }
 
 /** 判断操作者是否与提交产品方案的任务发起人一致。 */
@@ -167,7 +260,7 @@ export class ProductSpecFlowStore {
 /** 计算已校验 Spec 与 Tickets Markdown 文件的稳定内容指纹。 */
 export async function productSpecDocumentRevision(
   workspaceDir: string,
-  request: ProductSpecRequest,
+  request: LocalProductSpecRequest,
 ): Promise<string> {
   const specPath = await resolveExistingWorkspacePath(workspaceDir, request.specPath);
   const ticketsPath = await resolveExistingWorkspacePath(workspaceDir, request.ticketsPath);
@@ -230,7 +323,7 @@ async function resolveExistingWorkspacePath(
  */
 export async function assertProductSpecDocuments(
   workspaceDir: string,
-  request: ProductSpecRequest,
+  request: LocalProductSpecRequest,
 ): Promise<void> {
   const missing: string[] = [];
 

@@ -36,8 +36,12 @@ export interface BotConfig {
 /** 完整团队配置：负责人的稳定 ID 与全部启用的成员。 */
 export interface AgentOsConfig {
   teamLeaderId: string;
+  defaultProductDeliveryMode: ProductDeliveryMode;
   bots: BotConfig[];
 }
+
+/** 产品方案的唯一交付方式；同一任务不能同时维护两种产物。 */
+export type ProductDeliveryMode = "local" | "lark-doc";
 
 /** 把 bot 级代理配置转换为标准 CLI 子进程环境；缺省时继承父进程环境。 */
 export function botCliEnvironment(
@@ -93,6 +97,8 @@ const BotSchema = z.object({
 
 const BotConfigFileSchema = z.object({
   teamLeader: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
+  // 未配置时保留旧版本地产物流程；需要云文档时在配置中显式选择。
+  defaultProductDeliveryMode: z.enum(["local", "lark-doc"]).optional().default("local"),
   bots: z.array(BotSchema).min(1),
 });
 
@@ -162,7 +168,11 @@ export function parseAgentOsConfig(
       throw new Error(`bot ${config.id} 不能把自己配置为 reviewBy`);
     }
   }
-  return { teamLeaderId: parsed.teamLeader, bots: configs };
+  return {
+    teamLeaderId: parsed.teamLeader,
+    defaultProductDeliveryMode: parsed.defaultProductDeliveryMode,
+    bots: configs,
+  };
 }
 
 /** 兼容入口：只返回启用成员，供仍按旧签名读取的调用方使用。 */
@@ -216,6 +226,7 @@ export async function buildBotPrompt(
   >,
   prompt: string,
   teamContext = "",
+  defaultProductDeliveryMode: ProductDeliveryMode = "local",
 ): Promise<string> {
   const resolvedSkills = await Promise.all(
     config.skills.map((skill) =>
@@ -230,7 +241,7 @@ export async function buildBotPrompt(
   );
   const projectSkillPolicy = config.skills.length > 0
     ? [
-        "项目 Skill（工作区版本优先，缺失时使用 Agent OS 内置版本）：",
+        "项目 Skill（工作区版本优先，其次使用 Agent OS 内置或用户级版本）：",
         "以下 Skill 内容已经加载，必须直接遵守，无需再次搜索同名 Skill。",
         ...loadedSkills.map(
           (skill) =>
@@ -250,11 +261,23 @@ export async function buildBotPrompt(
     "- 详细产物写入当前工作区文件。回复只提供简短摘要和文件路径。",
     "- 需要用户决策时，必须调用 request_clarification 工具；不要用大段文字列出问题。工具调用后停止继续推断，等待用户回答。",
   ].join("\n");
+  const managesProductDocuments = config.skills.some((skill) =>
+    ["to-spec", "to-tickets", "lark-doc"].includes(skill),
+  );
+  const productDeliveryPolicy = managesProductDocuments
+    ? [
+        "产品方案交付规则（必须遵守）：",
+        `- 当前默认交付方式：${defaultProductDeliveryMode}。`,
+        "- 用户明确指定本地 Markdown 或飞书云文档时，以用户本次选择覆盖默认值。",
+        "- 不要为了选择交付格式单独发起澄清；提交方案时必须写入最终采用的 deliveryMode。",
+      ].join("\n")
+    : "";
   return [
     `你的角色：${config.role}`,
     config.systemPrompt.trim(),
     teamContext.trim(),
     projectSkillPolicy,
+    productDeliveryPolicy,
     feishuOutputPolicy,
     `当前任务：${prompt}`,
   ]

@@ -1,10 +1,11 @@
 /**
- * 项目 Skill 解析器：按工作区覆盖、Agent OS 内置的顺序查找 Skill，
+ * 项目 Skill 解析器：按工作区覆盖、Agent OS 内置、用户级的顺序查找 Skill，
  * 供启动诊断与任务提示词共用，避免两条路径对“已安装”的判断不一致。
  */
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 
 const agentOsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -14,7 +15,7 @@ export const builtInSkillsDirectory = join(agentOsRoot, ".agents", "skills");
 export interface ResolvedProjectSkill {
   name: string;
   path: string;
-  source: "workspace" | "built-in";
+  source: "workspace" | "built-in" | "user";
   content: string;
 }
 
@@ -27,6 +28,9 @@ export function projectSkillPaths(
     join(workspaceDir, ".agents", "skills", skill, "SKILL.md"),
     join(workspaceDir, ".claude", "skills", skill, "SKILL.md"),
     join(builtInSkillsDirectory, skill, "SKILL.md"),
+    join(homedir(), ".agents", "skills", skill, "SKILL.md"),
+    join(homedir(), ".claude", "skills", skill, "SKILL.md"),
+    join(homedir(), ".codex", "skills", skill, "SKILL.md"),
   ];
 }
 
@@ -44,7 +48,7 @@ export async function resolveProjectSkill(
       return {
         name: skill,
         path,
-        source: index < 2 ? "workspace" : "built-in",
+        source: index < 2 ? "workspace" : index === 2 ? "built-in" : "user",
         content: await readFile(path, "utf8"),
       };
     } catch (error) {

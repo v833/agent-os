@@ -3,8 +3,8 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import test from "node:test";
 import {
   builtInSkillsDirectory,
@@ -56,11 +56,15 @@ test("工作区没有同名 Skill 时回退到 Agent OS 内置版本", async (t)
 test("工作区和内置目录都不存在时返回完整查找路径", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const missingSkill = `missing-${basename(directory)}`;
 
-  assert.equal(await resolveProjectSkill(directory, "missing-skill"), undefined);
-  assert.deepEqual(projectSkillPaths(directory, "missing-skill"), [
-    join(directory, ".agents", "skills", "missing-skill", "SKILL.md"),
-    join(directory, ".claude", "skills", "missing-skill", "SKILL.md"),
-    join(builtInSkillsDirectory, "missing-skill", "SKILL.md"),
+  assert.equal(await resolveProjectSkill(directory, missingSkill), undefined);
+  assert.deepEqual(projectSkillPaths(directory, missingSkill), [
+    join(directory, ".agents", "skills", missingSkill, "SKILL.md"),
+    join(directory, ".claude", "skills", missingSkill, "SKILL.md"),
+    join(builtInSkillsDirectory, missingSkill, "SKILL.md"),
+    join(homedir(), ".agents", "skills", missingSkill, "SKILL.md"),
+    join(homedir(), ".claude", "skills", missingSkill, "SKILL.md"),
+    join(homedir(), ".codex", "skills", missingSkill, "SKILL.md"),
   ]);
 });

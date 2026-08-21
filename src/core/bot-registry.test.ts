@@ -40,6 +40,7 @@ const credentials = {
 test("解析启用 bot 的凭证、默认引擎、角色和团队负责人", () => {
   const parsed = parseAgentOsConfig(registry(), credentials);
   assert.equal(parsed.teamLeaderId, "developer");
+  assert.equal(parsed.defaultProductDeliveryMode, "local");
   assert.deepEqual(parsed.bots, [
     {
       id: "developer",
@@ -56,6 +57,16 @@ test("解析启用 bot 的凭证、默认引擎、角色和团队负责人", () 
   ]);
   // 兼容入口返回同样的成员列表。
   assert.deepEqual(parseBotConfigs(registry(), credentials), parsed.bots);
+});
+
+test("可以显式选择飞书云文档作为全局产品方案交付方式", () => {
+  assert.equal(
+    parseAgentOsConfig(
+      { ...registry(), defaultProductDeliveryMode: "lark-doc" },
+      credentials,
+    ).defaultProductDeliveryMode,
+    "lark-doc",
+  );
 });
 
 test("可选 proxy 配置解析到 BotConfig，缺省时字段不存在", () => {
@@ -341,6 +352,7 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
   assert.equal((await loadBotConfigs(filePath, credentials))[0]?.id, "developer");
   const agentOs = await loadAgentOsConfig(filePath, credentials);
   assert.equal(agentOs.teamLeaderId, "developer");
+  assert.equal(agentOs.defaultProductDeliveryMode, "local");
   assert.equal(agentOs.bots[0]?.role, "主力开发助手");
   await assert.rejects(
     loadBotConfigs(join(directory, "missing.json"), credentials),
@@ -397,5 +409,32 @@ test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
       "写代码",
     ),
     ["你的角色：开发", feishuOutputPolicy, "当前任务：写代码"].join("\n\n"),
+  );
+});
+
+test("产品文档 Skill 的提示词包含默认交付方式，其他 bot 不注入", async () => {
+  const prompt = await buildBotPrompt(
+    {
+      role: "产品经理",
+      skills: ["lark-doc"],
+      systemPrompt: "",
+      workspaceDir: process.cwd(),
+    },
+    "形成方案",
+    "",
+    "local",
+  );
+  assert.match(prompt, /当前默认交付方式：local/);
+  assert.equal(
+    (await buildBotPrompt(
+      {
+        role: "开发",
+        skills: [],
+        systemPrompt: "",
+        workspaceDir: process.cwd(),
+      },
+      "写代码",
+    )).includes("产品方案交付规则"),
+    false,
   );
 });

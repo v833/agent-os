@@ -75,6 +75,7 @@ class FakeConfigService extends Service {
   readonly bots: BotConfig[];
   readonly defaultWorkspaces: Record<string, string>;
   readonly teamLeaderId: string;
+  readonly defaultProductDeliveryMode = "lark-doc" as const;
 
   constructor(ctx: Context, bots: BotConfig[]) {
     super(ctx, "config");
@@ -750,6 +751,7 @@ test("产品经理直接生成真实 Spec 与 Tickets 后可由发起人确认",
         input: {
           title: "用户详情页",
           summary: "增加只读详情页，并覆盖权限与空状态。",
+          deliveryMode: "local",
           specPath: ".scratch/user-detail/spec.md",
           ticketsPath: ".scratch/user-detail/issues",
         },
@@ -763,7 +765,7 @@ test("产品经理直接生成真实 Spec 与 Tickets 后可由发起人确认",
     ),
   );
   assert.ok(
-    host.calls.mentions.some((text) => text.includes("Spec 和 Tickets 已经落盘")),
+    host.calls.mentions.some((text) => text.includes("产品方案已生成")),
   );
   await waitFor(() => taskResults.length === 1);
   assert.equal(taskResults[0]?.answer, "产品文档已生成。");
@@ -812,6 +814,64 @@ test("产品经理直接生成真实 Spec 与 Tickets 后可由发起人确认",
   assert.equal(replay?.toast?.content, "产品方案已经确认。");
 });
 
+test("产品经理提交飞书云文档时无需本地产物即可确认", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "增加用户详情页", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "飞书产品文档已生成。",
+    sessionId: "sess-lark-product-spec",
+    toolCalls: [{
+      toolUseId: "tool-lark-product-spec",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户详情页",
+        summary: "增加只读详情页，并覆盖权限与空状态。",
+        deliveryMode: "lark-doc",
+        documentUrl: "https://example.feishu.cn/docx/AbCdEf123",
+      },
+    }],
+  });
+
+  await waitFor(() =>
+    host.calls.updates.some((card) =>
+      cardSummaryContains(card, "产品文档已生成"),
+    ),
+  );
+  const readyCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "产品文档已生成"),
+  )!;
+  const serialized = JSON.stringify(readyCard);
+  assert.match(serialized, /飞书云文档待确认/);
+  assert.match(serialized, /https:\/\/example\.feishu\.cn\/docx\/AbCdEf123/);
+  assert.doesNotMatch(serialized, /spec\.md/);
+
+  const approved = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "card-1",
+      value: productSpecValueOf(readyCard),
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(approved?.toast?.content, "产品方案已确认。");
+});
+
 test("同一话题提交更新方案后，旧产品确认卡变为失效状态", async () => {
   const productConfig: BotConfig = {
     ...baseBotConfig,
@@ -843,6 +903,7 @@ test("同一话题提交更新方案后，旧产品确认卡变为失效状态",
       input: {
         title: "方案 v1",
         summary: "第一版方案。",
+        deliveryMode: "local",
         specPath: ".scratch/approval-revision/spec.md",
         ticketsPath: ".scratch/approval-revision/issues",
       },
@@ -877,6 +938,7 @@ test("同一话题提交更新方案后，旧产品确认卡变为失效状态",
       input: {
         title: "方案 v2",
         summary: "更新后的方案。",
+        deliveryMode: "local",
         specPath: ".scratch/approval-revision/spec.md",
         ticketsPath: ".scratch/approval-revision/issues",
       },
@@ -937,6 +999,7 @@ test("新产品确认卡发布失败时，旧确认卡仍可确认", async () =>
       input: {
         title: "方案 v1",
         summary: "第一版方案。",
+        deliveryMode: "local",
         specPath: ".scratch/publish-failure/spec.md",
         ticketsPath: ".scratch/publish-failure/issues",
       },
@@ -962,6 +1025,7 @@ test("新产品确认卡发布失败时，旧确认卡仍可确认", async () =>
       input: {
         title: "方案 v2",
         summary: "更新方案。",
+        deliveryMode: "local",
         specPath: ".scratch/publish-failure/spec.md",
         ticketsPath: ".scratch/publish-failure/issues",
       },
@@ -1052,6 +1116,7 @@ test("完成澄清后沿用原 CLI 会话提交产品文档", async () => {
         input: {
           title: "任务优先级",
           summary: "首期支持高、中、低三档。",
+          deliveryMode: "local",
           specPath: ".scratch/priority/spec.md",
           ticketsPath: ".scratch/priority/issues",
         },
@@ -1064,7 +1129,7 @@ test("完成澄清后沿用原 CLI 会话提交产品文档", async () => {
     ),
   );
   assert.ok(
-    host.calls.mentions.some((text) => text.includes("Spec 和 Tickets 已经落盘")),
+    host.calls.mentions.some((text) => text.includes("产品方案已生成")),
   );
 });
 

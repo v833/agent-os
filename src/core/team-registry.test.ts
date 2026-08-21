@@ -3,8 +3,8 @@
  */
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import test from "node:test";
 import type { BotConfig } from "./bot-registry.js";
 import { builtInSkillsDirectory } from "./project-skills.js";
@@ -64,11 +64,12 @@ test("contextFor 生成成员名单、Skill 提示与当前身份约束", () => 
   assert.throws(() => registry.contextFor("outsider"), /团队成员不存在: outsider/);
 });
 
-test("findMissingSkills 仅报告工作区和内置目录都缺失的项目 Skill", async (t) => {
+test("findMissingSkills 仅报告所有查找位置都缺失的项目 Skill", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-team-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  const missingSkill = `missing-${basename(directory)}`;
 
-  // product 的 grill-me 已安装，developer 的 review-me 缺失。
+  // product 的 grill-me 已安装，developer 的临时 Skill 缺失。
   const skillsDir = join(directory, ".agents", "skills", "grill-me");
   await mkdir(skillsDir, { recursive: true });
   await writeFile(join(skillsDir, "SKILL.md"), "# grill-me\n", "utf8");
@@ -80,22 +81,25 @@ test("findMissingSkills 仅报告工作区和内置目录都缺失的项目 Skil
     }),
     member("developer", {
       workspaceDir: directory,
-      skills: ["review-me"],
+      skills: [missingSkill],
     }),
   ];
   const registry = new TeamRegistry("product", localTeam);
   const missing = await registry.findMissingSkills();
   assert.equal(missing.length, 1);
   assert.equal(missing[0]?.botId, "developer");
-  assert.equal(missing[0]?.skill, "review-me");
+  assert.equal(missing[0]?.skill, missingSkill);
   assert.deepEqual(missing[0]?.searchedPaths, [
-    join(directory, ".agents", "skills", "review-me", "SKILL.md"),
-    join(directory, ".claude", "skills", "review-me", "SKILL.md"),
-    join(builtInSkillsDirectory, "review-me", "SKILL.md"),
+    join(directory, ".agents", "skills", missingSkill, "SKILL.md"),
+    join(directory, ".claude", "skills", missingSkill, "SKILL.md"),
+    join(builtInSkillsDirectory, missingSkill, "SKILL.md"),
+    join(homedir(), ".agents", "skills", missingSkill, "SKILL.md"),
+    join(homedir(), ".claude", "skills", missingSkill, "SKILL.md"),
+    join(homedir(), ".codex", "skills", missingSkill, "SKILL.md"),
   ]);
 });
 
-test("product workspace 在仓库外时使用三项 Agent OS 内置 Skill", async (t) => {
+test("product workspace 在仓库外时使用 Agent OS 内置 Skill", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-product-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const registry = new TeamRegistry("product", [

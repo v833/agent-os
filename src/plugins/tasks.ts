@@ -105,6 +105,7 @@ export class TasksService extends Service {
       botConfig,
       resolveRetryPrompt(session, requestedPrompt),
       teamContext ?? "",
+      this.ctx.config.defaultProductDeliveryMode,
     );
     // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
     if (
@@ -543,7 +544,7 @@ export class TasksService extends Service {
 }
 
 export const name = "tasks";
-export const inject = ["sessions", "cli", "cards"];
+export const inject = ["config", "sessions", "cli", "cards"];
 
 export function apply(ctx: Context) {
   new TasksService(ctx);

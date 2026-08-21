@@ -402,6 +402,7 @@ const baseBotConfig: BotConfig = {
 class FakeConfigService extends Service {
   readonly bots: BotConfig[];
   readonly defaultWorkspaces: Record<string, string>;
+  readonly defaultProductDeliveryMode = "lark-doc" as const;
 
   constructor(ctx: Context, bots: BotConfig[]) {
     super(ctx, "config");

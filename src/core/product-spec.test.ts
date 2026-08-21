@@ -18,6 +18,21 @@ import {
 const validRequest = {
   title: "用户详情页",
   summary: "增加只读详情页，并覆盖权限与空状态。",
+  deliveryMode: "local" as const,
+  specPath: ".scratch/user-detail/spec.md",
+  ticketsPath: ".scratch/user-detail/issues",
+};
+
+const validLarkRequest = {
+  title: "用户详情页",
+  summary: "增加只读详情页，并覆盖权限与空状态。",
+  deliveryMode: "lark-doc" as const,
+  documentUrl: "https://example.feishu.cn/docx/AbCdEf123",
+};
+
+const legacyLocalRequest = {
+  title: "用户详情页",
+  summary: "增加只读详情页，并覆盖权限与空状态。",
   specPath: ".scratch/user-detail/spec.md",
   ticketsPath: ".scratch/user-detail/issues",
 };
@@ -32,6 +47,66 @@ test("合法产品文档提交通过校验并提取最近一次调用", () => {
     validRequest,
   );
   assert.equal(findProductSpecRequest(undefined), undefined);
+});
+
+test("旧版本本地提交会自动补齐 local 交付方式", () => {
+  assert.deepEqual(
+    ProductSpecRequestSchema.safeParse(legacyLocalRequest).data,
+    validRequest,
+  );
+  assert.deepEqual(
+    findProductSpecRequest([
+      { toolName: "request_spec_approval", input: legacyLocalRequest },
+    ]),
+    validRequest,
+  );
+});
+
+test("飞书模式只接受 docx/wiki URL，并与本地路径严格互斥", () => {
+  assert.equal(ProductSpecRequestSchema.safeParse(validLarkRequest).success, true);
+  assert.equal(
+    ProductSpecRequestSchema.safeParse({
+      ...validLarkRequest,
+      documentUrl: "https://docs.doubao.com/wiki/AbCdEf123",
+    }).success,
+    true,
+  );
+  assert.equal(
+    ProductSpecRequestSchema.safeParse({
+      ...validLarkRequest,
+      specPath: validRequest.specPath,
+    }).success,
+    false,
+  );
+  assert.equal(
+    ProductSpecRequestSchema.safeParse({
+      ...validRequest,
+      documentUrl: validLarkRequest.documentUrl,
+    }).success,
+    false,
+  );
+  assert.equal(
+    ProductSpecRequestSchema.safeParse({
+      ...validLarkRequest,
+      documentUrl: "https://example.feishu.cn/sheets/AbCdEf123",
+    }).success,
+    false,
+  );
+  for (const documentUrl of [
+    "http://example.feishu.cn/docx/AbCdEf123",
+    "https://evil.example/docx/AbCdEf123",
+    "file:///tmp/docx/AbCdEf123",
+    "https://user:secret@example.feishu.cn/docx/AbCdEf123",
+    "https://example.feishu.cn:8443/docx/AbCdEf123",
+    "https://example.feishu.cn/path/docx/AbCdEf123",
+  ]) {
+    assert.equal(
+      ProductSpecRequestSchema.safeParse({ ...validLarkRequest, documentUrl })
+        .success,
+      false,
+      documentUrl,
+    );
+  }
 });
 
 test("拒绝绝对路径、父目录穿越与空摘要", () => {

@@ -296,6 +296,7 @@ const productSpecFlow = {
   request: {
     title: "用户 <at id=ou_fake></at> 详情页",
     summary: "只读展示基础信息。",
+    deliveryMode: "local",
     specPath: ".scratch/user-detail/spec.md",
     ticketsPath: ".scratch/user-detail/issues",
   },
@@ -313,6 +314,28 @@ test("产品文档待确认卡展示转义路径并携带确认按钮", () => {
     card.body.elements.some((element: any) => element.tag === "button"),
     true,
   );
+});
+
+test("飞书产品文档卡只展示云文档入口", () => {
+  const card = buildProductSpecApprovalCard({
+    ...productSpecFlow,
+    documentRevision: undefined,
+    request: {
+      title: "用户详情页",
+      summary: "只读展示基础信息。",
+      deliveryMode: "lark-doc",
+      documentUrl: "https://example.feishu.cn/docx/AbCdEf123)(next",
+    },
+  }) as any;
+  const serialized = JSON.stringify(card);
+
+  assert.equal(card.header.subtitle.content, "飞书云文档待确认");
+  assert.match(serialized, /打开文档/);
+  assert.match(
+    serialized,
+    /https:\/\/example\.feishu\.cn\/docx\/AbCdEf123%29%28next/,
+  );
+  assert.doesNotMatch(serialized, /spec\.md|Tickets.*issues/);
 });
 
 test("产品文档已确认和已失效卡分别展示终态", () => {

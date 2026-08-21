@@ -133,6 +133,11 @@ function escapeFeishuMarkdown(value: string): string {
   return value.replace(/<(?=\/?[A-Za-z][^>]*>)/g, "<&zwj;");
 }
 
+function escapeFeishuMarkdownLink(value: string): string {
+  // URL 已在产品契约中限制到可信域名；额外转义括号，避免破坏卡片链接语法。
+  return value.replaceAll("(", "%28").replaceAll(")", "%29");
+}
+
 function activityLine(activity: TaskActivity): string {
   const icon = activity.failed ? "⚠️" : (TOOL_ICONS[activity.toolName] ?? "⚙️");
   const detail = activity.detail
@@ -654,6 +659,9 @@ export function buildClarificationSupersededCard(
 }
 
 function productDocumentList(flow: ProductSpecFlow): string {
+  if (flow.request.deliveryMode === "lark-doc") {
+    return `☁️ **飞书云文档** · [打开文档](${escapeFeishuMarkdownLink(flow.request.documentUrl)})`;
+  }
   return [
     `📘 **Spec** · \`${escapeInlineCode(escapeFeishuMarkdown(flow.request.specPath))}\``,
     `🎫 **Tickets** · \`${escapeInlineCode(escapeFeishuMarkdown(flow.request.ticketsPath))}\``,
@@ -673,7 +681,7 @@ export function buildProductSpecApprovalCard(flow: ProductSpecFlow): CardJson {
     { tag: "hr" },
     {
       tag: "markdown",
-      content: `**真实产物**\n${productDocumentList(flow)}`,
+      content: `**共享产物**\n${productDocumentList(flow)}`,
     },
     {
       tag: "button",
@@ -706,7 +714,10 @@ export function buildProductSpecApprovalCard(flow: ProductSpecFlow): CardJson {
       title: { tag: "plain_text", content: "产品文档已生成" },
       subtitle: {
         tag: "plain_text",
-        content: "Spec · Tickets 待确认",
+        content:
+          flow.request.deliveryMode === "lark-doc"
+            ? "飞书云文档待确认"
+            : "本地 Spec · Tickets 待确认",
       },
     },
     body: {

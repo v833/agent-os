@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import {
   loadAgentOsConfig,
   type BotConfig,
+  type ProductDeliveryMode,
 } from "../core/bot-registry.js";
 
 /** 提供已加载 bot 配置的只读入口，其他服务按 bot ID 查询。 */
@@ -15,6 +16,7 @@ export class ConfigService extends Service {
   defaultWorkspaces: Record<string, string> = {};
   /** 团队负责人（CEO 助理等）的稳定 bot ID。 */
   teamLeaderId = "";
+  defaultProductDeliveryMode: ProductDeliveryMode = "local";
 
   constructor(ctx: Context) {
     super(ctx, "config");
@@ -43,6 +45,7 @@ export async function apply(ctx: Context, config: Config = {}) {
   const agentOsConfig = await loadAgentOsConfig(botsPath);
   service.bots = agentOsConfig.bots;
   service.teamLeaderId = agentOsConfig.teamLeaderId;
+  service.defaultProductDeliveryMode = agentOsConfig.defaultProductDeliveryMode;
   service.defaultWorkspaces = Object.fromEntries(
     service.bots.map((bot) => [bot.id, bot.workspaceDir]),
   );

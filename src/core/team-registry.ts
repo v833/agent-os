@@ -1,6 +1,6 @@
 /**
  * 团队注册表：按 ID 查询长期成员、为当前成员生成团队上下文，
- * 并在启动时检查配置中的项目 Skill 是否能从工作区或内置目录解析。
+ * 并在启动时检查配置中的项目 Skill 是否能从工作区、内置或用户级目录解析。
  * 它不负责派发任务，协作机制仍由 collaboration 服务承担。
  */
 import type { BotConfig } from "./bot-registry.js";
