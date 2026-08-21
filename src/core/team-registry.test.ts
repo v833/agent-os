@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { BotConfig } from "./bot-registry.js";
+import { builtInSkillsDirectory } from "./project-skills.js";
 import { TeamRegistry } from "./team-registry.js";
 
 function member(
@@ -63,7 +64,7 @@ test("contextFor 生成成员名单、Skill 提示与当前身份约束", () => 
   assert.throws(() => registry.contextFor("outsider"), /团队成员不存在: outsider/);
 });
 
-test("findMissingSkills 报告工作目录中缺失的项目 Skill", async (t) => {
+test("findMissingSkills 仅报告工作区和内置目录都缺失的项目 Skill", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-team-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
 
@@ -90,5 +91,19 @@ test("findMissingSkills 报告工作目录中缺失的项目 Skill", async (t) =
   assert.deepEqual(missing[0]?.searchedPaths, [
     join(directory, ".agents", "skills", "review-me", "SKILL.md"),
     join(directory, ".claude", "skills", "review-me", "SKILL.md"),
+    join(builtInSkillsDirectory, "review-me", "SKILL.md"),
   ]);
+});
+
+test("product workspace 在仓库外时使用三项 Agent OS 内置 Skill", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-os-product-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const registry = new TeamRegistry("product", [
+    member("product", {
+      workspaceDir: directory,
+      skills: ["grill-me", "to-spec", "to-tickets"],
+    }),
+  ]);
+
+  assert.deepEqual(await registry.findMissingSkills(), []);
 });

@@ -3,7 +3,7 @@
  * 文件错误提示与角色提示词拼接。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -351,7 +351,16 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
   await assert.rejects(loadBotConfigs(filePath, credentials), /格式错误/);
 });
 
-test("角色提示词组装角色、系统原则、团队上下文与 Skill", () => {
+test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-os-prompt-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const skillDirectory = join(directory, ".agents", "skills", "grill-me");
+  await mkdir(skillDirectory, { recursive: true });
+  await writeFile(
+    join(skillDirectory, "SKILL.md"),
+    "---\nname: grill-me\n---\n\n# Workspace Grill\n",
+    "utf8",
+  );
   const teamContext = "你所在的 Agent 团队：\n- product：产品经理";
   const feishuOutputPolicy = [
     "飞书输出规则（必须遵守）：",
@@ -360,35 +369,31 @@ test("角色提示词组装角色、系统原则、团队上下文与 Skill", ()
     "- 详细产物写入当前工作区文件。回复只提供简短摘要和文件路径。",
     "- 需要用户决策时，必须调用 request_clarification 工具；不要用大段文字列出问题。工具调用后停止继续推断，等待用户回答。",
   ].join("\n");
-  assert.equal(
-    buildBotPrompt(
+  const prompt = await buildBotPrompt(
       {
         role: "产品经理",
         skills: ["grill-me"],
         systemPrompt: "不要直接实现代码",
+        workspaceDir: directory,
       },
       "澄清这个需求",
       teamContext,
-    ),
-    [
-      "你的角色：产品经理",
-      "不要直接实现代码",
-      teamContext,
-      [
-        "项目 Skill 加载规则（优先级不可颠倒）：",
-        "- 先读取当前工作区 .agents/skills/<skill>/SKILL.md。",
-        "- 不存在时再读取 .claude/skills/<skill>/SKILL.md。",
-        "- 只有两个工作区路径都不存在时，才允许回退到用户级或全局同名 Skill。",
-        "本次必须执行：$grill-me",
-      ].join("\n"),
-      feishuOutputPolicy,
-      "当前任务：澄清这个需求",
-    ].join("\n\n"),
-  );
+    );
+  assert.match(prompt, /^你的角色：产品经理/);
+  assert.match(prompt, /<project-skill name="grill-me" source="workspace">/);
+  assert.match(prompt, /# Workspace Grill/);
+  assert.match(prompt, new RegExp(feishuOutputPolicy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(prompt, /当前任务：澄清这个需求$/);
+
   // 无 Skill、无团队上下文时跳过对应段落，空角色说明会被过滤。
   assert.equal(
-    buildBotPrompt(
-      { role: "开发", skills: [], systemPrompt: "  " },
+    await buildBotPrompt(
+      {
+        role: "开发",
+        skills: [],
+        systemPrompt: "  ",
+        workspaceDir: directory,
+      },
       "写代码",
     ),
     ["你的角色：开发", feishuOutputPolicy, "当前任务：写代码"].join("\n\n"),

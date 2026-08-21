@@ -1,11 +1,13 @@
 /**
  * 团队注册表：按 ID 查询长期成员、为当前成员生成团队上下文，
- * 并在启动时检查配置中的项目 Skill 是否真的安装在成员工作目录。
+ * 并在启动时检查配置中的项目 Skill 是否能从工作区或内置目录解析。
  * 它不负责派发任务，协作机制仍由 collaboration 服务承担。
  */
-import { access } from "node:fs/promises";
-import { join } from "node:path";
 import type { BotConfig } from "./bot-registry.js";
+import {
+  projectSkillPaths,
+  resolveProjectSkill,
+} from "./project-skills.js";
 
 export interface MissingSkill {
   botId: string;
@@ -61,27 +63,12 @@ export class TeamRegistry {
     const missing: MissingSkill[] = [];
     for (const config of this.members) {
       for (const skill of config.skills) {
-        const searchedPaths = [
-          join(config.workspaceDir, ".agents", "skills", skill, "SKILL.md"),
-          join(config.workspaceDir, ".claude", "skills", skill, "SKILL.md"),
-        ];
-        if (!(await somePathExists(searchedPaths))) {
+        const searchedPaths = projectSkillPaths(config.workspaceDir, skill);
+        if (!(await resolveProjectSkill(config.workspaceDir, skill))) {
           missing.push({ botId: config.id, skill, searchedPaths });
         }
       }
     }
     return missing;
   }
-}
-
-async function somePathExists(paths: string[]): Promise<boolean> {
-  for (const path of paths) {
-    try {
-      await access(path);
-      return true;
-    } catch {
-      // 继续检查另一个项目级 Skill 目录。
-    }
-  }
-  return false;
 }

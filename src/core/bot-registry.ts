@@ -5,6 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import type { CliAccessMode, CliId } from "../cli/types.js";
+import { resolveProjectSkill } from "./project-skills.js";
 import { resolveWorkspacePath } from "./workspace.js";
 
 /** 单台已启用 bot 的完整运行配置，不再包含间接的环境变量名。 */
@@ -207,20 +208,40 @@ export async function loadBotConfigs(
   return (await loadAgentOsConfig(filePath, env, baseDirectory)).bots;
 }
 
-/** 把角色、系统原则、团队上下文与本次任务组装成执行引擎提示词。 */
-export function buildBotPrompt(
-  config: Pick<BotConfig, "role" | "skills" | "systemPrompt">,
+/** 把角色、系统原则、团队上下文、已解析 Skill 与本次任务组装成提示词。 */
+export async function buildBotPrompt(
+  config: Pick<
+    BotConfig,
+    "role" | "skills" | "systemPrompt" | "workspaceDir"
+  >,
   prompt: string,
   teamContext = "",
-): string {
+): Promise<string> {
+  const resolvedSkills = await Promise.all(
+    config.skills.map((skill) =>
+      resolveProjectSkill(config.workspaceDir, skill),
+    ),
+  );
+  const loadedSkills = resolvedSkills.filter(
+    (skill) => skill !== undefined,
+  );
+  const missingSkills = config.skills.filter(
+    (_skill, index) => !resolvedSkills[index],
+  );
   const projectSkillPolicy = config.skills.length > 0
     ? [
-        "项目 Skill 加载规则（优先级不可颠倒）：",
-        "- 先读取当前工作区 .agents/skills/<skill>/SKILL.md。",
-        "- 不存在时再读取 .claude/skills/<skill>/SKILL.md。",
-        "- 只有两个工作区路径都不存在时，才允许回退到用户级或全局同名 Skill。",
-        `本次必须执行：${config.skills.map((skill) => `$${skill}`).join("、")}`,
-      ].join("\n")
+        "项目 Skill（工作区版本优先，缺失时使用 Agent OS 内置版本）：",
+        "以下 Skill 内容已经加载，必须直接遵守，无需再次搜索同名 Skill。",
+        ...loadedSkills.map(
+          (skill) =>
+            `<project-skill name="${skill.name}" source="${skill.source}">\n${skill.content.trim()}\n</project-skill>`,
+        ),
+        ...(missingSkills.length > 0
+          ? [
+              `以下项目 Skill 未安装，仅这些项允许回退到用户级或全局同名 Skill：${missingSkills.map((skill) => `$${skill}`).join("、")}`,
+            ]
+          : []),
+      ].join("\n\n")
     : "";
   const feishuOutputPolicy = [
     "飞书输出规则（必须遵守）：",
