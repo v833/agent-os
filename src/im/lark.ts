@@ -33,6 +33,18 @@ export interface IncomingMessage {
   mentions: Mention[];
 }
 
+/** 飞书文档评论事件的稳定字段；评论正文由 lark-drive 在 CLI 侧按 ID 读取。 */
+export interface IncomingDocumentComment {
+  eventId: string;
+  fileToken: string;
+  fileType: "doc" | "docx" | "sheet" | "bitable" | "slides" | "file";
+  commentId: string;
+  replyId: string;
+  senderOpenId: string;
+  senderUnionId: string;
+  mentionedBot: boolean;
+}
+
 /** Agent OS 对飞书长连接状态的稳定抽象，不暴露 SDK 内部 WebSocket 类型。 */
 export type BotConnectionState =
   | "connecting"
@@ -44,6 +56,10 @@ export interface BotOptions {
   appId: string;
   appSecret: string;
   onMessage: (message: IncomingMessage, bot: Bot) => Promise<void>;
+  onDocumentComment?: (
+    comment: IncomingDocumentComment,
+    bot: Bot,
+  ) => Promise<void>;
   onCardAction?: (
     action: CardAction,
   ) => Promise<CardActionResponse | undefined>;
@@ -118,6 +134,26 @@ export interface Bot {
     saveDir: string,
     fileName?: string,
   ) => Promise<string>;
+  /** 在原评论下回复一段文本。 */
+  replyToDocumentComment: (
+    comment: IncomingDocumentComment,
+    text: string,
+  ) => Promise<void>;
+  /** 给评论根回复添加/移除飞书 Typing reaction。 */
+  setDocumentCommentWorking: (
+    comment: IncomingDocumentComment,
+    active: boolean,
+  ) => Promise<void>;
+}
+
+export const FEISHU_COMMENT_LIMIT = 1_000;
+
+/** 评论长度受平台限制；保留完整前缀并明确标记截断，避免 API 直接拒绝。 */
+export function fitFeishuText(text: string, limit: number): string {
+  if (limit <= 0) return "";
+  const normalized = text.trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
 }
 
 /** 构造飞书 post 消息的语言节点和二维内容数组，确保 @ 真正触达目标 bot。 */
@@ -254,6 +290,30 @@ function renderPostElement(element: PostElement): string {
   return "";
 }
 
+/**
+ * 文档评论事件在新增根评论时可能不带 reply_id；读取评论详情取得根回复，
+ * 才能让评论 reaction API 精确定位，失败只由调用方决定是否降级处理。
+ */
+async function findRootCommentReplyId(
+  client: Lark.Client,
+  comment: IncomingDocumentComment,
+): Promise<string> {
+  const response = await client.drive.fileComment.get({
+    path: {
+      file_token: comment.fileToken,
+      comment_id: comment.commentId,
+    },
+    params: {
+      file_type: comment.fileType,
+      user_id_type: "open_id",
+    },
+  });
+  if (response.code && response.code !== 0) {
+    throw new Error(response.msg || "读取飞书文档评论失败");
+  }
+  return response.data?.reply_list?.replies?.[0]?.reply_id ?? "";
+}
+
 /** 从 text/post 的双层 JSON 中提取可直接交给 CLI 的完整文本。 */
 export function extractMessageText(messageType: string, content: string): string {
   // 飞书协议是双层 JSON：事件已解析，message.content 仍需单独 JSON.parse。
@@ -284,6 +344,7 @@ export function startBot(options: BotOptions): Bot {
     appId,
     appSecret,
     onMessage,
+    onDocumentComment,
     onCardAction,
     onConnectionState,
   } = options;
@@ -385,6 +446,46 @@ export function startBot(options: BotOptions): Bot {
       await response.writeFile(savePath);
       return savePath;
     },
+    async replyToDocumentComment(comment, text) {
+      const response = await client.drive.fileCommentReply.create({
+        path: {
+          file_token: comment.fileToken,
+          comment_id: comment.commentId,
+        },
+        params: {
+          file_type: comment.fileType,
+          user_id_type: "open_id",
+        },
+        data: {
+          content: {
+            elements: [{
+              type: "text_run",
+              text_run: { text: fitFeishuText(text, FEISHU_COMMENT_LIMIT) },
+            }],
+          },
+        },
+      });
+      if (response.code && response.code !== 0) {
+        throw new Error(response.msg || "回复飞书文档评论失败");
+      }
+    },
+    async setDocumentCommentWorking(comment, active) {
+      const replyId = comment.replyId ||
+        await findRootCommentReplyId(client, comment);
+      if (!replyId) throw new Error("评论没有可用的根回复 ID");
+      const response = await client.drive.v2.commentReaction.updateReaction({
+        path: { file_token: comment.fileToken },
+        params: { file_type: comment.fileType },
+        data: {
+          action: active ? "add" : "delete",
+          reply_id: replyId,
+          reaction_type: "Typing",
+        },
+      });
+      if (response.code && response.code !== 0) {
+        throw new Error(response.msg || "更新飞书文档评论状态失败");
+      }
+    },
   };
 
   // 两类长连接事件在平台边界归一化，核心层不依赖 SDK 的原始字段结构。
@@ -392,6 +493,27 @@ export function startBot(options: BotOptions): Bot {
     "card.action.trigger": async (data: unknown) => {
       if (!onCardAction) return undefined;
       return onCardAction(parseCardAction(data));
+    },
+    "drive.notice.comment_add_v1": async (data) => {
+      if (!onDocumentComment) return undefined;
+      const meta = data.notice_meta;
+      if (!meta?.file_token || !meta.file_type || !data.comment_id) {
+        return undefined;
+      }
+      await onDocumentComment(
+        {
+          eventId: data.event_id ?? "",
+          fileToken: meta.file_token,
+          fileType: meta.file_type,
+          commentId: data.comment_id,
+          replyId: data.reply_id ?? "",
+          senderOpenId: meta.from_user_id?.open_id ?? "",
+          senderUnionId: meta.from_user_id?.union_id ?? "",
+          mentionedBot: data.is_mentioned ?? false,
+        },
+        bot,
+      );
+      return undefined;
     },
     "im.message.receive_v1": async (data) => {
       const message = data.message;

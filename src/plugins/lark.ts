@@ -1,6 +1,6 @@
 /**
  * lark 平台服务插件：启动多台飞书 bot，把消息与卡片回调翻译成
- * bot/message、bot/card-action 事件交给 router 等插件消费。
+ * bot/message、bot/card-action、bot/document-comment 事件交给其他插件消费。
  * 平台是插件：替换本插件即可换掉飞书接入。
  */
 import { Service, type Context } from "cordis";
@@ -51,6 +51,16 @@ export async function apply(ctx: Context) {
           // serial：router 返回响应对象即短路；无人处理返回 undefined。
           return ctx.serial("bot/card-action", action, bot, botConfig);
         },
+        onDocumentComment: botConfig.skills.includes("lark-drive")
+          ? async (comment, bot) => {
+              await ctx.parallel(
+                "bot/document-comment",
+                comment,
+                bot,
+                botConfig,
+              );
+            }
+          : undefined,
         onMessage: async (message, bot) => {
           // parallel：等 router 路由完成，错误会回传到平台回调。
           await ctx.parallel("bot/message", message, bot, botConfig);

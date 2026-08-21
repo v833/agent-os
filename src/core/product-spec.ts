@@ -1,6 +1,7 @@
 /**
  * 产品文档提交契约：约束 request_spec_approval 的本地/飞书互斥参数，并在
- * 展示本地产物前校验 Spec 与 Tickets。它是产品文档插件的可信边界。
+ * 展示本地产物前校验 Spec 与 Tickets，并为云文档评论回路提供稳定索引。
+ * 它是产品文档插件的可信边界。
  */
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
@@ -120,10 +121,10 @@ const LarkDocumentUrlSchema = z
         message: "documentUrl 不能包含账号、密码或自定义端口",
       });
     }
-    if (!/^\/(?:docx|wiki)\//.test(url.pathname)) {
+    if (!/^\/docx\//.test(url.pathname)) {
       ctx.addIssue({
         code: "custom",
-        message: "documentUrl 路径必须以 /docx/ 或 /wiki/ 开头",
+        message: "documentUrl 必须是飞书 Docx 文档链接",
       });
     }
   });
@@ -172,6 +173,8 @@ export interface ProductSpecFlow {
   token: string;
   taskId: string;
   botId: string;
+  /** 创建确认卡时对应的 Agent OS 会话，评论事件依靠它续接上下文。 */
+  sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
   cardMessageId?: string;
@@ -187,6 +190,8 @@ export interface ProductSpecFlow {
 export interface CreateProductSpecFlowOptions {
   taskId: string;
   botId: string;
+  /** 产品会话 ID；没有会话就无法把后续评论交回同一上下文。 */
+  sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
   cardMessageId?: string;
@@ -209,6 +214,10 @@ export function isProductSpecOwner(
 /** 产品方案确认状态的内存 Store；服务重启后旧 token 会自然失效。 */
 export class ProductSpecFlowStore {
   private readonly flows = new Map<string, ProductSpecFlow>();
+
+  constructor(initial: Iterable<ProductSpecFlow> = []) {
+    for (const flow of initial) this.flows.set(flow.token, flow);
+  }
 
   create(options: CreateProductSpecFlowOptions): ProductSpecFlow {
     const flow = this.prepare(options);
@@ -248,12 +257,48 @@ export class ProductSpecFlowStore {
     return this.flows.get(token);
   }
 
+  /** 返回当前 Flow 快照，供持久化 Store 原子写盘。 */
+  snapshot(): ProductSpecFlow[] {
+    return [...this.flows.values()].map((flow) => ({ ...flow }));
+  }
+
+  /** 按待确认 Docx 的 token 查找原产品会话。 */
+  findPendingByDocument(
+    botId: string,
+    fileToken: string,
+  ): ProductSpecFlow | undefined {
+    if (!botId || !fileToken) return undefined;
+    for (const flow of this.flows.values()) {
+      if (
+        flow.botId === botId &&
+        flow.status === "pending" &&
+        flow.request.deliveryMode === "lark-doc" &&
+        documentToken(flow.request.documentUrl) === fileToken
+      ) {
+        return flow;
+      }
+    }
+    return undefined;
+  }
+
   approve(token: string): ProductSpecFlow | undefined {
     const flow = this.flows.get(token);
     if (!flow || flow.status !== "pending") return undefined;
     flow.status = "approved";
     flow.approvedAt = new Date().toISOString();
     return flow;
+  }
+}
+
+/** 从 Docx URL 提取稳定文档 token；Wiki token 不能直接用于评论事件路由。 */
+export function documentToken(documentUrl: string): string | undefined {
+  try {
+    const match = /^\/docx\/([A-Za-z0-9_-]+)\/?$/.exec(
+      new URL(documentUrl).pathname,
+    );
+    return match?.[1];
+  } catch {
+    return undefined;
   }
 }
 

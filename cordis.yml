@@ -70,5 +70,7 @@ plugins:
   - name: clarification
   # 产品文档：校验 Spec/Tickets 真实落盘并提供发起人确认卡；移除即可整体下线。
   - name: product-spec
+  # 云文档评论评审：@产品经理后恢复原产品会话并把修改说明回复到评论。
+  - name: product-comments
   - name: schedule
   - name: router

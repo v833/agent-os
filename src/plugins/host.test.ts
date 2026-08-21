@@ -26,7 +26,7 @@ import type {
   CliRunResult,
   CliSessionSummary,
 } from "../cli/types.js";
-import type { RunCliOptions } from "../cli/runner.js";
+import { CliRunError, type RunCliOptions } from "../cli/runner.js";
 import * as applicationToolsPlugin from "./application-tools.js";
 import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
@@ -36,6 +36,7 @@ import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
 import * as productSpecPlugin from "./product-spec.js";
+import * as productCommentsPlugin from "./product-comments.js";
 import * as qaGatePlugin from "./qa-gate.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
@@ -105,6 +106,7 @@ const fakeAdapter: CliAdapter = {
     sessionId: "",
   }),
   parseEvents: () => [],
+  isSessionUnavailable: (message) => message.includes("session expired"),
 };
 
 /** 假执行引擎：捕获调用参数，由测试控制何时完成或取消。 */
@@ -113,6 +115,7 @@ class FakeCliService extends Service {
   readonly captures: RunCliOptions[] = [];
   compactOptions: unknown;
   private resolver: ((result: CliRunResult) => void) | undefined;
+  private nextError: unknown;
   /** 全部挂起的 run 的解析器：并行测试中同一 bot 多个任务同时挂起时批量完成。 */
   private readonly resolvers: Array<(result: CliRunResult) => void> = [];
   private compactResolver:
@@ -141,6 +144,11 @@ class FakeCliService extends Service {
   run(options: RunCliOptions): Promise<CliRunResult> {
     this.captured = options;
     this.captures.push(options);
+    if (this.nextError !== undefined) {
+      const error = this.nextError;
+      this.nextError = undefined;
+      return Promise.reject(error);
+    }
     return new Promise((resolve) => {
       this.resolver = resolve;
       this.resolvers.push(resolve);
@@ -155,6 +163,10 @@ class FakeCliService extends Service {
 
   finish(result: CliRunResult): void {
     this.resolver?.(result);
+  }
+
+  failNext(error: unknown): void {
+    this.nextError = error;
   }
 
   /** 一次性完成全部挂起的 run（同一 bot 并行多任务时使用），让任务收尾清理定时器。 */
@@ -215,6 +227,8 @@ function createFakeBot(
     mentions: [] as string[],
     sentToChat: [] as { chatId: string; target: BotIdentity; text: string }[],
     updates: [] as Record<string, unknown>[],
+    documentCommentReplies: [] as string[],
+    documentCommentReactions: [] as { active: boolean }[],
   };
   let updateCardAttempts = 0;
   const bot = {
@@ -270,6 +284,12 @@ function createFakeBot(
       calls.updates.push(card);
     },
     downloadResource: async () => join(process.cwd(), "data", "downloads", "x"),
+    replyToDocumentComment: async (_comment: unknown, text: string) => {
+      calls.documentCommentReplies.push(text);
+    },
+    setDocumentCommentWorking: async (_comment: unknown, active: boolean) => {
+      calls.documentCommentReactions.push({ active });
+    },
   } as unknown as Bot;
   return { bot, calls };
 }
@@ -870,6 +890,276 @@ test("产品经理提交飞书云文档时无需本地产物即可确认", async
     runtimeConfig,
   );
   assert.equal(approved?.toast?.content, "产品方案已确认。");
+});
+
+test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确认卡", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "创建用户详情方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "方案已经写好。",
+    sessionId: "sess-product-correction",
+  });
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-product-correction");
+  assert.match(host.cli.captures[1]?.prompt ?? "", /request_spec_approval/);
+
+  host.cli.finish({
+    answer: "已提交待确认方案。",
+    sessionId: "sess-product-correction",
+    toolCalls: [{
+      toolUseId: "tool-correction-spec",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户详情页",
+        summary: "增加只读详情页。",
+        deliveryMode: "lark-doc",
+        documentUrl: "https://example.feishu.cn/docx/Correction123",
+      },
+    }],
+  });
+  await waitFor(() => host.calls.updates.some((card) =>
+    cardSummaryContains(card, "产品文档已生成"),
+  ));
+  assert.ok(host.root.productSpec.flows.findPendingByDocument(
+    "testbot",
+    "Correction123",
+  ));
+  assert.ok(host.calls.mentions.some((text) => text.includes("产品方案已生成")));
+});
+
+test("产品方案只有其他工具调用时仍强制补交 request_spec_approval", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "创建用户详情方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "已调用别的工具。",
+    sessionId: "sess-product-other-tool",
+    toolCalls: [{
+      toolUseId: "tool-other",
+      toolName: "request_clarification",
+      input: {},
+    }],
+  });
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-product-other-tool");
+  host.cli.finish({
+    answer: "已补交方案。",
+    sessionId: "sess-product-other-tool",
+    toolCalls: [{
+      toolUseId: "tool-other-correction",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户详情页",
+        summary: "增加只读详情页。",
+        deliveryMode: "lark-doc",
+        documentUrl: "https://example.feishu.cn/docx/OtherTool123",
+      },
+    }],
+  });
+  await waitFor(() => host.calls.updates.some((card) =>
+    cardSummaryContains(card, "产品文档已生成"),
+  ));
+});
+
+test("产品方案纠正轮仍未提交时进入失败收尾且不发送成功通知", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "创建用户详情方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({ answer: "方案已经写好。", sessionId: "sess-product-fail" });
+  await waitFor(() => host.cli.captures.length === 2);
+  host.cli.finish({ answer: "仍然只返回文字。", sessionId: "sess-product-fail" });
+
+  await waitFor(() => host.calls.updates.some((card) =>
+    cardSummaryContains(card, "执行没有完成"),
+  ));
+  assert.equal(
+    host.calls.mentions.filter((text) => text.includes("任务已完成")).length,
+    0,
+  );
+  assert.equal(
+    host.calls.updates.filter((card) => cardSummaryContains(card, "产品文档已生成"))
+      .length,
+    0,
+  );
+});
+
+test("普通开发 bot 不触发产品方案提交纠正", async () => {
+  const host = await createHost([baseBotConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "实现一个普通模块" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({ answer: "模块已完成。", sessionId: "sess-developer" });
+  await waitFor(() => host.calls.updates.some((card) =>
+    cardSummaryContains(card, "模块已完成"),
+  ));
+  assert.equal(host.cli.captures.length, 1);
+});
+
+test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc", "lark-drive"],
+  };
+  const host = await createHost([productConfig]);
+  const flowDir = await mkdtemp(join(tmpdir(), "agent-os-comment-flow-"));
+  tempDirs.push(flowDir);
+  await host.root.plugin(productSpecPlugin, {
+    storePath: join(flowDir, "product-spec-flows.json"),
+  });
+  await host.root.plugin(productCommentsPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "创建云文档方案", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "方案已生成。",
+    sessionId: "sess-comment",
+    toolCalls: [{
+      toolUseId: "tool-comment-spec",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户详情页",
+        summary: "增加只读详情页。",
+        deliveryMode: "lark-doc",
+        documentUrl: "https://example.feishu.cn/docx/CommentDoc123",
+      },
+    }],
+  });
+  await waitFor(() => host.root.productSpec.flows.findPendingByDocument(
+    "testbot",
+    "CommentDoc123",
+  ) !== undefined);
+
+  await host.root.parallel(
+    "bot/document-comment",
+    {
+      eventId: "comment-event-1",
+      fileToken: "CommentDoc123",
+      fileType: "docx",
+      commentId: "comment-1",
+      replyId: "reply-1",
+      senderOpenId: "ou_owner",
+      senderUnionId: "on_owner",
+      mentionedBot: true,
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-comment");
+  assert.match(host.cli.captures[1]?.prompt ?? "", /评论 ID：comment-1/);
+
+  await host.root.parallel(
+    "bot/document-comment",
+    {
+      eventId: "comment-event-queued",
+      fileToken: "CommentDoc123",
+      fileType: "docx",
+      commentId: "comment-queued",
+      replyId: "reply-queued",
+      senderOpenId: "ou_owner",
+      senderUnionId: "on_owner",
+      mentionedBot: true,
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(host.cli.captures.length, 2);
+
+  host.cli.finish({ answer: "已补充用户不存在时的空状态和重试规则。", sessionId: "sess-comment" });
+  await waitFor(() => host.cli.captures.length === 3);
+  host.cli.finish({ answer: "已合并排队评论。", sessionId: "sess-comment" });
+  await waitFor(() => host.calls.documentCommentReplies.length === 2);
+  assert.match(host.calls.documentCommentReplies[0]!, /空状态和重试规则/);
+  assert.match(host.calls.documentCommentReplies[1]!, /合并排队评论/);
+  assert.deepEqual(host.calls.documentCommentReactions, [
+    { active: true },
+    { active: true },
+    { active: false },
+    { active: false },
+  ]);
+
+  host.cli.failNext(new CliRunError("session expired: private details", "sess-comment"));
+  await host.root.parallel(
+    "bot/document-comment",
+    {
+      eventId: "comment-event-2",
+      fileToken: "CommentDoc123",
+      fileType: "docx",
+      commentId: "comment-2",
+      replyId: "reply-2",
+      senderOpenId: "ou_owner",
+      senderUnionId: "on_owner",
+      mentionedBot: true,
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.calls.documentCommentReplies.length === 3);
+  assert.equal(
+    host.root.sessions.manager.get("sess-comment")?.cliSessionId,
+    undefined,
+  );
+  assert.equal(
+    host.calls.documentCommentReplies[2],
+    "这条评论暂时无法处理，请稍后重试或在原话题联系产品经理。",
+  );
+  assert.doesNotMatch(host.calls.documentCommentReplies[2]!, /private details/);
 });
 
 test("同一话题提交更新方案后，旧产品确认卡变为失效状态", async () => {

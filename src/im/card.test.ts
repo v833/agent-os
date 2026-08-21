@@ -290,6 +290,7 @@ const productSpecFlow = {
   token: "product-spec-token",
   taskId: "task-1",
   botId: "product",
+  sessionId: "session-1",
   ownerOpenId: "ou_owner",
   workspaceDir: "C:\\workspace",
   documentRevision: "revision-1",

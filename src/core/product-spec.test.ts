@@ -14,6 +14,7 @@ import {
   ProductSpecFlowStore,
   ProductSpecRequestSchema,
 } from "./product-spec.js";
+import { JsonProductSpecFlowStore } from "./product-spec-store.js";
 
 const validRequest = {
   title: "用户详情页",
@@ -62,14 +63,14 @@ test("旧版本本地提交会自动补齐 local 交付方式", () => {
   );
 });
 
-test("飞书模式只接受 docx/wiki URL，并与本地路径严格互斥", () => {
+test("飞书模式只接受 Docx URL，并与本地路径严格互斥", () => {
   assert.equal(ProductSpecRequestSchema.safeParse(validLarkRequest).success, true);
   assert.equal(
     ProductSpecRequestSchema.safeParse({
       ...validLarkRequest,
       documentUrl: "https://docs.doubao.com/wiki/AbCdEf123",
     }).success,
-    true,
+    false,
   );
   assert.equal(
     ProductSpecRequestSchema.safeParse({
@@ -213,6 +214,7 @@ test("产品方案 Flow 会替换旧待确认状态，并且确认只写入一�
   const first = store.create({
     taskId: "task-1",
     botId: "product",
+    sessionId: "session-1",
     ownerOpenId: "ou_owner",
     workspaceDir: "C:\\workspace",
     documentRevision: "revision-1",
@@ -221,6 +223,7 @@ test("产品方案 Flow 会替换旧待确认状态，并且确认只写入一�
   const second = store.create({
     taskId: "task-1",
     botId: "product",
+    sessionId: "session-1",
     ownerOpenId: "ou_owner",
     workspaceDir: "C:\\workspace",
     documentRevision: "revision-2",
@@ -243,4 +246,32 @@ test("产品方案 Flow 会替换旧待确认状态，并且确认只写入一�
     ),
     true,
   );
+});
+
+test("云文档 Flow 持久化后可按 Docx token 找回原产品会话", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agent-os-product-flow-store-"));
+  const filePath = join(directory, "flows.json");
+  try {
+    const store = new JsonProductSpecFlowStore(filePath);
+    const created = store.create({
+      taskId: "task-cloud",
+      botId: "product",
+      sessionId: "session-cloud",
+      ownerOpenId: "ou_owner",
+      workspaceDir: "C:\\workspace",
+      request: validLarkRequest,
+    });
+    const restored = new JsonProductSpecFlowStore(filePath);
+    assert.equal(
+      restored.findPendingByDocument("product", "AbCdEf123")?.token,
+      created.token,
+    );
+    assert.equal(
+      restored.findPendingByDocument("product", "AbCdEf123")?.sessionId,
+      "session-cloud",
+    );
+    assert.equal(restored.findPendingByDocument("other", "AbCdEf123"), undefined);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });

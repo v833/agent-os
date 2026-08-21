@@ -51,7 +51,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks）与事件（bot/message、bot/card-action、task/message、task/prompt-context、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/productSpec/productComments）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-context、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
 - `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
@@ -60,8 +60,10 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/clarification.ts`：澄清插件——启动 loopback HTTP MCP、认领结构化工具调用、展示逐题飞书表单、处理同话题补充并恢复 CLI 会话（流程仅存内存，重启后旧卡失效）
 - `src/plugins/clarification-tool.ts`：澄清插件提供给 CLI 探针和 MCP 注入的 Server 描述
 - `src/plugins/product-spec.ts`：产品文档插件——注册 `request_spec_approval`、校验 Spec/Tickets 真实落盘，并管理发起人确认卡的三态流转
+- `src/app/product-spec-submission.ts`：产品方案成功收尾前的运行时提交校验；缺失工具调用时沿用同一 CLI 会话最多纠正一次
+- `src/plugins/product-comments.ts`：产品评审评论插件——按云文档 token 找回产品会话，串行处理 @产品经理评论并回复修改摘要
 - `src/plugins/product-spec-tool.ts`：产品文档插件提供给 stdio/ACP MCP 注入的 Server 描述
-- `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息与卡片回调翻译成 bot/message、bot/card-action 事件
+- `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息、卡片回调和云文档评论翻译成 bot/message、bot/card-action、bot/document-comment 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
 - `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
@@ -110,6 +112,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/clarification.ts`：澄清请求数据结构——Zod Schema 约束 Agent 结构化提问，既是 MCP 工具参数也是飞书卡片输入
 - `src/core/clarification.test.ts`：Schema 边界校验与工具调用历史提取测试
 - `src/core/product-spec.ts`：产品文档提交契约——校验结构化参数、工作区路径边界、真实产物与确认 Flow
+- `src/core/product-spec-store.ts`：产品方案 Flow JSON 持久化——原子写盘并在重启后恢复待确认云文档与会话关联
 - `src/core/product-spec.test.ts`：产品文档 Schema、路径安全、真实落盘与确认状态测试
 - `src/core/topic-task.ts`：按群 ID 与话题 ID 生成稳定任务编号
 - `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
@@ -151,7 +154,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/mcp/loopback-http-server.ts`：应用工具插件共用的无状态 loopback Streamable HTTP MCP 传输
 - `src/mcp/product-spec-server.ts`：产品文档 stdio MCP Server——向 headless CLI 提供 `request_spec_approval`
 - `src/mcp/product-spec-tools.ts`：stdio 与 HTTP MCP 复用的 `request_spec_approval` 注册定义
-- `src/im/lark.ts`：飞书收发、卡片动作回调、卡片更新、消息资源下载与结果提醒（sendResultNotification）
+- `src/im/lark.ts`：飞书收发、卡片动作回调、云文档评论订阅/回复、卡片更新、消息资源下载与结果提醒（sendResultNotification）
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取
 - `src/im/message-parser.test.ts`：提及和资源解析测试

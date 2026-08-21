@@ -20,6 +20,7 @@ import type {
   BotIdentity,
   CardAction,
   CardActionResponse,
+  IncomingDocumentComment,
   IncomingMessage,
 } from "../im/lark.js";
 
@@ -38,6 +39,7 @@ import type { TeamService } from "./team.js";
 import type { WorkspacesService } from "./workspaces.js";
 import type { ClarificationService } from "./clarification.js";
 import type { ProductSpecService } from "./product-spec.js";
+import type { ProductCommentsService } from "./product-comments.js";
 
 declare module "cordis" {
   interface Context {
@@ -71,6 +73,8 @@ declare module "cordis" {
     clarification: ClarificationService;
     /** 产品方案确认：真实产物校验、发起人确认和卡片状态流转。 */
     productSpec: ProductSpecService;
+    /** 云文档评论评审：恢复产品会话并回写评论结果。 */
+    productComments: ProductCommentsService;
   }
 
   interface Events {
@@ -82,6 +86,12 @@ declare module "cordis" {
       bot: Bot,
       botConfig: BotConfig,
     ): Promise<CardActionResponse | undefined>;
+    /** 云文档评论事件；lark 插件发出，产品评论插件消费并恢复原会话。 */
+    "bot/document-comment"(
+      comment: IncomingDocumentComment,
+      bot: Bot,
+      botConfig: BotConfig,
+    ): void | Promise<void>;
     /**
      * 任务提示词上下文 provider。没有 team 插件时返回 undefined；
      * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
@@ -91,6 +101,10 @@ declare module "cordis" {
     "task/tool-calls"(
       payload: TaskToolCallsPayload,
     ): Promise<TaskToolCallsOutcome | undefined>;
+    /** 普通成功收尾前的业务完成校验；插件可在同一 CLI 会话纠正一次结果。 */
+    "task/completion-check"(
+      payload: TaskCompletionCheckPayload,
+    ): Promise<TaskCompletionCheckOutcome | undefined>;
     /** 普通消息启动任务前的可选改写点；澄清插件用它让同话题补充替代旧卡片。 */
     "task/message"(
       payload: TaskMessagePayload,
@@ -201,6 +215,19 @@ export interface TaskToolCallsPayload extends TaskResultPayload {
   senderUnionId?: string;
   /** 当前运行卡片的 message_id，供流程卡片严格绑定回调来源。 */
   cardMessageId: string;
+}
+
+/** 成功卡片生成前的可选完成校验上下文。 */
+export interface TaskCompletionCheckPayload extends TaskToolCallsPayload {
+  /** 与当前任务绑定的取消信号；纠正轮不能脱离原任务生命周期。 */
+  signal: AbortSignal;
+  /** 由 tasks 提供的同会话重跑入口，插件不依赖具体 CLI 实现。 */
+  runCorrection: (prompt: string) => Promise<CliRunResult>;
+}
+
+/** 完成校验可返回替代结果，后续工具认领和成功收尾统一使用该结果。 */
+export interface TaskCompletionCheckOutcome {
+  result: CliRunResult;
 }
 
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */

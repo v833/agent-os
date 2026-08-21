@@ -1,7 +1,8 @@
 /**
  * tasks 任务编排服务插件：从原 index.ts 抽取的一轮 CLI 执行编排——
  * 启动 active 状态、资源下载、任务卡片、进度流式更新、取消收尾与结果事件。
- * 任务完成时广播 task/result，由 collaboration 等可选插件继续接力。
+ * 成功卡片前广播 task/completion-check，任务完成后再广播 task/result，
+ * 由业务插件完成必要的运行时校验与后续接力。
  */
 import { Service, type Context } from "cordis";
 import { randomUUID } from "node:crypto";
@@ -22,7 +23,9 @@ import {
 import { TaskProgressTracker } from "../core/task-progress.js";
 import type {
   StartTaskInput,
+  TaskCompletionCheckPayload,
   TaskResultPayload,
+  TaskToolCallsOutcome,
   TaskToolCallsPayload,
 } from "./types.js";
 
@@ -259,6 +262,58 @@ export class TasksService extends Service {
     // 覆盖全局配置（bots.json 的 proxy 优先于 .env 的 HTTP_PROXY 等）；
     // 不配置则继承父进程环境，.env 的全局代理变量自然生效。
     const cliEnv = botCliEnvironment(botConfig);
+    const handleCliEvent = (event: CliEvent) => {
+      if (event.type === "session") {
+        // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
+        void rememberCliSession(event.sessionId).catch((error) => {
+          console.error(
+            "[会话] 保存实时 CLI 会话 ID 失败:",
+            (error as Error).message,
+          );
+        });
+        return;
+      }
+      if (
+        event.type !== "tool_start" &&
+        event.type !== "tool_end" &&
+        event.type !== "context"
+      ) {
+        return;
+      }
+
+      const snapshot = progress.accept(event);
+      const currentDetail = snapshot.currentDetail
+        ? ` detail=${snapshot.currentDetail}`
+        : "";
+      const context =
+        snapshot.contextUsedTokens === undefined
+          ? ""
+          : ` context=${snapshot.contextUsedTokens}`;
+      console.log(
+        `[进度] ${snapshot.current}${currentDetail} tools=${snapshot.completedCount}/${snapshot.toolCount}${context}`,
+      );
+      renderProgress(snapshot);
+    };
+    const runCorrection = async (correctionPrompt: string) => {
+      const correctionSession =
+        this.ctx.sessions.manager.get(session.id) ?? session;
+      const prompt = await buildBotPrompt(
+        botConfig,
+        correctionPrompt,
+        teamContext ?? "",
+        this.ctx.config.defaultProductDeliveryMode,
+      );
+      const corrected = await this.runCliTask(
+        cliAdapter,
+        prompt,
+        correctionSession,
+        run.signal,
+        cliEnv,
+        handleCliEvent,
+      );
+      if (corrected.sessionId) await rememberCliSession(corrected.sessionId);
+      return corrected;
+    };
     const execution = isCompacting
       ? this.ctx.cli
           .compact({
@@ -281,38 +336,8 @@ export class TasksService extends Service {
           session,
           run.signal,
           cliEnv,
-          (event) => {
-          if (event.type === "session") {
-            // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
-            void rememberCliSession(event.sessionId).catch((error) => {
-              console.error(
-                "[会话] 保存实时 CLI 会话 ID 失败:",
-                (error as Error).message,
-              );
-            });
-            return;
-          }
-          if (
-            event.type !== "tool_start" &&
-            event.type !== "tool_end" &&
-            event.type !== "context"
-          ) {
-            return;
-          }
-
-          const snapshot = progress.accept(event);
-          const currentDetail = snapshot.currentDetail
-            ? ` detail=${snapshot.currentDetail}`
-            : "";
-          const context =
-            snapshot.contextUsedTokens === undefined
-              ? ""
-              : ` context=${snapshot.contextUsedTokens}`;
-          console.log(
-            `[进度] ${snapshot.current}${currentDetail} tools=${snapshot.completedCount}/${snapshot.toolCount}${context}`,
-          );
-          renderProgress(snapshot);
-        });
+          handleCliEvent,
+        );
 
     void execution
       .then(async (result) => {
@@ -325,13 +350,7 @@ export class TasksService extends Service {
           await finishCancelled();
           return;
         }
-        if (!isCompacting && result.stats?.contextWindowTokens) {
-          this.contextWindows.set(session.id, result.stats.contextWindowTokens);
-        }
-        if (!isCompacting) {
-          await this.ctx.sessions.manager.setRetryPrompt(session.id, undefined);
-        }
-        const taskResultPayload: TaskResultPayload = {
+        const initialTaskResultPayload: TaskResultPayload = {
           bot,
           botConfig,
           session: this.ctx.sessions.manager.get(session.id) ?? session,
@@ -344,10 +363,104 @@ export class TasksService extends Service {
           taskId,
           suppressHandoff,
         };
+        if (!isCompacting && result.stats?.contextWindowTokens) {
+          this.contextWindows.set(session.id, result.stats.contextWindowTokens);
+        }
+        const publishToolOutcome = async (
+          outcome: TaskToolCallsOutcome,
+          resultPayload: TaskResultPayload,
+          toolResult: typeof result,
+        ) => {
+          await cardUpdater.finish(outcome.card);
+          await outcome.afterCardPublished?.();
+          if (outcome.notificationText && !collaboration) {
+            await bot.sendResultNotification({
+              replyToMessageId,
+              target: { openId: senderOpenId, name: "" },
+              text: outcome.notificationText,
+              replyInThread: hasThread,
+            });
+          }
+          if (outcome.completion === "completed") {
+            // 完成型应用工具替换普通成功卡片，但仍需广播结果供编排收口；
+            // 产品文档等流程可通过 suppressHandoff 阻止继续自动交接。
+            await this.ctx.parallel("task/result", {
+              ...resultPayload,
+              suppressHandoff:
+                outcome.suppressHandoff ?? resultPayload.suppressHandoff,
+            });
+          }
+          console.log(
+            `[CLI] ${cliAdapter.id} 已交给应用工具处理 session_id=${toolResult.sessionId ?? "(无)"}`,
+          );
+        };
+        // 澄清等暂停型应用工具必须先认领，不能被产品方案的“成功提交”校验打断。
         if (!isCompacting && result.toolCalls?.length) {
+          const initialToolPayload: TaskToolCallsPayload = {
+            ...initialTaskResultPayload,
+            result,
+            runId: activeRun.runId,
+            senderOpenId,
+            senderUnionId,
+            cardMessageId: cardId,
+          };
+          const initialToolOutcome = await this.ctx.serial(
+            "task/tool-calls",
+            initialToolPayload,
+          );
+          if (initialToolOutcome) {
+            if (!isCompacting) {
+              await this.ctx.sessions.manager.setRetryPrompt(session.id, undefined);
+            }
+            await publishToolOutcome(
+              initialToolOutcome,
+              initialTaskResultPayload,
+              result,
+            );
+            return;
+          }
+        }
+        let completedResult = result;
+        if (!isCompacting) {
+          const completionPayload: TaskCompletionCheckPayload = {
+            ...initialTaskResultPayload,
+            result,
+            runId: activeRun.runId,
+            senderOpenId,
+            senderUnionId,
+            cardMessageId: cardId,
+            signal: run.signal,
+            runCorrection,
+          };
+          const completionOutcome = await this.ctx.serial(
+            "task/completion-check",
+            completionPayload,
+          );
+          if (completionOutcome) completedResult = completionOutcome.result;
+          if (run.signal.aborted) {
+            await finishCancelled();
+            return;
+          }
+          if (completedResult.sessionId) {
+            await rememberCliSession(completedResult.sessionId);
+          }
+          if (completedResult.stats?.contextWindowTokens) {
+            this.contextWindows.set(
+              session.id,
+              completedResult.stats.contextWindowTokens,
+            );
+          }
+          await this.ctx.sessions.manager.setRetryPrompt(session.id, undefined);
+        }
+        const taskResultPayload: TaskResultPayload = {
+          ...initialTaskResultPayload,
+          session: this.ctx.sessions.manager.get(session.id) ?? session,
+          answer: completedResult.answer,
+        };
+        if (!isCompacting && completedResult.toolCalls?.length) {
           const toolPayload: TaskToolCallsPayload = {
             ...taskResultPayload,
-            result,
+            result: completedResult,
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
@@ -355,28 +468,7 @@ export class TasksService extends Service {
           };
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
           if (outcome) {
-            await cardUpdater.finish(outcome.card);
-            await outcome.afterCardPublished?.();
-            if (outcome.notificationText && !collaboration) {
-              await bot.sendResultNotification({
-                replyToMessageId,
-                target: { openId: senderOpenId, name: "" },
-                text: outcome.notificationText,
-                replyInThread: hasThread,
-              });
-            }
-            if (outcome.completion === "completed") {
-              // 完成型应用工具替换普通成功卡片，但仍需广播结果供编排收口；
-              // 产品文档等流程可通过 suppressHandoff 阻止继续自动交接。
-              await this.ctx.parallel("task/result", {
-                ...taskResultPayload,
-                suppressHandoff:
-                  outcome.suppressHandoff ?? taskResultPayload.suppressHandoff,
-              });
-            }
-            console.log(
-              `[CLI] ${cliAdapter.id} 已交给应用工具处理 session_id=${result.sessionId ?? "(无)"}`,
-            );
+            await publishToolOutcome(outcome, taskResultPayload, completedResult);
             return;
           }
         }
@@ -397,20 +489,23 @@ export class TasksService extends Service {
                 status: "success",
                 detail: "执行完成",
                 progress: progress.snapshot(),
-                answer: result.answer,
-                stats: result.stats,
+                answer: completedResult.answer,
+                stats: completedResult.stats,
               }),
         );
-        if (!isCompacting && this.ctx.cards.needsContinuation(result.answer)) {
+        if (
+          !isCompacting &&
+          this.ctx.cards.needsContinuation(completedResult.answer)
+        ) {
           for (const chunk of this.ctx.cards.splitLongText(
-            this.ctx.cards.continuation(result.answer),
+            this.ctx.cards.continuation(completedResult.answer),
           )) {
             if (run.signal.aborted) break;
             await bot.reply(replyToMessageId, chunk, hasThread);
           }
         }
         console.log(
-          `[CLI] ${cliAdapter.id} 完成 session_id=${result.sessionId ?? "(无)"}`,
+          `[CLI] ${cliAdapter.id} 完成 session_id=${completedResult.sessionId ?? "(无)"}`,
         );
         if (!collaboration) {
           await bot.sendResultNotification({
@@ -430,10 +525,12 @@ export class TasksService extends Service {
       .catch(async (error) => {
         clearInterval(progressHeartbeat);
         const errorMessage = (error as Error).message;
+        const currentSession =
+          this.ctx.sessions.manager.get(session.id) ?? session;
         const sessionUnavailable =
           error instanceof CliRunError &&
           Boolean(cliAdapter.isSessionUnavailable?.(errorMessage)) &&
-          Boolean(session.cliSessionId);
+          Boolean(currentSession.cliSessionId);
         const failedCliSessionId =
           (error instanceof CliRunError ? error.sessionId : undefined) ??
           observedCliSessionId;

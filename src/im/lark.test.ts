@@ -8,6 +8,7 @@ import {
   buildChatMentionMessage,
   buildMentionPostContent,
   extractMessageText,
+  fitFeishuText,
   getHeader,
   parseCardAction,
   resourceExtension,
@@ -114,6 +115,12 @@ test("非文本消息返回空字符串", () => {
 test("读取不同形式的 Content-Type 响应头", () => {
   assert.equal(getHeader(new Headers({ "content-type": "image/png" }), "content-type"), "image/png");
   assert.equal(getHeader({ "content-type": ["image/jpeg"] }, "content-type"), "image/jpeg");
+});
+
+test("评论回复按飞书长度限制截断，零上限不返回内容", () => {
+  assert.equal(fitFeishuText("  abc  ", 10), "abc");
+  assert.equal(fitFeishuText("abcdef", 4), "abc…");
+  assert.equal(fitFeishuText("abcdef", 0), "");
 });
 
 test("文件优先保留原扩展名，图片按响应格式确定扩展名", () => {

@@ -1,8 +1,10 @@
 /**
  * product-spec 产品文档插件：注册 request_spec_approval MCP Server，认领产品
- * bot 的工具结果，验证真实落盘并管理发起人确认卡片的状态流转。
+ * bot 的工具结果，强制完成前的真实提交校验，验证产物并管理确认卡状态流转。
  */
 import { Service, type Context } from "cordis";
+import { resolve } from "node:path";
+import { ensureProductSpecSubmission } from "../app/product-spec-submission.js";
 import {
   assertProductSpecDocuments,
   findProductSpecRequest,
@@ -10,30 +12,37 @@ import {
   productSpecDocumentRevision,
   ProductSpecFlowStore,
 } from "../core/product-spec.js";
+import { JsonProductSpecFlowStore } from "../core/product-spec-store.js";
 import type { CardAction, CardActionResponse } from "../im/lark.js";
 import { startLoopbackMcpHttpServer } from "../mcp/loopback-http-server.js";
 import { registerProductSpecTool } from "../mcp/product-spec-tools.js";
 import { productSpecToolServer } from "./product-spec-tool.js";
 import type {
+  TaskCompletionCheckOutcome,
+  TaskCompletionCheckPayload,
   TaskToolCallsOutcome,
   TaskToolCallsPayload,
 } from "./types.js";
 
+const PRODUCT_SPEC_SKILLS = new Set(["to-spec", "to-tickets", "lark-doc"]);
+
+function managesProductSpec(skills: readonly string[]): boolean {
+  return skills.some((skill) => PRODUCT_SPEC_SKILLS.has(skill));
+}
+
 /** 产品方案确认服务；状态与回调都归属于本插件。 */
 export class ProductSpecService extends Service {
-  readonly flows = new ProductSpecFlowStore();
+  readonly flows: ProductSpecFlowStore;
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, flows: ProductSpecFlowStore = new ProductSpecFlowStore()) {
     super(ctx, "productSpec");
+    this.flows = flows;
   }
 
   async handleToolCalls(
     payload: TaskToolCallsPayload,
   ): Promise<TaskToolCallsOutcome | undefined> {
-    if (
-      !payload.botConfig.skills.includes("to-spec") &&
-      !payload.botConfig.skills.includes("lark-doc")
-    ) return undefined;
+    if (!managesProductSpec(payload.botConfig.skills)) return undefined;
     const request = findProductSpecRequest(payload.result.toolCalls);
     if (!request) return undefined;
 
@@ -48,6 +57,7 @@ export class ProductSpecService extends Service {
     const flow = this.flows.prepare({
       taskId: payload.taskId ?? payload.session.id,
       botId: payload.botConfig.id,
+      sessionId: payload.session.id,
       ownerOpenId: payload.senderOpenId,
       ownerUnionId: payload.senderUnionId,
       cardMessageId: payload.cardMessageId,
@@ -69,6 +79,21 @@ export class ProductSpecService extends Service {
         this.flows.publish(flow.token);
       },
     };
+  }
+
+  /**
+   * 产品 bot 成功收尾前强制检查真实提交；缺失时只沿用当前 CLI 会话纠正一次。
+   * 返回替代结果后仍由 task/tool-calls 统一验证产物并生成确认卡。
+   */
+  async checkCompletion(
+    payload: TaskCompletionCheckPayload,
+  ): Promise<TaskCompletionCheckOutcome | undefined> {
+    if (!managesProductSpec(payload.botConfig.skills)) return undefined;
+    const result = await ensureProductSpecSubmission({
+      result: payload.result,
+      runCorrection: payload.runCorrection,
+    });
+    return result === payload.result ? undefined : { result };
   }
 
   async handleCardAction(
@@ -131,8 +156,16 @@ export class ProductSpecService extends Service {
 export const name = "product-spec";
 export const inject = ["applicationTools", "cards"];
 
-export async function apply(ctx: Context) {
-  const service = new ProductSpecService(ctx);
+export interface Config {
+  /** 产品方案 Flow JSON 路径；默认保存在 data 目录，支持按装配环境覆盖。 */
+  storePath?: string;
+}
+
+export async function apply(ctx: Context, config: Config = {}) {
+  const store = new JsonProductSpecFlowStore(
+    resolve(process.cwd(), config.storePath ?? "data/product-spec-flows.json"),
+  );
+  const service = new ProductSpecService(ctx, store);
   // ACP 引擎可能只支持 HTTP/SSE MCP；独立 loopback 入口让本插件可以单独下线。
   const httpServer = await startLoopbackMcpHttpServer({
     register: registerProductSpecTool,
@@ -142,6 +175,7 @@ export async function apply(ctx: Context) {
     productSpecToolServer(httpServer.url),
   );
   ctx.effect(() => () => httpServer.close(), "product-spec MCP HTTP");
+  ctx.on("task/completion-check", (payload) => service.checkCompletion(payload));
   ctx.on("task/tool-calls", (payload) => service.handleToolCalls(payload));
   ctx.on("bot/card-action", (action, _bot, botConfig) =>
     service.handleCardAction(action, botConfig.id),
