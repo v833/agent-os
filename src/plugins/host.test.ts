@@ -535,6 +535,46 @@ test("bot/message 把 /status 派发给命令插件", async () => {
   );
 });
 
+test("bot/message 群消息按 @ 目标收敛：未提及本 bot 不启动任务", async () => {
+  const host = await createHost();
+  // 群里一条消息 @ 了另一个机器人（testbot 的 identity.openId=bot_open）：
+  // 同一条事件会被推送进所有 bot 应用，非目标 bot 必须忽略。
+  const mentionedOther = incomingMessage({
+    text: "把任务交给 PM",
+    mentions: [{ key: "@_user_1", name: "PM", openId: "ou_other_bot" }],
+  });
+  await host.root.parallel(
+    "bot/message",
+    mentionedOther,
+    host.bot,
+    baseBotConfig,
+  );
+  assert.equal(
+    host.cli.captures.length,
+    0,
+    "mention 目标不是本 bot 时不得启动 CLI",
+  );
+
+  // 同一条消息在“本 bot 应用”视角下 mention 命中了本 bot 的 open_id，必须响应。
+  const mentionedMe = incomingMessage({
+    text: "把任务交给 TestBot",
+    mentions: [{ key: "@_user_1", name: "TestBot", openId: "bot_open" }],
+  });
+  await host.root.parallel(
+    "bot/message",
+    mentionedMe,
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  assert.ok(
+    host.cli.captures.length >= 1,
+    "mention 命中本 bot 时应启动任务",
+  );
+  // 收尾挂起的执行，避免测试悬挂。
+  host.cli.finish({ answer: "ok", sessionId: "sess-1" });
+});
+
 test("bot/message 把 /team 经 ctx.cards 服务出口生成团队卡片", async () => {
   const host = await createHost();
   // 钉住服务出口：验证命令插件走 ctx.cards.team，而不是直接调用渲染实现。

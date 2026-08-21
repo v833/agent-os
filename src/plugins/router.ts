@@ -125,23 +125,34 @@ async function handleCardAction(
   return { toast: { type: "success", content: "已发送停止指令。" } };
 }
 
-/** 处理一条入站消息：协作识别 → 会话解析 → 命令派发或任务启动。 */
+/** 处理一条入站消息：@ 收敛 → 协作识别 → 会话解析 → 命令派发或任务启动。 */
 async function handleMessage(
   ctx: Context,
   message: IncomingMessage,
   bot: Bot,
   botConfig: BotConfig,
 ): Promise<void> {
+  const currentRuntime = ctx.lark.bot(botConfig.id);
+  // 群内消息事件会推送给群里全部 bot 应用（同一条消息在每台应用视角下，
+  // sender 与 mention 的 open_id 各不相同）：普通用户消息必须按“@ 目标”收敛，
+  // 只有提到本 bot、或完全没有提及实体（单聊 / 无 @ 群消息）的消息才由本 bot
+  // 处理，否则一次 @某成员 会让全体 bot 同时开工。
+  const mentionedCurrentBot = currentRuntime
+    ? message.mentions.some(
+        (mention) => mention.openId === currentRuntime.identity.openId,
+      )
+    : false;
+  const fromBot = message.senderType === "app" || message.senderType === "bot";
+  if (!fromBot && message.mentions.length > 0 && !mentionedCurrentBot) {
+    console.log(
+      `[路由] 忽略未提及本 bot 的群消息 chat=${message.chatId} bot=${botConfig.id} mentions=${message.mentions.map((mention) => `${mention.name}(${mention.openId})`).join(", ")}`,
+    );
+    return;
+  }
   const resolved = resolveMentions(message.text, message.mentions);
   let senderRuntime: BotRuntime | undefined;
   let collaboration: CollaborationMessage | undefined;
-  if (message.senderType === "app" || message.senderType === "bot") {
-    const currentRuntime = ctx.lark.bot(botConfig.id);
-    const mentionedCurrentBot = currentRuntime
-      ? message.mentions.some(
-          (mention) => mention.openId === currentRuntime.identity.openId,
-        )
-      : false;
+  if (fromBot) {
     const dispatchId = message.text.match(/任务编号：([a-f0-9]{12})/)?.[1];
     const pending =
       message.messageType === "post" &&
