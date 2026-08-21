@@ -72,6 +72,7 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
         `  - name: engines/codex`,
         `  - name: engines/acp`,
         `  - name: cards`,
+        `  - name: product-spec`,
         `  - name: commands`,
         `  - name: commands/status`,
         `  - name: tasks`,
@@ -81,7 +82,7 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
     const root = new Context();
     await root.plugin(loader, { path: ymlPath });
 
-    await root.inject(["config", "team", "sessions", "cli", "commands", "tasks"], (ctx) => {
+    await root.inject(["config", "team", "sessions", "cli", "applicationTools", "commands", "tasks"], (ctx) => {
       assert.equal(ctx.config.bots.length, 1);
       assert.equal(ctx.team.leaderBotId, "testbot");
       assert.equal(ctx.config.bots[0].id, "testbot");
@@ -90,6 +91,12 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
       // engines/acp 插件注册标准 ACP 接入（默认提供 dimagent 的 ACP 引擎）。
       assert.equal(ctx.cli.get("dimagent", "acp").accessMode, "acp");
       assert.equal(ctx.commands.has("status"), true);
+      assert.ok(
+        ctx.applicationTools.list().some((server) =>
+          server.tools.includes("request_spec_approval"),
+        ),
+        "product-spec 插件应登记产品文档工具",
+      );
       // 未在 cordis.yml 声明的命令不应被注册。
       assert.equal(ctx.commands.has("help"), false);
     });

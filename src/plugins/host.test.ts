@@ -35,6 +35,7 @@ import * as commandsPlugin from "./commands.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
+import * as productSpecPlugin from "./product-spec.js";
 import * as qaGatePlugin from "./qa-gate.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
@@ -457,7 +458,7 @@ async function createHost(
   await waitForAllActive(root);
 
   lark.runtimes.set("testbot", {
-    config: baseBotConfig,
+    config: configuredBots.find((bot) => bot.id === "testbot") ?? baseBotConfig,
     bot: fakeBot.bot,
     identity: { openId: "bot_open", name: "TestBot" },
   });
@@ -674,6 +675,159 @@ test("澄清工具逐题收集答案并续接原 CLI 会话", async () => {
   host.cli.finish({ answer: "已按三档实现。", sessionId: "sess-clarification" });
   await waitFor(() =>
     host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+});
+
+test("产品经理直接生成真实 Spec 与 Tickets 后展示只读待确认卡", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "to-spec", "to-tickets"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const taskResults: Array<{ answer: string; suppressHandoff?: boolean }> = [];
+  host.root.on("task/result", (payload) => {
+    taskResults.push(payload);
+  });
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "user-detail");
+  const ticketsDir = join(featureDir, "issues");
+  await mkdir(ticketsDir, { recursive: true });
+  await writeFile(join(featureDir, "spec.md"), "# 用户详情页\n", "utf8");
+  await writeFile(
+    join(ticketsDir, "01-detail-view.md"),
+    "# 详情基础展示\n",
+    "utf8",
+  );
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "增加用户详情页", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "产品文档已生成。",
+    sessionId: "sess-product-spec",
+    toolCalls: [
+      {
+        toolUseId: "tool-product-spec",
+        toolName: "request_spec_approval",
+        input: {
+          title: "用户详情页",
+          summary: "增加只读详情页，并覆盖权限与空状态。",
+          specPath: ".scratch/user-detail/spec.md",
+          ticketsPath: ".scratch/user-detail/issues",
+        },
+      },
+    ],
+  });
+
+  await waitFor(() =>
+    host.calls.updates.some((card) =>
+      cardSummaryContains(card, "产品文档已生成"),
+    ),
+  );
+  assert.ok(
+    host.calls.mentions.some((text) => text.includes("Spec 和 Tickets 已经落盘")),
+  );
+  await waitFor(() => taskResults.length === 1);
+  assert.equal(taskResults[0]?.answer, "产品文档已生成。");
+  assert.equal(taskResults[0]?.suppressHandoff, true);
+  const readyCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "产品文档已生成"),
+  )!;
+  assert.match(JSON.stringify(readyCard), /\.scratch\/user-detail\/spec\.md/);
+  assert.doesNotMatch(JSON.stringify(readyCard), /button/);
+});
+
+test("完成澄清后沿用原 CLI 会话提交产品文档", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "to-spec", "to-tickets"],
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "priority");
+  const ticketsDir = join(featureDir, "issues");
+  await mkdir(ticketsDir, { recursive: true });
+  await writeFile(join(featureDir, "spec.md"), "# 优先级\n", "utf8");
+  await writeFile(join(ticketsDir, "01-priority.md"), "# 优先级字段\n", "utf8");
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "增加优先级", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "等待确认。",
+    sessionId: "sess-product-clarification",
+    toolCalls: [
+      {
+        toolUseId: "tool-clarification",
+        toolName: "request_clarification",
+        input: {
+          title: "确认优先级",
+          questions: [
+            {
+              id: "levels",
+              prompt: "支持几档优先级？",
+              options: [
+                { id: "three", label: "高、中、低三档" },
+                { id: "custom", label: "允许自定义" },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "确认优先级")),
+  );
+  const waitingCard = host.calls.updates.at(-1)!;
+  await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "card-1",
+      value: clarificationValueOf(waitingCard, "three"),
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-product-clarification");
+
+  host.cli.finish({
+    answer: "产品文档已生成。",
+    sessionId: "sess-product-clarification",
+    toolCalls: [
+      {
+        toolUseId: "tool-product-spec",
+        toolName: "request_spec_approval",
+        input: {
+          title: "任务优先级",
+          summary: "首期支持高、中、低三档。",
+          specPath: ".scratch/priority/spec.md",
+          ticketsPath: ".scratch/priority/issues",
+        },
+      },
+    ],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) =>
+      cardSummaryContains(card, "产品文档已生成"),
+    ),
+  );
+  assert.ok(
+    host.calls.mentions.some((text) => text.includes("Spec 和 Tickets 已经落盘")),
   );
 });
 

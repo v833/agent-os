@@ -35,6 +35,7 @@ import * as larkPlugin from "./lark.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
+import * as productSpecPlugin from "./product-spec.js";
 import * as qaGatePlugin from "./qa-gate.js";
 import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
@@ -75,6 +76,7 @@ const pluginRegistry: Record<string, Plugin> = {
   orchestration: orchestrationPlugin,
   "orchestration/actions": orchestrationActions,
   "orchestration/live-panel": orchestrationLivePanel,
+  "product-spec": productSpecPlugin,
   tasks: tasksPlugin,
   team: teamPlugin,
   schedule: schedulePlugin,

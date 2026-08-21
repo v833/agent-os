@@ -77,7 +77,10 @@ export class ClarificationService extends Service {
       request,
       collaboration: payload.collaboration,
     });
-    return { card: this.ctx.cards.clarification({ flow }) };
+    return {
+      card: this.ctx.cards.clarification({ flow }),
+      completion: "paused",
+    };
   }
 
   async handleCardAction(

@@ -69,7 +69,7 @@ plugins:
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`，需安装在成员工作目录的 `.agents/skills` 或 `.claude/skills`）。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`）。Skill 按当前 workspace 的 `.agents/skills`、`.claude/skills`、Agent OS 内置 `.agents/skills` 的顺序查找，workspace 同名 Skill 可以覆盖内置版本；任务启动时会把最终解析到的内容注入提示词。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -118,6 +118,12 @@ Copy-Item config/bots.example.json config/bots.json
 `reviewBy` 填另一台已启用 bot 的 ID。开发 bot 的普通任务成功后，会在原话题发送审查卡片，再发送一条真正提及审查 bot 的富文本消息；审查 bot 会继承来源 bot 的工作目录并建立独立 CLI 会话。审查完成后，最终回答会登记为下一项协作任务，沿用同一个 `taskId` 并把 `round` 加一，再自动交回来源 bot。达到 `collaborationMaxRounds` 后只发送完成通知，不再继续派活，避免两个 bot 无限循环。目标不存在、未启用或指向自己时，程序会在启动阶段拒绝配置。
 
 在飞书群中 @任意成员发送 `/team`，会返回一张团队卡片，展示每位成员的职责、默认执行引擎、项目 Skill 与连接状态。
+
+## 产品文档工作流
+
+产品经理依次使用 `grill-me`、`to-spec` 和 `to-tickets` 完成需求澄清、Spec 生成与纵向 Ticket 拆分。这三项 Skill 已随 Agent OS 内置，不需要复制到 `../agent-os-team-example`；如产品项目需要定制，可在其 `.agents/skills/` 或 `.claude/skills/` 放置同名版本覆盖内置内容。本地工作项格式见 `docs/agents/issue-tracker.md`。
+
+Spec 与 Tickets 写入 `.scratch/<feature>/` 后，产品经理调用 `request_spec_approval`。`product-spec` 插件只认领启用了 `to-spec` 的 bot，并在确认 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件后，才把任务卡更新为只读“待确认”产物卡；本阶段不会自动派给开发者。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线这条能力。
 
 ## 启动与验证
 

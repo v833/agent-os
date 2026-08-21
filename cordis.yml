@@ -68,5 +68,7 @@ plugins:
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification
+  # 产品文档：校验 Spec/Tickets 真实落盘并展示只读待确认卡；移除即可整体下线。
+  - name: product-spec
   - name: schedule
   - name: router

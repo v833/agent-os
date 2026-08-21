@@ -101,7 +101,7 @@ export class TasksService extends Service {
       "task/prompt-context",
       botConfig,
     );
-    const prompt = buildBotPrompt(
+    const prompt = await buildBotPrompt(
       botConfig,
       resolveRetryPrompt(session, requestedPrompt),
       teamContext ?? "",
@@ -355,6 +355,23 @@ export class TasksService extends Service {
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
           if (outcome) {
             await cardUpdater.finish(outcome.card);
+            if (outcome.notificationText && !collaboration) {
+              await bot.sendResultNotification({
+                replyToMessageId,
+                target: { openId: senderOpenId, name: "" },
+                text: outcome.notificationText,
+                replyInThread: hasThread,
+              });
+            }
+            if (outcome.completion === "completed") {
+              // 完成型应用工具替换普通成功卡片，但仍需广播结果供编排收口；
+              // 产品文档等流程可通过 suppressHandoff 阻止继续自动交接。
+              await this.ctx.parallel("task/result", {
+                ...taskResultPayload,
+                suppressHandoff:
+                  outcome.suppressHandoff ?? taskResultPayload.suppressHandoff,
+              });
+            }
             console.log(
               `[CLI] ${cliAdapter.id} 已交给应用工具处理 session_id=${result.sessionId ?? "(无)"}`,
             );

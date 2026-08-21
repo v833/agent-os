@@ -11,6 +11,7 @@ import {
   buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
+  buildProductSpecReadyCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -22,6 +23,7 @@ import {
   type ClarificationStateCardOptions,
   type CollaborationCardOptions,
   type OrchestrationPanelOptions,
+  type ProductSpecCardOptions,
   type ResumeCardOptions,
   type SessionNoticeCardOptions,
   type TaskCardOptions,
@@ -56,6 +58,10 @@ export class CardsService extends Service {
 
   clarificationSuperseded(options: ClarificationStateCardOptions): CardJson {
     return buildClarificationSupersededCard(options.flow);
+  }
+
+  productSpecReady(options: ProductSpecCardOptions): CardJson {
+    return buildProductSpecReadyCard(options);
   }
 
   collaboration(options: CollaborationCardOptions): CardJson {

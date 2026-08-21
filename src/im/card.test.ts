@@ -13,6 +13,7 @@ import {
   buildClarificationSupersededCard,
   buildCollaborationCard,
   buildOrchestrationPanelCard,
+  buildProductSpecReadyCard,
   buildResumeCard,
   buildSessionNoticeCard,
   buildTaskCard,
@@ -281,6 +282,26 @@ test("会话提示卡片使用指定状态颜色", () => {
   }) as any;
   assert.equal(card.header.template, "green");
   assert.match(card.body.elements[0].content, /CLI 会话 ID/);
+});
+
+test("产品文档卡片只展示转义后的真实路径且不包含确认按钮", () => {
+  const card = buildProductSpecReadyCard({
+    request: {
+      title: "用户 <at id=ou_fake></at> 详情页",
+      summary: "只读展示基础信息。",
+      specPath: ".scratch/user-detail/spec.md",
+      ticketsPath: ".scratch/user-detail/issues",
+    },
+  }) as any;
+
+  assert.equal(card.header.template, "blue");
+  assert.equal(card.header.title.content, "产品文档已生成");
+  assert.match(JSON.stringify(card), /<&zwj;at id=ou_fake>/);
+  assert.match(JSON.stringify(card), /\.scratch\/user-detail\/spec\.md/);
+  assert.equal(
+    card.body.elements.some((element: any) => element.tag === "button"),
+    false,
+  );
 });
 
 test("交接卡片展示来源、目标、项目和审查说明", () => {

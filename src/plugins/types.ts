@@ -177,9 +177,15 @@ export interface TaskMessageOutcome {
   originalRequestedPrompt?: string;
 }
 
-/** 应用工具插件认领任务结果后返回的替代终态卡片。 */
+/** 应用工具插件认领任务结果后返回的替代卡片与任务生命周期。 */
 export interface TaskToolCallsOutcome {
   card: CardJson;
+  /** paused 保留当前任务等待用户输入；completed 表示本轮已经完成。 */
+  completion: "paused" | "completed";
+  /** 卡片成功更新后发送给直接任务发起人的提醒；协作任务不会发送。 */
+  notificationText?: string;
+  /** 完成型工具结果是否禁止普通协作/QA 自动交接。 */
+  suppressHandoff?: boolean;
 }
 
 /** 一轮 CLI 的应用工具调用及恢复任务所需上下文。 */

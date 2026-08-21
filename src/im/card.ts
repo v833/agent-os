@@ -5,6 +5,7 @@
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
 import type { ClarificationFlow } from "../core/clarification.js";
 import { retryToken, type OrchestrationRun } from "../core/orchestration.js";
+import type { ProductSpecRequest } from "../core/product-spec.js";
 import type {
   TaskActivity,
   TaskProgressSnapshot,
@@ -31,6 +32,10 @@ export interface ClarificationCardOptions {
 
 export interface ClarificationStateCardOptions {
   flow: ClarificationFlow;
+}
+
+export interface ProductSpecCardOptions {
+  request: ProductSpecRequest;
 }
 
 export interface ResumeCardOptions {
@@ -646,6 +651,55 @@ export function buildClarificationSupersededCard(
             "这张卡片已经失效，Agent OS 正在沿用同一个任务上下文处理新的补充。",
             flow.answers.length ? `此前已确认 ${flow.answers.length} 项，相关答案会一并带入。` : "",
           ].filter(Boolean).join("\n\n"),
+        },
+      ],
+    },
+  };
+}
+
+/** 生成只展示真实产物路径的产品文档待确认卡；确认动作留给后续插件。 */
+export function buildProductSpecReadyCard(
+  options: ProductSpecCardOptions,
+): CardJson {
+  const { request } = options;
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `${request.title}：待确认` },
+    },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: "产品文档已生成" },
+      subtitle: {
+        tag: "plain_text",
+        content: "Spec · Tickets 待确认",
+      },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            `**${escapeFeishuMarkdown(request.title)}**`,
+            escapeFeishuMarkdown(request.summary),
+          ].join("\n\n"),
+        },
+        { tag: "hr" },
+        {
+          tag: "markdown",
+          content: [
+            "**真实产物**",
+            `📘 **Spec** · \`${escapeInlineCode(escapeFeishuMarkdown(request.specPath))}\``,
+            `🎫 **Tickets** · \`${escapeInlineCode(escapeFeishuMarkdown(request.ticketsPath))}\``,
+          ].join("\n"),
+        },
+        {
+          tag: "markdown",
+          content:
+            "_产品文档已经落盘，当前等待确认。本阶段不会自动交给开发。_",
         },
       ],
     },

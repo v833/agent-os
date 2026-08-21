@@ -4,4 +4,7 @@ dist/
 config/bots.json
 data/
 *.log
-docs
+docs/*
+!docs/agents/
+docs/agents/*
+!docs/agents/issue-tracker.md
