@@ -75,6 +75,48 @@ test("忽略日志噪音并把分段 stdout 还原成完整 JSONL", async () => 
   assert.deepEqual(result, { answer: "完成" });
 });
 
+test("stderr 出现认证提示时立即终止进程并返回认证错误（不等引擎超时）", async () => {
+  // 模拟 agy 未登录：stderr 打印认证提示后长时间挂起等待。
+  const adapter: CliAdapter = {
+    id: "agy",
+    command: process.execPath,
+    displayName: "测试 CLI",
+    buildArgs() {
+      return [
+        "-e",
+        `process.stderr.write("Authentication required. Please visit the URL to log in:\\n  https://accounts.google.com/oauth?x=1\\nOr, paste the authorization code here and press Enter:\\n"); setTimeout(() => {}, 60000);`,
+      ];
+    },
+    buildResumeArgs() {
+      throw new Error("不应构造续聊参数");
+    },
+    buildCompactPlan(sessionId) {
+      return {
+        protocol: "codex-app-server",
+        command: process.execPath,
+        args: ["-e", ""],
+        sessionId,
+      };
+    },
+    parseEvents() {
+      return [];
+    },
+    isAuthRequired(message: string) {
+      return /authentication required/i.test(message);
+    },
+  };
+
+  const started = Date.now();
+  await assert.rejects(
+    runCli({ adapter, prompt: "测试", cwd: process.cwd() }),
+    /Authentication required/,
+  );
+  assert.ok(
+    Date.now() - started < 10_000,
+    "检测到认证需求应立即终止，而不是等引擎的 60s 登录超时",
+  );
+});
+
 test("调用方传入的 env 环境变量会注入子进程", async () => {
   const parser = new ScriptAdapter("");
   const adapter: CliAdapter = {

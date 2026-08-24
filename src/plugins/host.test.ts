@@ -607,18 +607,56 @@ test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错
   const host = await createHost();
 
   // 团队内的成员应拿到团队上下文，作为 tasks 的提示词 provider。
-  const known = host.root.bail("task/prompt-context", baseBotConfig);
+  const known = host.root.bail("task/prompt-context", baseBotConfig, {
+    isDirect: false,
+  });
   assert.ok(
     known?.includes("你所在的 Agent 团队"),
     "团队成员应返回团队上下文",
   );
 
+  // 用户私聊指挥单个成员时不应注入团队上下文，成员直接按指令干活。
+  const direct = host.root.bail("task/prompt-context", baseBotConfig, {
+    isDirect: true,
+  });
+  assert.equal(direct, undefined, "私聊应跳过团队上下文");
+
   // 不在团队名册中的 bot 必须返回 undefined，不能让 contextFor 的异常打断任务启动。
   const unknown = host.root.bail("task/prompt-context", {
     ...baseBotConfig,
     id: "ghost",
-  });
+  }, { isDirect: false });
   assert.equal(unknown, undefined);
+});
+
+test("私聊成员不注入团队上下文，直接按指令干活", async () => {
+  const host = await createHost();
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "帮我重构 src/core 目录", chatType: "p2p" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  assert.ok(
+    host.cli.captured,
+    "私聊任务应正常启动",
+  );
+  const prompt = host.cli.captured!.prompt;
+  assert.ok(
+    !prompt.includes("你所在的 Agent 团队"),
+    "私聊任务不应注入团队上下文",
+  );
+  assert.ok(
+    prompt.includes("你是用户的直接执行助手"),
+    "私聊任务应把团队型角色切换为直接执行者",
+  );
+
+  // 完成任务让 tasks 收尾清理定时器，避免测试进程挂住。
+  host.cli.finish({ answer: "重构完成", sessionId: "sess-1" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
 });
 
 test("/team 按成员 accessMode 查找 ACP 执行引擎", async () => {
@@ -656,7 +694,11 @@ test("/team 仅把真实 connected 长连接标为在线", async () => {
 
 test("普通任务走完卡片、执行与结果通知的生命周期", async () => {
   const host = await createHost();
-  const message = incomingMessage({ text: "写一个 hello world" });
+  // 群聊消息保留团队上下文（isDirect=false）。
+  const message = incomingMessage({
+    text: "写一个 hello world",
+    chatType: "group",
+  });
   await host.root.parallel("bot/message", message, host.bot, baseBotConfig);
   await waitFor(() => host.cli.captured !== undefined);
   assert.ok(

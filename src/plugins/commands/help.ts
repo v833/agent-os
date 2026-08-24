@@ -17,6 +17,7 @@ const HELP_TEXT = [
   "/schedule add \"<周期>\" <任务> 创建定时任务",
   "/schedule list 查看定时任务",
   "/schedule remove <id> 删除定时任务",
+  "/login 为当前引擎发起登录（也可用 /<引擎> login）",
   "/help 查看命令",
   "/claude <任务> 新话题使用 Claude Code",
   "/codex <任务> 新话题使用 Codex",

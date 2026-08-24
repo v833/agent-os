@@ -18,7 +18,14 @@
 import type { ApplicationToolProvider } from "./app-tools.js";
 import { findAgyApplicationTool } from "./app-tools.js";
 import { ensureAgyMcpConfig } from "./agy-mcp-config.js";
-import type { CliAdapter, CliCompactPlan, CliEvent, CliRunStats } from "./types.js";
+import { runLoginWithPty } from "./pty-login.js";
+import type {
+  CliAdapter,
+  CliCompactPlan,
+  CliEvent,
+  CliLoginOptions,
+  CliRunStats,
+} from "./types.js";
 
 const TOOL_LABELS: Record<string, string> = {
   view_file: "查看文件",
@@ -31,6 +38,9 @@ const TOOL_LABELS: Record<string, string> = {
   search_web: "搜索网络",
   read_url_content: "读取网页",
 };
+
+/** 登录探测用的极简 prompt：只为触发认证流程，不产生实际工作。 */
+const SMLOGIN_PROMPT = "只回复 OK，不要执行任何其他操作。";
 
 interface AgyUsage {
   input_tokens?: number;
@@ -151,6 +161,42 @@ export class AgyAdapter implements CliAdapter {
       ) ||
       /no (?:such |active )?(?:session|conversation)\b/.test(text)
     );
+  }
+
+  /**
+   * 判断失败信息是否表明 agy 需要 Google OAuth 登录。
+   * 未认证时 agy 在 stderr 输出 "Authentication required. Please visit the URL
+   * to log in: ..." 并等待粘贴授权码，最终以 "authentication timed out" 退出。
+   */
+  isAuthRequired(message: string): boolean {
+    const text = message.toLowerCase();
+    return (
+      /authentication\s+required/.test(text) ||
+      /paste\s+the\s+authorization\s+code/.test(text) ||
+      /please\s+visit\s+the\s+url\s+to\s+log\s+in/.test(text) ||
+      /authentication\s+(?:failed|timed\s*out)/.test(text)
+    );
+  }
+
+  /**
+   * 用 Google OAuth 授权码完成 agy 登录：agy 只在真实 TTY 上读取粘贴的授权码，
+   * 管道 stdin 会被忽略（等待超时），因此必须借助 ConPTY 注入。
+   * 登录成功后 agy 会把令牌写入 ~/.gemini/antigravity-cli，之后 headless 运行免登录；
+   * 已登录时本方法只会执行一轮最小探测即成功退出，保持幂等。
+   * 授权码与每次启动的 PKCE 绑定：必须等待用户在本进程打印的授权 URL 上授权后
+   * 提交，因此通过 options.getCode 延迟获取，避免使用过期错误文本里的旧授权码。
+   */
+  async login(code: string, options: CliLoginOptions = {}): Promise<void> {
+    await runLoginWithPty({
+      command: this.command,
+      args: this.buildArgs(SMLOGIN_PROMPT),
+      cwd: options.cwd ?? process.cwd(),
+      code,
+      promptText: "paste the authorization code",
+      timeoutMs: options.timeoutMs,
+      onOutput: options.onOutput,
+      getCode: options.getCode,
+    });
   }
 
   /** 将 agy 的 stream-json 单行输出解析为 Agent OS 标准 CliEvent */

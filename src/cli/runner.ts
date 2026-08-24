@@ -192,6 +192,19 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
     child.stderr.on("data", (chunk: Buffer | string) => {
       stderr += chunk.toString();
+      // 实时识别认证需求：agy 等引擎未登录时会长时间等待用户登录（60s 超时），
+      // 与其让任务挂起再等超时，不如检测到登录提示就立即停止并返回认证错误，
+      // 让 tasks 失败路径马上广播 task/failed，auth 插件随即补发登录卡片。
+      // 检测委托 adapter 的 isAuthRequired 协议，runner 不感知具体引擎。
+      if (
+        !settled &&
+        !resultError &&
+        adapter.isAuthRequired?.(stderr)
+      ) {
+        stopThenFail(
+          new Error(stderr.trim() || `${adapter.displayName} 需要登录`),
+        );
+      }
     });
 
     child.once("error", (error) => {

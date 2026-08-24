@@ -218,6 +218,13 @@ export async function loadBotConfigs(
   return (await loadAgentOsConfig(filePath, env, baseDirectory)).bots;
 }
 
+/**
+ * 私聊直达角色的固定描述：用户直接指挥单个成员时替换 bot 的团队型角色，
+ * 让成员按"直接执行者"工作而不是进入团队协调状态。
+ */
+export const DIRECT_CHAT_ROLE =
+  "你是用户的直接执行助手。用户通过私聊直接下达指令：请独立分析、执行并交付结果，不要做团队分工、不要指派或等待其他成员，除非用户明确要求协作。";
+
 /** 把角色、系统原则、团队上下文、已解析 Skill 与本次任务组装成提示词。 */
 export async function buildBotPrompt(
   config: Pick<

@@ -54,21 +54,28 @@ export function resolveCliCommand(
   command: string,
 ): ResolvedCliCommand {
   if (process.platform !== "win32") return { command, argsPrefix: [] };
-
-  const definition = WINDOWS_CLI_DEFINITIONS[command];
-  // 测试或后续适配器可以提供绝对入口；只有已知 npm CLI 需要特殊解析。
-  if (!definition) return { command, argsPrefix: [] };
-
-  const directories = pathDirectories();
-  for (const directory of directories) {
-    const packageEntry = join(directory, ...definition.windowsPackageEntry);
-    if (!existsSync(packageEntry)) continue;
-    if (definition.windowsPackageEntryType === "node") {
-      return { command: process.execPath, argsPrefix: [packageEntry] };
-    }
-    return { command: packageEntry, argsPrefix: [] };
+  // 已是路径（含分隔符）的命令视为已解析入口（如测试注入的 process.execPath），
+  // 不再按 PATH 搜索或补 .exe 后缀，避免 node.exe 被追加成 node.exe.exe。
+  if (command.includes("/") || command.includes("\\")) {
+    return { command, argsPrefix: [] };
   }
 
+  const directories = pathDirectories();
+  const definition = WINDOWS_CLI_DEFINITIONS[command];
+  if (definition) {
+    for (const directory of directories) {
+      const packageEntry = join(directory, ...definition.windowsPackageEntry);
+      if (!existsSync(packageEntry)) continue;
+      if (definition.windowsPackageEntryType === "node") {
+        return { command: process.execPath, argsPrefix: [packageEntry] };
+      }
+      return { command: packageEntry, argsPrefix: [] };
+    }
+  }
+
+  // 原生可执行文件（如 agy）：PATH 里第一优先可能是 .cmd 包装器（proxy/更新器），
+  // 而 node-pty 的 ConPTY CreateProcess 只认 .exe，因此跳过 .cmd 直接定位
+  // 真正的 .exe 绝对路径，保证登录注入等 TTY 场景也能按名启动。
   for (const directory of directories) {
     const executable = join(directory, `${command}.exe`);
     if (existsSync(executable)) {

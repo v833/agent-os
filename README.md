@@ -269,7 +269,18 @@ pnpm probe:tool agy .
 
 agy 当前没有原生 `/compact` 协议；话题仍可发送普通任务继续整理上下文。
 
+#### agy 登录与「登录卡片」（auth 插件）
+
+agy 未登录 Google 账号时，headless 任务会以 `Authentication required ...` 失败。启用 auth 插件（`cordis.yml` 中 `- name: auth`）后，Agent OS 会在失败话题里补发登录卡片：用户打开卡片上的授权链接，把授权码粘贴到输入框并点「确认并登录」，auth 插件会通过 ConPTY 把授权码注入 agy 完成登录（agy 只在真实 TTY 上接受粘贴，普通管道 stdin 会被忽略）。登录成功后令牌写入 `~/.gemini/antigravity-cli/antigravity-oauth-token`，之后 headless 免登录运行。
+
+- 登录执行器由 `AgyAdapter.login()` 提供（`src/cli/agy-adapter.ts`），auth 插件不感知引擎细节；其他引擎可按 `CliAdapter` 的可选协议 `isAuthRequired` / `login` 接入同类能力。
+- 授权码有效期短（通常几分钟），超时后需要重新生成；提交后卡片会流转「登录中 → 成功/失败」，失败可修改后重新提交。
+
 ### DimAgent（headless / ACP）
+
+#### DimAgent 登录与「登录卡片」（auth 插件）
+
+DimAgent 未登录平台账号时，任务会以 `Not signed in to DimAgent` 失败。启用 auth 插件后，Agent OS 会在失败话题里补发登录卡片：点击「确认并登录」即启动设备码流程（`dim auth login --device-login`），卡片会实时展示授权链接与设备码，用户在浏览器完成授权后自动完成登录（无需输入任何 key）。凭据写入 `~/.dimcode/v2/auth.json`，之后 headless / ACP 免登录运行。登录执行器由 `DimagentAdapter.login()` 提供（`src/cli/dimagent-adapter.ts`），声明 `loginMode: "device"`；auth 插件按此渲染“无输入框 + 浏览器授权”的卡片形态。
 
 安装并先在交互界面完成 provider、模型和 MCP 配置：
 

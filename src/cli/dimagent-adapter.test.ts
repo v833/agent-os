@@ -256,3 +256,22 @@ test("DimAgent 明确拒绝原生 compact 并识别失效会话", () => {
     true,
   );
 });
+
+test("DimAgent 声明 device 登录模式并识别认证需求错误", () => {
+  const adapter = new DimagentAdapter();
+
+  // 未登录时 dim 的提示与 auth login 引导（来自 dim 1.x 真实文案）。
+  assert.equal(adapter.loginMode, "device");
+  assert.equal(typeof adapter.login, "function");
+  assert.equal(
+    adapter.isAuthRequired("Not signed in to DimAgent. Run: dim auth login --provider dimcode-api-oauth"),
+    true,
+  );
+  assert.equal(
+    adapter.isAuthRequired("Please run: dim auth login --provider dimcode-api-oauth"),
+    true,
+  );
+  // 与登录无关的错误不能误判。
+  assert.equal(adapter.isAuthRequired("session does not exist: dim-session"), false);
+  assert.equal(adapter.isAuthRequired("命令执行失败：exit code 1"), false);
+});

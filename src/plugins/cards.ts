@@ -3,10 +3,16 @@
  * 让任务编排与命令插件统一通过服务出口生成卡片，而不是直接导入渲染实现。
  */
 import { Service, type Context } from "cordis";
+import type { AuthFlow } from "../core/cli-auth.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildAuthLoginCard,
+  buildAuthCodeCard,
+  buildAuthSubmittingCard,
+  buildAuthDeviceWaitingCard,
+  buildAuthSuccessCard,
   buildClarificationCard,
   buildClarificationContinuingCard,
   buildClarificationSupersededCard,
@@ -60,6 +66,26 @@ export class CardsService extends Service {
 
   clarificationSuperseded(options: ClarificationStateCardOptions): CardJson {
     return buildClarificationSupersededCard(options.flow);
+  }
+
+  authLogin(flow: AuthFlow, failureMessage?: string): CardJson {
+    return buildAuthLoginCard(flow, failureMessage);
+  }
+
+  authCode(flow: AuthFlow, url: string): CardJson {
+    return buildAuthCodeCard(flow, url);
+  }
+
+  authSubmitting(flow: AuthFlow): CardJson {
+    return buildAuthSubmittingCard(flow);
+  }
+
+  authDeviceWaiting(flow: AuthFlow, url: string, code?: string): CardJson {
+    return buildAuthDeviceWaitingCard(flow, url, code);
+  }
+
+  authSuccess(flow: AuthFlow): CardJson {
+    return buildAuthSuccessCard(flow);
   }
 
   productSpecApproval(flow: ProductSpecFlow): CardJson {

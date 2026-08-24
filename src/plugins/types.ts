@@ -25,6 +25,7 @@ import type {
 } from "../im/lark.js";
 
 import type { ApplicationToolsService } from "./application-tools.js";
+import type { AuthService } from "./auth.js";
 import type { CardsService } from "./cards.js";
 import type { CliService } from "./cli.js";
 import type { CollaborationService } from "./collaboration.js";
@@ -71,6 +72,8 @@ declare module "cordis" {
     workspaces: WorkspacesService;
     /** 需求澄清：逐题飞书流程、同话题替代与原 CLI 会话续接。 */
     clarification: ClarificationService;
+    /** CLI 登录：识别认证需求、飞书卡片收集登录 key 并驱动引擎完成登录。 */
+    auth: AuthService;
     /** 产品方案确认：真实产物校验、发起人确认和卡片状态流转。 */
     productSpec: ProductSpecService;
     /** 云文档评论评审：恢复产品会话并回写评论结果。 */
@@ -95,8 +98,12 @@ declare module "cordis" {
     /**
      * 任务提示词上下文 provider。没有 team 插件时返回 undefined；
      * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
+     * options.isDirect 为 true（用户私聊指挥单个成员）时 team 不注入团队上下文。
      */
-    "task/prompt-context"(botConfig: BotConfig): string | undefined;
+    "task/prompt-context"(
+      botConfig: BotConfig,
+      options: { isDirect: boolean },
+    ): string | undefined;
     /** 一轮 CLI 成功结束后，应用工具插件可优先认领结果并替换普通成功收尾。 */
     "task/tool-calls"(
       payload: TaskToolCallsPayload,
@@ -167,6 +174,8 @@ export interface StartTaskInput {
   senderUnionId?: string;
   /** 同一飞书话题的稳定任务编号；旧的定时/协作入口可以不提供。 */
   taskId?: string;
+  /** 私聊（p2p）标记：用户直接指挥单个成员时不注入团队上下文，缺省按群聊处理。 */
+  isDirect?: boolean;
   requestedPrompt: string;
   /** 应用工具恢复轮次使用；CLI 收到 requestedPrompt，最终结果仍关联最初任务。 */
   originalRequestedPrompt?: string;
@@ -213,6 +222,8 @@ export interface TaskToolCallsPayload extends TaskResultPayload {
   runId: string;
   senderOpenId: string;
   senderUnionId?: string;
+  /** 私聊标记透传；澄清恢复任务需要保持原消息的团队上下文策略。 */
+  isDirect?: boolean;
   /** 当前运行卡片的 message_id，供流程卡片严格绑定回调来源。 */
   cardMessageId: string;
 }
@@ -243,6 +254,10 @@ export interface TaskResultPayload {
   senderRuntime?: BotRuntime;
   taskId?: string;
   suppressHandoff?: boolean;
+  /** 任务发起人 open_id；auth 等插件用它校验后续卡片动作的权限。 */
+  senderOpenId?: string;
+  /** 失败任务的错误摘要（仅 task/failed 携带），auth 插件据此识别认证需求。 */
+  error?: string;
 }
 
 /** QA Gate 从普通 CLI 文本中解析出的结构化、可路由结论。 */

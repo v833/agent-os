@@ -173,3 +173,34 @@ test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {
   );
   assert.equal(parseCliRequest("/status"), undefined);
 });
+
+test("解析 /login 与 /<engine> login 登录指令", () => {
+  assert.deepEqual(parseCommand("/login"), { name: "login" });
+  assert.deepEqual(parseCommand("@Agent OS /login  "), { name: "login" });
+
+  // "/<engine> login" 按注册表引擎名识别为登录指令，不启动任务。
+  assert.deepEqual(parseCliRequest("/agy login"), {
+    cliId: "agy",
+    prompt: "",
+    login: true,
+  });
+  assert.deepEqual(parseCliRequest("@MyBot /codex login"), {
+    cliId: "codex",
+    prompt: "",
+    login: true,
+  });
+  assert.deepEqual(
+    parseCliRequest("@Agent OS /agy login", undefined, ["codex", "agy"]),
+    { cliId: "agy", prompt: "", login: true },
+  );
+  // login 只是任务正文的一部分时仍是普通引擎请求。
+  assert.deepEqual(parseCliRequest("/agy login 后检查配置"), {
+    cliId: "agy",
+    prompt: "login 后检查配置",
+  });
+  // 未注册引擎不会变成登录指令。
+  assert.equal(
+    parseCliRequest("/unknown login", undefined, ["codex", "agy"]),
+    undefined,
+  );
+});

@@ -8,6 +8,11 @@ import type { TaskProgressSnapshot } from "../core/task-progress.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
+  buildAuthCodeCard,
+  buildAuthLoginCard,
+  buildAuthSubmittingCard,
+  buildAuthDeviceWaitingCard,
+  buildAuthSuccessCard,
   buildClarificationCard,
   buildClarificationContinuingCard,
   buildClarificationSupersededCard,
@@ -23,6 +28,7 @@ import {
   splitLongText,
   ThrottledCardUpdater,
 } from "./card.js";
+import type { AuthFlow } from "../core/cli-auth.js";
 import type { OrchestrationRun } from "../core/orchestration.js";
 
 function progress(
@@ -593,4 +599,89 @@ test("maxRetry 缺省或为 0 时不渲染重试按钮（actions 下线降级）
     [],
     "maxRetry=0 时不能渲染重试按钮",
   );
+});
+
+function authFlow(loginMode: "key" | "device"): AuthFlow {
+  return {
+    token: "tok12345678",
+    botId: "b",
+    engineId: "agy",
+    engineDisplayName: "Antigravity",
+    accessMode: "headless",
+    sessionId: "s",
+    ownerOpenId: "o",
+    originalMessageId: "m",
+    replyInThread: false,
+    workspaceDir: ".",
+    loginUrl: "https://accounts.google.com/oauth",
+    errorMessage: "",
+    loginMode,
+    status: "awaiting-key",
+  };
+}
+
+test("登录卡 markdown content 只含字符串，卡片 JSON 对飞书合法", () => {
+  // 回归保护：曾把 {tag:hr} 对象混进 markdown content 导致飞书 400。
+  for (const mode of ["key", "device"] as const) {
+    const card = buildAuthLoginCard(authFlow(mode), "authentication timed out");
+    const body = card.body as { elements: Array<Record<string, unknown>> };
+    const markdowns = body.elements.filter(
+      (element) => element.tag === "markdown",
+    );
+    assert.ok(markdowns.length >= 1, `${mode} 模式应有说明文本`);
+    for (const element of markdowns) {
+      assert.equal(
+        typeof element.content,
+        "string",
+        `${mode} 模式 markdown content 必须是字符串`,
+      );
+    }
+    assert.ok(
+      body.elements.some((element) => element.tag === "button"),
+      `${mode} 模式初始卡应提供「开始登录」按钮`,
+    );
+  }
+});
+
+test("授权输入卡（key 模式两步流程）含 URL 纯文本、输入框与确认按钮", () => {
+  const card = buildAuthCodeCard(authFlow("key"), "https://accounts.google.com/o/oauth2/auth?x=1&y=2");
+  const body = card.body as { elements: Array<Record<string, unknown>> };
+  // 授权链接必须是纯文本：飞书不支持 <a> 组件，markdown 链接里的 & 又会触发
+  // 服务端内部错误，只有代码块纯文本能稳定展示。
+  assert.equal(
+    body.elements.some((e) => e.tag === "a"),
+    false,
+    "不能使用 <a> 组件",
+  );
+  const urls = body.elements
+    .filter((e) => e.tag === "markdown")
+    .map((e) => String(e.content));
+  assert.ok(
+    urls.some((content) => content.includes("https://accounts.google.com/o/oauth2/auth?x=1&y=2")),
+    "授权链接应以纯文本展示",
+  );
+  const form = body.elements.find((e) => e.tag === "form") as {
+    elements: Array<Record<string, unknown>>;
+  };
+  assert.ok(form, "授权输入卡应有表单");
+  assert.equal(
+    form.elements.some((e) => e.tag === "input"),
+    true,
+    "应有授权码输入框",
+  );
+  assert.equal(
+    form.elements.some((e) => e.tag === "button"),
+    true,
+    "应有确认按钮",
+  );
+});
+
+test("登录相关卡片均能生成且结构完整", () => {
+  const flow = authFlow("key");
+  const submitting = buildAuthSubmittingCard(flow);
+  const deviceWaiting = buildAuthDeviceWaitingCard(flow, "https://dimagent.cn/device", "Y4WW-BKV2");
+  const success = buildAuthSuccessCard(flow);
+  assert.equal(JSON.stringify(submitting).length > 0, true);
+  assert.equal(JSON.stringify(deviceWaiting).length > 0, true);
+  assert.equal(JSON.stringify(success).length > 0, true);
 });

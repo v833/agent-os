@@ -74,6 +74,7 @@ export class ClarificationService extends Service {
       requestedPrompt: payload.requestedPrompt,
       cardMessageId: payload.cardMessageId,
       replyInThread: payload.hasThread,
+      isDirect: payload.isDirect,
       request,
       collaboration: payload.collaboration,
     });
@@ -184,6 +185,7 @@ export class ClarificationService extends Service {
       senderOpenId: answered.flow.ownerOpenId,
       senderUnionId: answered.flow.ownerUnionId,
       taskId: answered.flow.taskId,
+      isDirect: answered.flow.isDirect,
       requestedPrompt: formatClarificationAnswers(answered.flow),
       originalRequestedPrompt: answered.flow.requestedPrompt,
       isCompacting: false,

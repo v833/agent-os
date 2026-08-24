@@ -55,6 +55,7 @@ const handler: CommandHandler = async ({
     hasThread,
     replyToMessageId: message.messageId,
     senderOpenId: message.senderOpenId,
+    isDirect: message.chatType === "p2p",
     requestedPrompt: resolvedText,
     isCompacting: true,
     compactInstructions:

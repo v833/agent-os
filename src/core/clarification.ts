@@ -85,6 +85,8 @@ export interface ClarificationFlow {
   requestedPrompt: string;
   cardMessageId?: string;
   replyInThread: boolean;
+  /** 私聊标记：澄清恢复执行时保持原消息的团队上下文策略。 */
+  isDirect?: boolean;
   request: ClarificationRequest;
   currentIndex: number;
   answers: ClarificationAnswer[];
@@ -101,6 +103,7 @@ export interface CreateClarificationFlowOptions {
   requestedPrompt: string;
   cardMessageId?: string;
   replyInThread: boolean;
+  isDirect?: boolean;
   request: ClarificationRequest;
   collaboration?: CollaborationMessage;
 }

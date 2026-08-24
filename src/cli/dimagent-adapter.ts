@@ -4,16 +4,23 @@
  * 注意：dim 0.3.x 的 JSONL 事件格式是 eventType/payload 结构（text:delta 增量、run:ended 收尾），
  * 最终答案跨多行累积，因此本适配器按会话 ID 维护跨行状态（每轮 headless 独占一个会话/进程）。
  */
+import { spawn } from "node:child_process";
 import type {
   CliAccessMode,
   CliAdapter,
   CliCompactPlan,
   CliEvent,
+  CliLoginOptions,
   CliRunStats,
 } from "./types.js";
 import type { ApplicationToolProvider } from "./app-tools.js";
 import { findAcpApplicationTool } from "./app-tools.js";
 import { ensureDimagentProjectMcpConfig } from "./dim-mcp-config.js";
+import { stopProcessTree } from "./process-tree.js";
+import { summarizeOutput } from "./pty-login.js";
+
+/** 设备码登录的等待上限；用户在浏览器授权通常需要一两分钟，给足缓冲。 */
+const DEVICE_LOGIN_TIMEOUT_MS = 5 * 60_000;
 
 interface DimagentEvent {
   type?: unknown;
@@ -128,6 +135,8 @@ export class DimagentAdapter implements CliAdapter {
   readonly command = process.env.DIMAGENT_COMMAND?.trim() || "dim";
   readonly displayName = "DimAgent";
   readonly accessMode: CliAccessMode = "headless";
+  /** DimAgent 平台 OAuth 走设备码流程，用户在浏览器授权，无需在卡片输入 key。 */
+  readonly loginMode = "device" as const;
 
   private readonly runStates = new Map<string, DimRunState>();
 
@@ -270,5 +279,70 @@ export class DimagentAdapter implements CliAdapter {
       /no (?:such )?(?:session|conversation)\b/i.test(message) ||
       /ACP server 不支持恢复已有会话/.test(message)
     );
+  }
+
+  /** 判断失败信息是否表明 DimAgent 尚未登录（未认证时提示运行 auth login）。 */
+  isAuthRequired(message: string): boolean {
+    const text = message.toLowerCase();
+    return (
+      /not signed in to dimagent/.test(text) ||
+      /auth login --provider/.test(text) ||
+      /please (?:run )?dim auth login/.test(text) ||
+      /sign in (?:first|required)/.test(text)
+    );
+  }
+
+  /**
+   * 用设备码流程完成 DimAgent 平台 OAuth 登录：`dim auth login --device-login`
+   * 会把授权 URL 与设备码打印到 stdout 后轮询等待，用户在浏览器完成授权后
+   * 进程以退出码 0 结束并写入凭据。全程不读 stdin，普通子进程即可驱动；
+   * stdout 实时经 onOutput 转发，auth 插件据此把 URL/设备码推送到卡片。
+   */
+  async login(_code: string, options: CliLoginOptions = {}): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(this.command, ["auth", "login", "--device-login"], {
+        cwd: options.cwd ?? process.cwd(),
+        env: process.env,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let output = "";
+      let settled = false;
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
+      const timer = setTimeout(() => {
+        // 设备码超时后结束进程树，避免残留轮询进程。
+        void stopProcessTree(child).then(() =>
+          fail(new Error("登录超时：请在浏览器中完成授权后再试。")),
+        );
+      }, options.timeoutMs ?? DEVICE_LOGIN_TIMEOUT_MS);
+      const collect = (chunk: Buffer | string) => {
+        const text = chunk.toString();
+        output += text;
+        options.onOutput?.(text);
+      };
+      child.stdout.on("data", collect);
+      child.stderr.on("data", collect);
+      child.once("error", (error) => fail(error));
+      child.once("close", (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (code === 0) {
+          options.onOutput?.("\n[agent-os] 登录进程已退出（状态码 0）\n");
+          resolve();
+        } else {
+          fail(
+            new Error(
+              `登录没有完成（退出码 ${code}）：${summarizeOutput(output)}`,
+            ),
+          );
+        }
+      });
+    });
   }
 }

@@ -9,6 +9,7 @@ import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 
 import * as applicationToolsPlugin from "./application-tools.js";
+import * as authPlugin from "./auth.js";
 import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
 import * as cliPlugin from "./cli.js";
@@ -19,6 +20,7 @@ import * as cdCommand from "./commands/cd.js";
 import * as closeCommand from "./commands/close.js";
 import * as compactCommand from "./commands/compact.js";
 import * as helpCommand from "./commands/help.js";
+import * as loginCommand from "./commands/login.js";
 import * as newCommand from "./commands/new.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
@@ -51,6 +53,7 @@ const pluginRegistry: Record<string, Plugin> = {
   sessions: sessionsPlugin,
   cli: cliPlugin,
   "application-tools": applicationToolsPlugin,
+  auth: authPlugin,
   clarification: clarificationPlugin,
   "engines/claude": claudeEngine,
   "engines/codex": codexEngine,
@@ -61,6 +64,7 @@ const pluginRegistry: Record<string, Plugin> = {
   cards: cardsPlugin,
   commands: commandsPlugin,
   "commands/help": helpCommand,
+  "commands/login": loginCommand,
   "commands/new": newCommand,
   "commands/resume": resumeCommand,
   "commands/compact": compactCommand,

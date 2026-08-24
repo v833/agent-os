@@ -181,14 +181,19 @@ async function handleMessage(
   }
   const hasThread = Boolean(message.threadId || message.rootId);
   const taskId = topicTaskId(message);
-  const command = parseCommand(resolved);
+  let command = parseCommand(resolved);
   const cliRequest = parseCliRequest(
     resolved,
     leadingMentionName(message.text, message.mentions),
     // 引擎请求按注册表动态解析：新增引擎插件后无需改核心解析器白名单。
     ctx.cli.list().map((adapter) => adapter.id),
   );
-  if (cliRequest && !cliRequest.prompt) {
+  // "/<engine> login" 与纯 "/login" 语义一致：发起登录卡片流程而不是任务。
+  // login 标志由解析器按注册表引擎名识别，这里只做命令合成，不写死引擎。
+  if (cliRequest?.login) {
+    command = { name: "login", cliId: cliRequest.cliId };
+  }
+  if (cliRequest && !cliRequest.prompt && !cliRequest.login) {
     await bot.reply(
       message.messageId,
       `请在 /${cliRequest.cliId} 后面写下任务，例如：/${cliRequest.cliId} 检查项目状态`,
@@ -313,6 +318,7 @@ async function handleMessage(
     senderOpenId: message.senderOpenId,
     senderUnionId: message.senderUnionId,
     taskId,
+    isDirect: message.chatType === "p2p",
     requestedPrompt,
     originalRequestedPrompt: messageOutcome?.originalRequestedPrompt,
     isCompacting: false,

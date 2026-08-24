@@ -84,7 +84,7 @@ export type CliEvent =
     }
   | { type: 'error'; message: string; sessionId?: string }
 
-/** 描述一种可由通用 Runner 驱动的无头 CLI。 */
+/** 描述某种可由通用 Runner 驱动的无头 CLI。 */
 export interface CliAdapter {
   readonly id: CliId
   readonly command: string
@@ -108,12 +108,44 @@ export interface CliAdapter {
   parseEvents(line: string): CliEvent[]
   /** 判断失败信息是否明确表示恢复指针已经失效。 */
   isSessionUnavailable?(message: string): boolean
+  /**
+   * 判断失败信息是否表明该引擎需要登录（未声明时 auth 插件用通用检测兜底）。
+   * 例如 agy 未认证时的 "Authentication required ... paste the authorization code"。
+   */
+  isAuthRequired?(message: string): boolean
+  /**
+   * 用用户提交的授权码/登录 key 完成该引擎的登录；未声明表示该引擎暂不支持
+   * 飞书卡片登录。key 模式（agy）授权码只在真实 TTY 中可粘贴，应借助 ConPTY；
+   * device 模式（DimAgent）直接跑非交互设备码流程，无需用户输入 key。
+   */
+  login?(code: string, options?: CliLoginOptions): Promise<void>
+  /**
+   * 登录交互模式：key=用户在卡片输入授权码后提交（默认）；device=用户确认后
+   * 启动设备码流程，登录进程把授权 URL/code 经 onOutput 推回卡片，用户浏览器授权。
+   */
+  readonly loginMode?: "key" | "device"
   /** 列出该引擎在当前工作目录的原生会话，供 /resume 卡片展示；未实现表示不支持。 */
   listNativeSessions?(cwd: string): Promise<CliSessionSummary[]>
   /** 是否对明确瞬时断流做有限重试（目前只有 Codex 声明）。 */
   readonly retryOnDisconnect?: boolean
   /** 原生上下文整理的策略描述；缺省用通用文案。 */
   readonly compactDetail?: string
+}
+
+/** 引擎登录执行的可选运行时上下文（由 auth 插件从失败任务推导）。 */
+export interface CliLoginOptions {
+  /** 执行登录进程的工作目录；缺省使用当前进程工作目录。 */
+  cwd?: string
+  /** 登录进程整体超时毫秒；缺省由实现决定（例如 90 秒）。 */
+  timeoutMs?: number
+  /** 登录进程输出回调，可用于在登录卡片上展示进度。 */
+  onOutput?: (chunk: string) => void
+  /**
+   * key 模式延迟注入：登录进程打印授权提示后不立即注入 code，而是先等本回调
+   * 返回用户提交的授权码再注入。授权码与登录进程的 PKCE 绑定，必须取自
+   * 本进程打印的授权 URL（取自过期错误文本的旧授权码无法通过校验）。
+   */
+  getCode?: () => Promise<string>
 }
 
 /** CLI 一轮执行完成后返回给会话层的统一结果。 */

@@ -256,3 +256,26 @@ test("AgyAdapter 识别会话失效错误（含 agy 对不存在会话的真实 
   assert.equal(adapter.isSessionUnavailable("invalid conversation id"), true);
   assert.equal(adapter.isSessionUnavailable("普通错误信息"), false);
 });
+
+test("AgyAdapter 识别认证需求错误（未登录时的真实 stderr 与 result 文案）", () => {
+  const adapter = new AgyAdapter();
+
+  // agy 未认证时真实输出的关键片段。
+  assert.equal(
+    adapter.isAuthRequired(
+      "Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?...",
+    ),
+    true,
+  );
+  assert.equal(
+    adapter.isAuthRequired(
+      "Or, paste the authorization code here and press Enter:\nError: authentication timed out.",
+    ),
+    true,
+  );
+  assert.equal(adapter.isAuthRequired("authentication failed or timed out"), true);
+  assert.equal(adapter.isAuthRequired("authentication required"), true);
+  // 与登录无关的错误不能误判。
+  assert.equal(adapter.isAuthRequired("conversation not found: x"), false);
+  assert.equal(adapter.isAuthRequired("普通编译错误"), false);
+});

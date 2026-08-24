@@ -113,7 +113,9 @@ export class ProductCommentsService extends Service {
         session.cliId,
         session.accessMode ?? "headless",
       );
-      const teamContext = this.ctx.root.bail("task/prompt-context", config);
+      const teamContext = this.ctx.root.bail("task/prompt-context", config, {
+        isDirect: false,
+      });
       const prompt = await buildBotPrompt(
         config,
         documentCommentPrompt(flow, comment),

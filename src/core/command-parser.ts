@@ -13,7 +13,9 @@ export type SlashCommand =
   | { name: "schedule"; action: "list" }
   | { name: "schedule"; action: "remove"; id: string }
   | { name: "orchestrate"; prompt?: string }
-  | { name: "panel" };
+  | { name: "panel" }
+  /** 发起 CLI 登录卡片；cliId 缺省表示当前会话的引擎。 */
+  | { name: "login"; cliId?: CliId };
 
 // 飞书还原提及后可能得到“@机器人名称 /status”，机器人名称允许包含空格，
 // 因此名称段用非贪婪匹配，避免把后面的命令内容吞进显示名。
@@ -30,6 +32,7 @@ const SCHEDULE_LIST_RE = /^(?:@.+?\s+)?\/schedule\s+list\s*$/;
 const ORCHESTRATE_RE =
   /^(?:@.+?\s+)?\/orchestrate(?:\s+([\s\S]+?))?\s*$/;
 const PANEL_RE = /^(?:@.+?\s+)?\/panel\s*$/;
+const LOGIN_RE = /^(?:@.+?\s+)?\/login\s*$/;
 
 function stripLeadingMention(
   text: string,
@@ -90,6 +93,8 @@ export function parseCommand(text: string): SlashCommand | undefined {
   }
   const panelMatch = PANEL_RE.exec(value);
   if (panelMatch) return { name: "panel" };
+  const loginMatch = LOGIN_RE.exec(value);
+  if (loginMatch) return { name: "login" };
 
   const match = COMMAND_RE.exec(value);
   if (!match) return undefined;
@@ -107,6 +112,8 @@ export function parseCommand(text: string): SlashCommand | undefined {
 export interface CliRequest {
   cliId: CliId;
   prompt: string;
+  /** 完整的 `/<engine> login` 指令：发起该引擎的登录流程，不启动任务。 */
+  login?: boolean;
 }
 
 /** 转义正则特殊字符，保证注册表里带符号的 CLI ID 也能安全参与匹配。 */
@@ -130,6 +137,11 @@ export function parseCliRequest(
     `^(?:@.+?\\s+)?\\/(${pattern})(?:\\s+([\\s\\S]*))?$`,
   ).exec(stripLeadingMention(text, leadingMentionName));
   if (!match) return undefined;
+  // 恰好是 "/<engine> login"（其余内容缺省为空）时，把它当作登录指令而不是
+  // 一个以 login 为正文的任务；"/<engine> login 其他任务" 仍是普通引擎请求。
+  if ((match[2] ?? "").trim() === "login") {
+    return { cliId: match[1] as CliId, prompt: "", login: true };
+  }
   return {
     cliId: match[1] as CliId,
     prompt: (match[2] ?? "").trim(),

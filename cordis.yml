@@ -33,6 +33,8 @@ plugins:
   - name: cards
   - name: commands
   - name: commands/help
+  # /login：为当前会话引擎（或 "/<engine> login"）发起登录卡片；依赖 auth 插件。
+  - name: commands/login
   - name: commands/new
   - name: commands/resume
   - name: commands/compact
@@ -68,6 +70,9 @@ plugins:
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification
+  # CLI 登录：任务因认证失败时发飞书卡片收集登录 key，并驱动引擎完成登录。
+  # 移除本插件即回退为普通失败卡片（引擎适配器声明的 login 能力保留但无人消费）。
+  - name: auth
   # 产品文档：校验 Spec/Tickets 真实落盘并提供发起人确认卡；移除即可整体下线。
   - name: product-spec
   # 云文档评论评审：@产品经理后恢复原产品会话并把修改说明回复到评论。

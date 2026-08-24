@@ -3,6 +3,7 @@
  * 并负责高频任务卡片更新的节流与串行化。
  */
 import type { CliRunStats, CliSessionSummary } from "../cli/types.js";
+import type { AuthFlow } from "../core/cli-auth.js";
 import type { ClarificationFlow } from "../core/clarification.js";
 import { retryToken, type OrchestrationRun } from "../core/orchestration.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
@@ -652,6 +653,250 @@ export function buildClarificationSupersededCard(
             "这张卡片已经失效，Agent OS 正在沿用同一个任务上下文处理新的补充。",
             flow.answers.length ? `此前已确认 ${flow.answers.length} 项，相关答案会一并带入。` : "",
           ].filter(Boolean).join("\n\n"),
+        },
+      ],
+    },
+  };
+}
+
+/** 登录卡片输入框和确认按钮的字段名；auth 插件与卡片渲染必须一致。 */
+export const AUTH_INPUT_NAME = "auth_key";
+export const AUTH_ACTION_NAME = "submit_auth_key";
+
+/**
+ * 生成初始登录卡：key 模式先点「开始登录」再按卡片新链接授权（不使用失败错误
+ * 文本里的过期 URL）；device 模式直接点开始进入设备码流程。failureMessage 非空时
+ * 追加失败原因，用户可重新开始（一次登录失败不清空流程）。
+ */
+export function buildAuthLoginCard(
+  flow: AuthFlow,
+  failureMessage?: string,
+): CardJson {
+  const steps =
+    flow.loginMode === "device"
+      ? [
+          "**1** 点击下方「开始登录」；",
+          "**2** 在随后出现的卡片里打开授权链接，用浏览器完成登录；",
+          "**3** 授权完成后 Agent OS 自动继续，无需输入任何 key。",
+        ]
+      : [
+          "**1** 点击下方「开始登录」；",
+          "**2** 浏览器会**再次弹出**新的授权页（或使用卡片上的链接），请用**新弹出**的页面授权；",
+          "**3** 把授权码粘贴到输入框并点「确认」，Agent OS 完成登录。",
+        ];
+  const elements: Record<string, unknown>[] = [
+    {
+      tag: "markdown",
+      content: [
+        `检测到 **${escapeFeishuMarkdown(flow.engineDisplayName)}** 尚未登录，任务无法执行。`,
+        ...steps,
+      ].filter(Boolean).join("\n\n"),
+    },
+  ];
+  if (failureMessage) {
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "markdown",
+      content: `⚠️ **登录失败**\n${escapeFeishuMarkdown(failureMessage)}`,
+    });
+  }
+  elements.push({ tag: "hr" });
+  elements.push({
+    tag: "button",
+    name: "submit_auth",
+    text: { tag: "plain_text", content: "开始登录" },
+    type: "primary",
+    width: "fill",
+    size: "medium",
+    behaviors: [
+      {
+        type: "callback",
+        value: {
+          action: AUTH_ACTION_NAME,
+          authToken: flow.token,
+        },
+      },
+    ],
+  });
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `需要登录 ${flow.engineDisplayName}` },
+    },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: `需要登录 ${flow.engineDisplayName}` },
+      subtitle: { tag: "plain_text", content: "登录后才能继续执行任务" },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements,
+    },
+  };
+}
+
+/**
+ * 生成 key 模式登录进程就绪后的授权输入卡：展示本进程的授权链接（PKCE 绑定），
+ * 用户在浏览器授权后把授权码粘贴到输入框并确认。
+ * 授权链接用 markdown 代码块展示而非链接语法：飞书既不支持 <a> 组件，OAuth URL
+ * 含大量 & 字符塞进 markdown 链接又会触发服务端内部错误，纯文本可原样复制最稳妥。
+ */
+export function buildAuthCodeCard(
+  flow: AuthFlow,
+  url: string,
+): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `${flow.engineDisplayName}：等待你完成授权` },
+    },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: "请完成授权" },
+      subtitle: { tag: "plain_text", content: flow.engineDisplayName },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            "请在浏览器中打开下面的链接完成登录，然后把**授权码**粘贴到输入框。\n\n_⚠️ 请务必使用本卡片上的链接授权（授权码与本次登录绑定）；如果浏览器自动弹出了其他授权页，请关闭它。_",
+        },
+        {
+          tag: "markdown",
+          content: `\`${escapeInlineCode(url)}\``,
+        },
+        {
+          tag: "markdown",
+          content: "_授权码有效期很短，请在授权完成后尽快提交。_",
+        },
+        {
+          tag: "form",
+          name: `auth_${flow.token.slice(0, 8)}`,
+          vertical_spacing: "8px",
+          elements: [
+            {
+              tag: "input",
+              name: AUTH_INPUT_NAME,
+              placeholder: { tag: "plain_text", content: "粘贴授权码后点击确认" },
+              // 飞书 input 的 max_length 上限为 1000，超过会被拒绝。
+              max_length: 1000,
+            },
+            {
+              tag: "button",
+              name: "submit_auth",
+              action_type: "form_submit",
+              text: { tag: "plain_text", content: "确认并登录" },
+              type: "primary",
+              width: "default",
+              size: "medium",
+              value: {
+                action: AUTH_ACTION_NAME,
+                authToken: flow.token,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** 生成提交登录 key 后立即展示的进行中状态卡。 */
+export function buildAuthSubmittingCard(flow: AuthFlow): CardJson {
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: `${flow.engineDisplayName}：正在登录` } },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: `正在登录 ${flow.engineDisplayName}` },
+      subtitle: { tag: "plain_text", content: "请不要重复提交" },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            flow.loginMode === "device"
+              ? "正在启动设备码登录流程，请稍候…"
+              : "正在使用你提交的 key 完成登录，请稍候。\n\n_授权码有效期通常只有几分钟，超时后需要重新生成。_",
+        },
+      ],
+    },
+  };
+}
+
+/** 生成 device 登录的授权等待卡：展示授权链接与设备码，用户在浏览器完成授权。 */
+export function buildAuthDeviceWaitingCard(
+  flow: AuthFlow,
+  url: string,
+  code?: string,
+): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `${flow.engineDisplayName}：等待浏览器授权` },
+    },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: `等待你完成授权` },
+      subtitle: { tag: "plain_text", content: flow.engineDisplayName },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            "请在浏览器中打开下面的链接完成登录（建议直接用完整链接，无需手动输入设备码）：",
+        },
+        {
+          tag: "markdown",
+          content: `\`${escapeInlineCode(url)}\``,
+        },
+        ...(code
+          ? [
+              {
+                tag: "markdown",
+                content: `设备码：\`${escapeInlineCode(escapeFeishuMarkdown(code))}\``,
+              } as Record<string, unknown>,
+            ]
+          : []),
+        {
+          tag: "markdown",
+          content: "授权完成后 Agent OS 会自动继续，无需再操作。",
+        },
+      ],
+    },
+  };
+}
+
+/** 生成登录成功后的绿色终态卡；用户重新发送指令即可继续任务。 */
+export function buildAuthSuccessCard(flow: AuthFlow): CardJson {
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: `${flow.engineDisplayName}：已登录` } },
+    header: {
+      template: "green",
+      title: { tag: "plain_text", content: "登录成功" },
+      subtitle: { tag: "plain_text", content: flow.engineDisplayName },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: `**${escapeFeishuMarkdown(flow.engineDisplayName)}** 已完成登录。\n\n请重新发送刚才的指令（或发送「继续执行」），任务会正常执行。`,
         },
       ],
     },

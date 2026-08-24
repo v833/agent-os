@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { CliAdapter, CliEvent } from "../cli/types.js";
 import { CliRunError } from "../cli/runner.js";
-import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
+import { botCliEnvironment, buildBotPrompt, DIRECT_CHAT_ROLE } from "../core/bot-registry.js";
 import {
   isRetryRequest,
   resolveRetryPrompt,
@@ -103,9 +103,14 @@ export class TasksService extends Service {
     const teamContext = this.ctx.root.bail(
       "task/prompt-context",
       botConfig,
+      { isDirect: input.isDirect ?? false },
     );
+    // 私聊直接指挥：角色切换为直接执行者（不做团队分工），群聊保留团队型角色。
+    const effectiveBotConfig = input.isDirect
+      ? { ...botConfig, role: DIRECT_CHAT_ROLE }
+      : botConfig;
     const prompt = await buildBotPrompt(
-      botConfig,
+      effectiveBotConfig,
       resolveRetryPrompt(session, requestedPrompt),
       teamContext ?? "",
       this.ctx.config.defaultProductDeliveryMode,
@@ -297,8 +302,9 @@ export class TasksService extends Service {
     const runCorrection = async (correctionPrompt: string) => {
       const correctionSession =
         this.ctx.sessions.manager.get(session.id) ?? session;
+      // 纠正轮沿用本轮私聊/群聊语义（角色与团队上下文策略一致）。
       const prompt = await buildBotPrompt(
-        botConfig,
+        effectiveBotConfig,
         correctionPrompt,
         teamContext ?? "",
         this.ctx.config.defaultProductDeliveryMode,
@@ -402,6 +408,7 @@ export class TasksService extends Service {
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
+            isDirect: input.isDirect ?? false,
             cardMessageId: cardId,
           };
           const initialToolOutcome = await this.ctx.serial(
@@ -464,6 +471,7 @@ export class TasksService extends Service {
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
+            isDirect: input.isDirect ?? false,
             cardMessageId: cardId,
           };
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
@@ -580,6 +588,7 @@ export class TasksService extends Service {
         if (!isCompacting) {
           // 失败也走事件广播（与 task/result 语义区分）：编排等可选插件据此标记
           // 子任务失败；collaboration 不监听本事件，不会误触发审查交接。
+          // error 与 senderOpenId 供 auth 插件识别认证需求并发起登录卡片。
           await this.ctx.parallel("task/failed", {
             bot,
             botConfig,
@@ -592,6 +601,8 @@ export class TasksService extends Service {
             senderRuntime,
             taskId,
             suppressHandoff,
+            senderOpenId,
+            error: errorMessage,
           });
         }
       })
