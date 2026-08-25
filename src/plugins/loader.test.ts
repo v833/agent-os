@@ -3,14 +3,22 @@
  * 未注册插件与缺失/非法配置的错误边界。
  */
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { Context } from "cordis";
+import { parse } from "yaml";
 import { apply as loaderApply, name as loaderName } from "./loader.js";
 
 const loader = { name: loaderName, apply: loaderApply };
+
+test("仓库默认 cordis.yml 可被 YAML 解析且插件条目格式合法", async () => {
+  const content = await readFile(resolve(process.cwd(), "cordis.yml"), "utf8");
+  const document = parse(content) as { plugins?: Array<{ name?: unknown }> };
+  assert.ok(document.plugins?.length);
+  assert.ok(document.plugins.every((entry) => typeof entry.name === "string"));
+});
 
 function yamlPath(path: string): string {
   // YAML 普通标量中反斜杠有歧义，统一转成正斜杠保证 Windows 可解析。

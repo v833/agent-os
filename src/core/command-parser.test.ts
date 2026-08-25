@@ -19,6 +19,18 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "compact",
     instructions: "保留接口约定，省略测试日志",
   });
+  assert.deepEqual(parseCommand("/metrics"), {
+    name: "metrics",
+    args: undefined,
+  });
+  assert.deepEqual(parseCommand("@Agent OS /metrics traces"), {
+    name: "metrics",
+    args: "traces",
+  });
+  assert.deepEqual(parseCommand("/metrics bot developer"), {
+    name: "metrics",
+    args: "bot developer",
+  });
 });
 
 test("解析 /cd 的查询、带空格路径和机器人提及", () => {

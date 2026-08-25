@@ -1,13 +1,14 @@
 /**
  * tasks 任务编排服务插件：从原 index.ts 抽取的一轮 CLI 执行编排——
  * 启动 active 状态、资源下载、任务卡片、进度流式更新、取消收尾与结果事件。
- * 成功卡片前广播 task/completion-check，任务完成后再广播 task/result，
+ * 实际执行前广播 task/started，成功卡片前广播 task/completion-check，
+ * 任务结束后按结果广播 result/failed/paused/cancelled，
  * 由业务插件完成必要的运行时校验与后续接力。
  */
 import { Service, type Context } from "cordis";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { CliAdapter, CliEvent } from "../cli/types.js";
+import type { CliAdapter, CliEvent, CliRunStats } from "../cli/types.js";
 import { CliRunError } from "../cli/runner.js";
 import { botCliEnvironment, buildBotPrompt, DIRECT_CHAT_ROLE } from "../core/bot-registry.js";
 import {
@@ -25,9 +26,39 @@ import type {
   StartTaskInput,
   TaskCompletionCheckPayload,
   TaskResultPayload,
+  TaskToolMetrics,
   TaskToolCallsOutcome,
   TaskToolCallsPayload,
 } from "./types.js";
+
+// Token、轮次和 CLI 耗时按执行轮累加；上下文占用与窗口大小是快照，只保留最新值。
+function accumulateCliStats(
+  current: CliRunStats | undefined,
+  next: CliRunStats,
+): CliRunStats {
+  const sum = (
+    left: number | undefined,
+    right: number | undefined,
+  ): number | undefined =>
+    left === undefined && right === undefined
+      ? undefined
+      : (left ?? 0) + (right ?? 0);
+  return {
+    durationMs: sum(current?.durationMs, next.durationMs),
+    turns: sum(current?.turns, next.turns),
+    totalTokens: sum(current?.totalTokens, next.totalTokens),
+    inputTokens: sum(current?.inputTokens, next.inputTokens),
+    outputTokens: sum(current?.outputTokens, next.outputTokens),
+    cacheReadTokens: sum(current?.cacheReadTokens, next.cacheReadTokens),
+    cacheCreationTokens: sum(
+      current?.cacheCreationTokens,
+      next.cacheCreationTokens,
+    ),
+    contextUsedTokens: next.contextUsedTokens ?? current?.contextUsedTokens,
+    contextWindowTokens:
+      next.contextWindowTokens ?? current?.contextWindowTokens,
+  };
+}
 
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
 export class TasksService extends Service {
@@ -97,6 +128,7 @@ export class TasksService extends Service {
     } = input;
     const cliAdapter = this.getSessionAdapter(session);
     const taskTitle = isCompacting ? "整理上下文" : cliAdapter.displayName;
+    const taskStartTime = Date.now();
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
@@ -204,6 +236,29 @@ export class TasksService extends Service {
       !session.cliSessionId,
     );
     let observedCliSessionId = session.cliSessionId;
+    let observedStats: CliRunStats | undefined;
+    const observedToolMetrics = new Map<
+      string,
+      { invocations: number; failures: number }
+    >();
+    const observedToolNames = new Map<string, string>();
+    const observedToolIds = new Set<string>();
+    const observedFailedToolIds = new Set<string>();
+    let currentExecutionStatsObserved = false;
+    const beginCliExecution = () => {
+      // 纠正轮可能复用工具调用 ID；去重范围只覆盖单次 CLI 执行。
+      observedToolNames.clear();
+      observedToolIds.clear();
+      observedFailedToolIds.clear();
+      currentExecutionStatsObserved = false;
+    };
+    const snapshotToolMetrics = (): TaskToolMetrics =>
+      Object.fromEntries(
+        [...observedToolMetrics.entries()].map(([toolName, metrics]) => [
+          toolName,
+          { ...metrics },
+        ]),
+      );
     let pendingCliSessionSave: Promise<void> | undefined;
     const rememberCliSession = async (cliSessionId: string) => {
       observedCliSessionId = cliSessionId;
@@ -228,6 +283,7 @@ export class TasksService extends Service {
         throw error;
       }
     });
+    let cancellationEmitted = false;
     const renderProgress = (snapshot = progress.snapshot()) => {
       cardUpdater.push(
         this.ctx.cards.task({
@@ -244,19 +300,43 @@ export class TasksService extends Service {
     };
     const finishCancelled = async () => {
       console.log(`[CLI] 任务已取消 engine=${session.cliId}`);
-      await cardUpdater.finish(
-        this.ctx.cards.task({
-          title: taskTitle,
-          status: "cancelled",
-          detail:
-            activeRun.cancelMode === "close"
-              ? "本次任务已停止，当前会话已经关闭。"
-              : isCompacting
-                ? "整理已停止，当前 CLI 会话没有改变。"
-                : "本次任务已停止。你可以继续在当前话题里提问。",
-          ...(!isCompacting ? { progress: progress.snapshot() } : {}),
-        }),
-      );
+      try {
+        await cardUpdater.finish(
+          this.ctx.cards.task({
+            title: taskTitle,
+            status: "cancelled",
+            detail:
+              activeRun.cancelMode === "close"
+                ? "本次任务已停止，当前会话已经关闭。"
+                : isCompacting
+                  ? "整理已停止，当前 CLI 会话没有改变。"
+                  : "本次任务已停止。你可以继续在当前话题里提问。",
+            ...(!isCompacting ? { progress: progress.snapshot() } : {}),
+          }),
+        );
+      } finally {
+        if (!isCompacting && !cancellationEmitted) {
+          cancellationEmitted = true;
+          await this.ctx.parallel("task/cancelled", {
+            bot,
+            botConfig,
+            session: this.ctx.sessions.manager.get(session.id) ?? session,
+            requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
+            answer: "",
+            replyToMessageId,
+            hasThread,
+            collaboration,
+            senderRuntime,
+            taskId,
+            suppressHandoff,
+            senderOpenId,
+            durationMs: Date.now() - taskStartTime,
+            stats: observedStats,
+            toolMetrics: snapshotToolMetrics(),
+            traceId: activeRun.runId,
+          });
+        }
+      }
     };
     // 没有新事件时心跳仍会推进耗时；节流器确保最终每秒最多一次 patch。
     const progressHeartbeat = setInterval(renderProgress, 1_000);
@@ -268,6 +348,38 @@ export class TasksService extends Service {
     // 不配置则继承父进程环境，.env 的全局代理变量自然生效。
     const cliEnv = botCliEnvironment(botConfig);
     const handleCliEvent = (event: CliEvent) => {
+      if (
+        event.type === "result" &&
+        event.stats &&
+        !currentExecutionStatsObserved
+      ) {
+        currentExecutionStatsObserved = true;
+        observedStats = accumulateCliStats(observedStats, event.stats);
+      }
+      if (event.type === "tool_start" || event.type === "tool_call") {
+        observedToolNames.set(event.toolUseId, event.toolName);
+        if (!observedToolIds.has(event.toolUseId)) {
+          observedToolIds.add(event.toolUseId);
+          const metrics = observedToolMetrics.get(event.toolName) ?? {
+            invocations: 0,
+            failures: 0,
+          };
+          metrics.invocations += 1;
+          observedToolMetrics.set(event.toolName, metrics);
+        }
+      }
+      if (
+        event.type === "tool_end" &&
+        event.failed &&
+        !observedFailedToolIds.has(event.toolUseId)
+      ) {
+        observedFailedToolIds.add(event.toolUseId);
+        const toolName = observedToolNames.get(event.toolUseId);
+        if (toolName) {
+          const metrics = observedToolMetrics.get(toolName);
+          if (metrics) metrics.failures += 1;
+        }
+      }
       if (event.type === "session") {
         // 会话 ID 先于最终结果到达；立即写入，任务被停止或进程重启后仍可 resume。
         void rememberCliSession(event.sessionId).catch((error) => {
@@ -299,6 +411,33 @@ export class TasksService extends Service {
       );
       renderProgress(snapshot);
     };
+    if (!isCompacting) {
+      // 开始事件只提供旁路观测，不得因可选监听器异常或耗时而阻断 CLI 主流程。
+      void this.ctx
+        .parallel("task/started", {
+          botConfig,
+          session: this.ctx.sessions.manager.get(session.id) ?? session,
+          taskId,
+          traceId: activeRun.runId,
+          startedAt: taskStartTime,
+        })
+        .catch((error) => {
+          const detail =
+            error instanceof AggregateError
+              ? error.errors
+                  .map((item) =>
+                    item instanceof Error ? item.message : String(item),
+                  )
+                  .join("; ")
+              : error instanceof Error
+                ? error.message
+                : String(error);
+          console.error(
+            "[任务] 广播开始事件失败:",
+            detail,
+          );
+        });
+    }
     const runCorrection = async (correctionPrompt: string) => {
       const correctionSession =
         this.ctx.sessions.manager.get(session.id) ?? session;
@@ -309,6 +448,7 @@ export class TasksService extends Service {
         teamContext ?? "",
         this.ctx.config.defaultProductDeliveryMode,
       );
+      beginCliExecution();
       const corrected = await this.runCliTask(
         cliAdapter,
         prompt,
@@ -317,9 +457,13 @@ export class TasksService extends Service {
         cliEnv,
         handleCliEvent,
       );
+      if (corrected.stats && !currentExecutionStatsObserved) {
+        observedStats = accumulateCliStats(observedStats, corrected.stats);
+      }
       if (corrected.sessionId) await rememberCliSession(corrected.sessionId);
       return corrected;
     };
+    beginCliExecution();
     const execution = isCompacting
       ? this.ctx.cli
           .compact({
@@ -343,7 +487,12 @@ export class TasksService extends Service {
           run.signal,
           cliEnv,
           handleCliEvent,
-        );
+        ).then((result) => {
+          if (result.stats && !currentExecutionStatsObserved) {
+            observedStats = accumulateCliStats(observedStats, result.stats);
+          }
+          return result;
+        });
 
     void execution
       .then(async (result) => {
@@ -368,6 +517,11 @@ export class TasksService extends Service {
           senderRuntime,
           taskId,
           suppressHandoff,
+          durationMs: Date.now() - taskStartTime,
+          stats: observedStats ?? result.stats,
+          toolCalls: result.toolCalls,
+          toolMetrics: snapshotToolMetrics(),
+          traceId: activeRun.runId,
         };
         if (!isCompacting && result.stats?.contextWindowTokens) {
           this.contextWindows.set(session.id, result.stats.contextWindowTokens);
@@ -395,6 +549,8 @@ export class TasksService extends Service {
               suppressHandoff:
                 outcome.suppressHandoff ?? resultPayload.suppressHandoff,
             });
+          } else {
+            await this.ctx.parallel("task/paused", resultPayload);
           }
           console.log(
             `[CLI] ${cliAdapter.id} 已交给应用工具处理 session_id=${toolResult.sessionId ?? "(无)"}`,
@@ -463,6 +619,10 @@ export class TasksService extends Service {
           ...initialTaskResultPayload,
           session: this.ctx.sessions.manager.get(session.id) ?? session,
           answer: completedResult.answer,
+          stats: observedStats ?? completedResult.stats ?? initialTaskResultPayload.stats,
+          toolCalls: completedResult.toolCalls ?? initialTaskResultPayload.toolCalls,
+          toolMetrics: snapshotToolMetrics(),
+          durationMs: Date.now() - taskStartTime,
         };
         if (!isCompacting && completedResult.toolCalls?.length) {
           const toolPayload: TaskToolCallsPayload = {
@@ -498,7 +658,7 @@ export class TasksService extends Service {
                 detail: "执行完成",
                 progress: progress.snapshot(),
                 answer: completedResult.answer,
-                stats: completedResult.stats,
+                stats: taskResultPayload.stats,
               }),
         );
         if (
@@ -603,6 +763,10 @@ export class TasksService extends Service {
             suppressHandoff,
             senderOpenId,
             error: errorMessage,
+            durationMs: Date.now() - taskStartTime,
+            stats: observedStats,
+            toolMetrics: snapshotToolMetrics(),
+            traceId: activeRun.runId,
           });
         }
       })

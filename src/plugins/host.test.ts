@@ -23,6 +23,7 @@ import type {
 } from "../im/lark.js";
 import type {
   CliAdapter,
+  CliEvent,
   CliRunResult,
   CliSessionSummary,
 } from "../cli/types.js";
@@ -49,7 +50,7 @@ import * as teamPlugin from "./team.js";
 import * as workspacesPlugin from "./workspaces.js";
 import { waitForAllActive } from "./loader.js";
 import { retryToken } from "../core/orchestration.js";
-import type { BotRuntime } from "./types.js";
+import type { BotRuntime, TaskResultPayload } from "./types.js";
 
 const tempDirs: string[] = [];
 test.after(async () => {
@@ -116,6 +117,7 @@ class FakeCliService extends Service {
   compactOptions: unknown;
   private resolver: ((result: CliRunResult) => void) | undefined;
   private nextError: unknown;
+  private nextEvents: CliEvent[] = [];
   /** 全部挂起的 run 的解析器：并行测试中同一 bot 多个任务同时挂起时批量完成。 */
   private readonly resolvers: Array<(result: CliRunResult) => void> = [];
   private compactResolver:
@@ -147,6 +149,7 @@ class FakeCliService extends Service {
     if (this.nextError !== undefined) {
       const error = this.nextError;
       this.nextError = undefined;
+      for (const event of this.nextEvents.splice(0)) options.onEvent?.(event);
       return Promise.reject(error);
     }
     return new Promise((resolve) => {
@@ -165,8 +168,9 @@ class FakeCliService extends Service {
     this.resolver?.(result);
   }
 
-  failNext(error: unknown): void {
+  failNext(error: unknown, events: CliEvent[] = []): void {
     this.nextError = error;
+    this.nextEvents = events;
   }
 
   /** 一次性完成全部挂起的 run（同一 bot 并行多任务时使用），让任务收尾清理定时器。 */
@@ -694,6 +698,14 @@ test("/team 仅把真实 connected 长连接标为在线", async () => {
 
 test("普通任务走完卡片、执行与结果通知的生命周期", async () => {
   const host = await createHost();
+  let startedTraceId: string | undefined;
+  let resultPayload: TaskResultPayload | undefined;
+  host.root.on("task/started", (payload) => {
+    startedTraceId = payload.traceId;
+  });
+  host.root.on("task/result", (payload) => {
+    resultPayload = payload;
+  });
   // 群聊消息保留团队上下文（isDirect=false）。
   const message = incomingMessage({
     text: "写一个 hello world",
@@ -705,12 +717,34 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
     host.cli.captured?.prompt.includes("你所在的 Agent 团队"),
     "team 插件应通过 prompt-context provider 注入团队上下文",
   );
+  assert.ok(startedTraceId, "CLI 启动前应广播 task/started");
 
   // 任务卡片已发出，且携带可停止的按钮。
   assert.ok(
     host.calls.cards.some((card) => cardSummaryContains(card, "执行中")),
   );
 
+  host.cli.captured?.onEvent?.({
+    type: "tool_start",
+    toolUseId: "tool-failed",
+    toolName: "shell",
+    label: "运行命令",
+  });
+  host.cli.captured?.onEvent?.({
+    type: "tool_end",
+    toolUseId: "tool-failed",
+    failed: true,
+  });
+  host.cli.captured?.onEvent?.({
+    type: "tool_end",
+    toolUseId: "tool-failed",
+    failed: true,
+  });
+  host.cli.captured?.onEvent?.({
+    type: "result",
+    answer: "",
+    stats: { totalTokens: 42 },
+  });
   host.cli.finish({ answer: "完成！", sessionId: "sess-1" });
   await waitFor(() =>
     host.calls.mentions.some((text) => text.includes("任务已完成")),
@@ -718,6 +752,63 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   assert.ok(
     host.calls.updates.some((card) => cardSummaryContains(card, "已完成")),
   );
+  assert.equal(resultPayload?.traceId, startedTraceId);
+  assert.equal(resultPayload?.stats?.totalTokens, 42);
+  assert.equal(resultPayload?.toolMetrics?.shell.failures, 1);
+});
+
+test("task/started 可选监听器异常不阻断任务执行", async () => {
+  const host = await createHost();
+  host.root.on("task/started", () => {
+    throw new Error("模拟观测监听器失败");
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "继续执行主任务" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+
+  host.cli.finish({ answer: "执行完成", sessionId: "sess-started-error" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+  assert.ok(
+    host.calls.updates.some((card) => cardSummaryContains(card, "已完成")),
+  );
+});
+
+test("任务失败时保留失败前已观察到的 Token 与工具失败指标", async () => {
+  const host = await createHost();
+  let failedPayload: TaskResultPayload | undefined;
+  host.root.on("task/failed", (payload) => {
+    failedPayload = payload;
+  });
+  host.cli.failNext(new Error("模拟 CLI 失败"), [
+    {
+      type: "tool_start",
+      toolUseId: "tool-1",
+      toolName: "shell",
+      label: "运行命令",
+    },
+    { type: "tool_end", toolUseId: "tool-1", failed: true },
+    { type: "result", answer: "", stats: { totalTokens: 30, inputTokens: 30 } },
+  ]);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "执行失败任务" }),
+    host.bot,
+    baseBotConfig,
+  );
+  await waitFor(() => failedPayload !== undefined);
+
+  assert.equal(failedPayload?.stats?.totalTokens, 30);
+  assert.equal(failedPayload?.toolMetrics?.shell.invocations, 1);
+  assert.equal(failedPayload?.toolMetrics?.shell.failures, 1);
+  assert.ok(failedPayload?.traceId);
 });
 
 test("澄清工具逐题收集答案并续接原 CLI 会话", async () => {
@@ -983,6 +1074,10 @@ test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确
   await host.root.plugin(productSpecPlugin);
   await waitForAllActive(host.root);
   const runtimeConfig = host.root.config.bot("testbot")!;
+  let resultPayload: TaskResultPayload | undefined;
+  host.root.on("task/result", (payload) => {
+    resultPayload = payload;
+  });
 
   await host.root.parallel(
     "bot/message",
@@ -994,6 +1089,7 @@ test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确
   host.cli.finish({
     answer: "方案已经写好。",
     sessionId: "sess-product-correction",
+    stats: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
   });
   await waitFor(() => host.cli.captures.length === 2);
   assert.equal(host.cli.captures[1]?.sessionId, "sess-product-correction");
@@ -1002,6 +1098,7 @@ test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确
   host.cli.finish({
     answer: "已提交待确认方案。",
     sessionId: "sess-product-correction",
+    stats: { totalTokens: 50, inputTokens: 40, outputTokens: 10 },
     toolCalls: [{
       toolUseId: "tool-correction-spec",
       toolName: "request_spec_approval",
@@ -1021,6 +1118,9 @@ test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确
     "Correction123",
   ));
   assert.ok(host.calls.mentions.some((text) => text.includes("产品方案已生成")));
+  assert.equal(resultPayload?.stats?.totalTokens, 150);
+  assert.equal(resultPayload?.stats?.inputTokens, 120);
+  assert.equal(resultPayload?.stats?.outputTokens, 30);
 });
 
 test("产品方案只有其他工具调用时仍强制补交 request_spec_approval", async () => {
@@ -1578,6 +1678,10 @@ test("同话题文字补充使旧澄清卡失效并继续同一会话", async ()
 
 test("卡片停止按钮只能由任务发起人触发，并写入取消终态", async () => {
   const host = await createHost();
+  let cancelledEvents = 0;
+  host.root.on("task/cancelled", () => {
+    cancelledEvents += 1;
+  });
   const message = incomingMessage({
     text: "写一个 hello",
     senderOpenId: "ou_owner",
@@ -1609,6 +1713,7 @@ test("卡片停止按钮只能由任务发起人触发，并写入取消终态",
   await waitFor(() =>
     host.calls.updates.some((card) => cardSummaryContains(card, "已取消")),
   );
+  assert.equal(cancelledEvents, 1);
 });
 
 test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () => {

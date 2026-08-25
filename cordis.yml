@@ -33,6 +33,7 @@ plugins:
   - name: cards
   - name: commands
   - name: commands/help
+  - name: commands/metrics
   # /login：为当前会话引擎（或 "/<engine> login"）发起登录卡片；依赖 auth 插件。
   - name: commands/login
   - name: commands/new
@@ -67,6 +68,12 @@ plugins:
   # 编排面板动作：认领「重试」按钮，一键重新派发失败子任务（带鉴权/去重/次数上限）。
   # 移除本条目即下线一键重试——面板不渲染重试按钮，保留手动「继续执行」。
   - name: orchestration/actions
+  # 可观测性与链路追踪：收集 Span、Token 消耗、时延分位数与指标大盘；移除即可整体下线。
+  - name: observability
+    config:
+      maxTracesInMemory: 500
+      exportToFile: false
+      traceLogPath: "data/traces.jsonl"
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification

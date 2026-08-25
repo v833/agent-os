@@ -21,6 +21,7 @@ import * as closeCommand from "./commands/close.js";
 import * as compactCommand from "./commands/compact.js";
 import * as helpCommand from "./commands/help.js";
 import * as loginCommand from "./commands/login.js";
+import * as metricsCommand from "./commands/metrics.js";
 import * as newCommand from "./commands/new.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
@@ -34,6 +35,7 @@ import * as dimagentEngine from "./engines/dimagent.js";
 import * as agyEngine from "./engines/agy.js";
 import * as acpEngine from "./engines/acp.js";
 import * as larkPlugin from "./lark.js";
+import * as observabilityPlugin from "./observability.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
@@ -65,6 +67,7 @@ const pluginRegistry: Record<string, Plugin> = {
   commands: commandsPlugin,
   "commands/help": helpCommand,
   "commands/login": loginCommand,
+  "commands/metrics": metricsCommand,
   "commands/new": newCommand,
   "commands/resume": resumeCommand,
   "commands/compact": compactCommand,
@@ -83,6 +86,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "orchestration/live-panel": orchestrationLivePanel,
   "product-spec": productSpecPlugin,
   "product-comments": productCommentsPlugin,
+  observability: observabilityPlugin,
   tasks: tasksPlugin,
   team: teamPlugin,
   schedule: schedulePlugin,

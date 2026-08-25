@@ -12,7 +12,7 @@ import type { CliRequest, SlashCommand } from "../core/command-parser.js";
 import type { OrchestrationRun } from "../core/orchestration.js";
 import type { QAResult } from "../core/qa-result.js";
 import type { Session } from "../core/session-manager.js";
-import type { CliAdapter, CliRunResult } from "../cli/types.js";
+import type { CliAdapter, CliRunResult, CliRunStats } from "../cli/types.js";
 import type { CardJson } from "../im/card.js";
 import type { MessageResource } from "../im/message-parser.js";
 import type {
@@ -41,6 +41,7 @@ import type { WorkspacesService } from "./workspaces.js";
 import type { ClarificationService } from "./clarification.js";
 import type { ProductSpecService } from "./product-spec.js";
 import type { ProductCommentsService } from "./product-comments.js";
+import type { ObservabilityService } from "./observability.js";
 
 declare module "cordis" {
   interface Context {
@@ -78,6 +79,8 @@ declare module "cordis" {
     productSpec: ProductSpecService;
     /** 云文档评论评审：恢复产品会话并回写评论结果。 */
     productComments: ProductCommentsService;
+    /** 可观测性与链路追踪：收集全链路 Span、Token 成本、时延与多维指标。 */
+    observability: ObservabilityService;
   }
 
   interface Events {
@@ -116,6 +119,8 @@ declare module "cordis" {
     "task/message"(
       payload: TaskMessagePayload,
     ): Promise<TaskMessageOutcome | undefined>;
+    /** 一轮普通任务已进入实际执行阶段；可观测性插件据此建立运行中 Trace。 */
+    "task/started"(payload: TaskStartedPayload): void | Promise<void>;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
     /**
@@ -123,6 +128,10 @@ declare module "cordis" {
      * 与 task/result 语义区分（后者只在成功时广播），编排等插件据此标记子任务失败。
      */
     "task/failed"(payload: TaskResultPayload): void | Promise<void>;
+    /** 一轮 CLI 已结束但业务流程等待用户输入；可观测性据此关闭运行中 Trace。 */
+    "task/paused"(payload: TaskResultPayload): void | Promise<void>;
+    /** 一轮任务由发起人主动停止；与失败事件分开，避免误触发认证或编排失败处理。 */
+    "task/cancelled"(payload: TaskResultPayload): void | Promise<void>;
     /** QA Gate 已解析、校验并绑定实际 revision 的结构化审查结论。 */
     "qa/result"(payload: QAResultPayload): void | Promise<void>;
     /** 编排运行状态更新广播；orchestration 服务发出，live-panel 插件消费并节流刷新面板卡片。 */
@@ -241,6 +250,21 @@ export interface TaskCompletionCheckOutcome {
   result: CliRunResult;
 }
 
+/** 一轮任务中按工具名聚合的调用与失败次数。 */
+export type TaskToolMetrics = Record<
+  string,
+  { invocations: number; failures: number }
+>;
+
+/** 一轮普通任务开始时广播的稳定链路上下文。 */
+export interface TaskStartedPayload {
+  botConfig: BotConfig;
+  session: Session;
+  taskId?: string;
+  traceId: string;
+  startedAt: number;
+}
+
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */
 export interface TaskResultPayload {
   bot: Bot;
@@ -258,6 +282,16 @@ export interface TaskResultPayload {
   senderOpenId?: string;
   /** 失败任务的错误摘要（仅 task/failed 携带），auth 插件据此识别认证需求。 */
   error?: string;
+  /** CLI 执行统计（Token 消耗、耗时、缓存等），供可观测性插件与下游使用。 */
+  stats?: CliRunStats;
+  /** 任务执行实际耗时（毫秒）。 */
+  durationMs?: number;
+  /** 本轮触发的工具调用列表。 */
+  toolCalls?: CliRunResult["toolCalls"];
+  /** 包含失败调用在内的工具指标；由 tasks 从流式事件实时聚合。 */
+  toolMetrics?: TaskToolMetrics;
+  /** 关联的链路追踪 ID。 */
+  traceId?: string;
 }
 
 /** QA Gate 从普通 CLI 文本中解析出的结构化、可路由结论。 */

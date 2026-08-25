@@ -18,6 +18,7 @@ const HELP_TEXT = [
   "/schedule list 查看定时任务",
   "/schedule remove <id> 删除定时任务",
   "/login 为当前引擎发起登录（也可用 /<引擎> login）",
+  "/metrics 查看当前 Bot 与会话范围内的可观测性大盘",
   "/help 查看命令",
   "/claude <任务> 新话题使用 Claude Code",
   "/codex <任务> 新话题使用 Codex",
