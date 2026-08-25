@@ -29,6 +29,14 @@ plugins:
             configOptions:
               permission: full-access
               mode: agent
+        # Claude Code ACP：官方 Claude Agent SDK 适配器（@agentclientprotocol/claude-agent-acp），
+        # 本地 node 入口避免 Windows 下 spawn npx(.cmd) 的问题；认证复用 Claude 登录态或 ANTHROPIC_API_KEY。
+        - id: claude
+          command: node
+          args: ["node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js"]
+          displayName: Claude (ACP)
+          resumeMethod: load
+          acpMcpTransports: [http, sse]
   - name: lark
   - name: cards
   - name: commands
