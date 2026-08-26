@@ -1,6 +1,6 @@
 /**
  * collaboration 协作服务插件：管理 bot 间交接单与轮次去重，
- * 并监听 task/result 事件自动派发下一轮审查或回传来源 bot。
+ * 并监听 task/result 事件把普通成员结果交回指定编排 bot。
  * 协作是可选插件：移除后任务编排仍正常，只是不再自动交接。
  */
 import { Service, type Context } from "cordis";
@@ -26,10 +26,15 @@ export interface SendDispatchOptions {
   replyToMessageId: string;
   targetBotId: string;
   taskId: string;
+  ownerOpenId: string;
+  ownerUnionId?: string;
+  reportToBotId: string;
+  objective: string;
+  instruction: string;
+  expectedOutput?: string;
   round: number;
   maxRounds: number;
   workspaceDir: string;
-  prompt: string;
   /** 存在时交由 qa-gate 插件处理，普通 collaboration 不按轮次自动回传。 */
   qaReview?: QAReviewContext;
 }
@@ -86,16 +91,32 @@ export class CollaborationService extends Service {
     if (!target) {
       throw new Error(`协作 bot 尚未就绪: ${options.targetBotId}`);
     }
+    const reportTo = this.ctx.lark.bot(options.reportToBotId);
+    if (!reportTo) {
+      throw new Error(`结果接收 bot 尚未就绪: ${options.reportToBotId}`);
+    }
+    if (options.round < 1 || options.round > options.maxRounds) {
+      throw new Error(
+        `协作轮次非法: ${options.round}/${options.maxRounds}`,
+      );
+    }
 
     const collaboration: CollaborationMessage = {
       dispatchId: randomUUID().replaceAll("-", "").slice(0, 12),
       taskId: options.taskId,
+      ownerOpenId: options.ownerOpenId,
+      ...(options.ownerUnionId ? { ownerUnionId: options.ownerUnionId } : {}),
       fromBotId: options.senderConfig.id,
       toBotId: options.targetBotId,
+      reportToBotId: options.reportToBotId,
+      objective: options.objective,
+      instruction: options.instruction,
+      ...(options.expectedOutput
+        ? { expectedOutput: options.expectedOutput }
+        : {}),
       round: options.round,
       maxRounds: options.maxRounds,
       workspaceDir: options.workspaceDir,
-      prompt: options.prompt,
       ...(options.qaReview ? { qaReview: options.qaReview } : {}),
     };
     this.inbox.register(collaboration);
@@ -108,8 +129,11 @@ export class CollaborationService extends Service {
         this.ctx.cards.collaboration({
           senderName,
           targetName: target.identity.name,
+          reportToName: reportTo.identity.name,
           workspaceName: basename(options.workspaceDir),
-          prompt: options.prompt,
+          objective: options.objective,
+          instruction: options.instruction,
+          expectedOutput: options.expectedOutput,
           round: options.round,
           maxRounds: options.maxRounds,
         }),
@@ -123,8 +147,8 @@ export class CollaborationService extends Service {
         cardMessageId,
         target.identity,
         options.round === 1
-          ? `新的代码审查任务（任务编号：${collaboration.dispatchId}），请查看上方卡片。`
-          : `审查反馈已经返回（任务编号：${collaboration.dispatchId}），请查看上方卡片。`,
+          ? `新的协作任务：${options.objective}（任务编号：${collaboration.dispatchId}），请查看上方卡片。`
+          : `协作结果已经返回（任务编号：${collaboration.dispatchId}），请查看上方卡片。`,
         true,
       );
       if (!mentionMessageId) {
@@ -141,7 +165,8 @@ export class CollaborationService extends Service {
   }
 
   /**
-   * 普通协作完成后的决策：未达轮次上限则回传来源 bot，否则通知来源；
+   * 普通协作完成后的决策：成员结果回到固定编排 bot；编排 bot 没有继续派发时
+   * 通知真人发起人。达到轮次上限时直接收口，避免团队成员之间循环弹回；
    * QA reviewBy 交接由可选 qa-gate 插件独占，避免两个监听器重复派发。
    */
   async handleTaskResult(payload: TaskResultPayload): Promise<void> {
@@ -154,28 +179,45 @@ export class CollaborationService extends Service {
       replyToMessageId,
       hasThread,
       collaboration,
-      senderRuntime,
     } = payload;
     try {
       if (collaboration?.qaReview || (!collaboration && botConfig.reviewBy)) return;
-      if (collaboration && collaboration.round < collaboration.maxRounds) {
+      if (!collaboration) return;
+      if (collaboration.suppressAutomaticHandoff) return;
+      if (collaboration.reportToBotId === botConfig.id) {
+        await bot.sendResultNotification({
+          replyToMessageId,
+          target: { openId: collaboration.ownerOpenId, name: "" },
+          text: `协作任务“${collaboration.objective}”已经完成，请查看上方结果。`,
+          replyInThread: hasThread,
+        });
+      } else if (collaboration.round >= collaboration.maxRounds) {
+        await bot.sendResultNotification({
+          replyToMessageId,
+          target: { openId: collaboration.ownerOpenId, name: "" },
+          text: `协作任务“${collaboration.objective}”已达到 ${collaboration.maxRounds} 轮上限，请查看上方结果并决定下一步。`,
+          replyInThread: hasThread,
+        });
+      } else {
         await this.sendDispatch({
           senderConfig: botConfig,
           senderBot: bot,
           replyToMessageId,
-          targetBotId: collaboration.fromBotId,
+          targetBotId: collaboration.reportToBotId,
           taskId: collaboration.taskId,
+          ownerOpenId: collaboration.ownerOpenId,
+          ownerUnionId: collaboration.ownerUnionId,
+          reportToBotId: collaboration.reportToBotId,
+          objective: collaboration.objective,
+          instruction: [
+            `${this.ctx.lark.bot(botConfig.id)?.identity.name ?? botConfig.id} 已完成当前协作任务，下面是它的结果：`,
+            answer || "任务已完成，请检查当前工作目录。",
+            "请基于这份结果继续组织后续工作：仍需其他成员参与时使用 dispatch_task 继续派发；已经可以交付时，直接向用户汇总结论。",
+          ].join("\n\n"),
+          expectedOutput: "继续推进原任务，或在已经完成时向用户给出最终结论。",
           round: collaboration.round + 1,
           maxRounds: collaboration.maxRounds,
           workspaceDir: session.workspaceDir,
-          prompt: answer || "任务已完成，请检查当前工作目录。",
-        });
-      } else if (collaboration && senderRuntime) {
-        await bot.sendResultNotification({
-          replyToMessageId,
-          target: senderRuntime.identity,
-          text: "本轮协作已完成，请查看上方结果。",
-          replyInThread: hasThread,
         });
       }
     } catch (error) {

@@ -7,13 +7,15 @@ import { resolve } from "node:path";
 import { ensureProductSpecSubmission } from "../app/product-spec-submission.js";
 import {
   assertProductSpecDocuments,
+  collaborationOrigin,
   findProductSpecRequest,
   isProductSpecOwner,
   productSpecDocumentRevision,
   ProductSpecFlowStore,
 } from "../core/product-spec.js";
+import type { BotConfig } from "../core/bot-registry.js";
 import { JsonProductSpecFlowStore } from "../core/product-spec-store.js";
-import type { CardAction, CardActionResponse } from "../im/lark.js";
+import type { Bot, CardAction, CardActionResponse } from "../im/lark.js";
 import { startLoopbackMcpHttpServer } from "../mcp/loopback-http-server.js";
 import { registerProductSpecTool } from "../mcp/product-spec-tools.js";
 import { productSpecToolServer } from "./product-spec-tool.js";
@@ -58,8 +60,13 @@ export class ProductSpecService extends Service {
       taskId: payload.taskId ?? payload.session.id,
       botId: payload.botConfig.id,
       sessionId: payload.session.id,
-      ownerOpenId: payload.senderOpenId,
-      ownerUnionId: payload.senderUnionId,
+      ownerOpenId:
+        payload.collaboration?.ownerOpenId ?? payload.senderOpenId,
+      ownerUnionId:
+        payload.collaboration?.ownerUnionId ?? payload.senderUnionId,
+      collaboration: payload.collaboration
+        ? collaborationOrigin(payload.collaboration)
+        : undefined,
       cardMessageId: payload.cardMessageId,
       workspaceDir: payload.session.workspaceDir,
       request,
@@ -98,7 +105,8 @@ export class ProductSpecService extends Service {
 
   async handleCardAction(
     action: CardAction,
-    botId: string,
+    bot: Bot,
+    botConfig: BotConfig,
   ): Promise<CardActionResponse | undefined> {
     if (action.value.action !== "approve_product_spec") return undefined;
     const flowToken =
@@ -106,7 +114,7 @@ export class ProductSpecService extends Service {
     const flow = this.flows.get(flowToken);
     if (
       !flow ||
-      flow.botId !== botId ||
+      flow.botId !== botConfig.id ||
       !action.messageId ||
       (flow.cardMessageId && flow.cardMessageId !== action.messageId)
     ) {
@@ -143,6 +151,12 @@ export class ProductSpecService extends Service {
     if (!approved) {
       return { toast: { type: "warning", content: "方案状态已经更新。" } };
     }
+    await this.ctx.parallel("product-spec/approved", {
+      flow: approved,
+      bot,
+      botConfig,
+      replyToMessageId: action.messageId,
+    });
     return {
       toast: { type: "success", content: "产品方案已确认。" },
       card: {
@@ -177,8 +191,8 @@ export async function apply(ctx: Context, config: Config = {}) {
   ctx.effect(() => () => httpServer.close(), "product-spec MCP HTTP");
   ctx.on("task/completion-check", (payload) => service.checkCompletion(payload));
   ctx.on("task/tool-calls", (payload) => service.handleToolCalls(payload));
-  ctx.on("bot/card-action", (action, _bot, botConfig) =>
-    service.handleCardAction(action, botConfig.id),
+  ctx.on("bot/card-action", (action, bot, botConfig) =>
+    service.handleCardAction(action, bot, botConfig),
   );
   return unregister;
 }

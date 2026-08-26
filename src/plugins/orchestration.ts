@@ -475,15 +475,21 @@ export class OrchestrationService extends Service {
       // 交接 taskId 绑定 run 实例标识：重试复用同一 taskId（新 dispatchId），跨进程重启后
       // 旧 taskId 无法命中新 run。
       taskId: subTaskTaskId(run.instanceId, sub.id),
+      ownerOpenId: run.ownerOpenId,
       fromBotId,
       toBotId: sub.targetBotId,
+      reportToBotId: fromBotId,
+      objective: `编排 ${run.runId} · ${sub.id}`,
+      instruction: sub.prompt,
+      expectedOutput: "完成子任务并返回可供编排汇总的结果。",
       round: 1,
       maxRounds: 1,
       workspaceDir:
         sub.workspaceDir ??
         this.ctx.config.bot(sub.targetBotId)?.workspaceDir ??
         process.cwd(),
-      prompt: sub.prompt,
+      // 编排服务自己监听 task/result|failed 汇总叶子结果，协作插件无需再次回传或通知真人。
+      suppressAutomaticHandoff: true,
     };
     // 复用协作交接单：router 对 bot@bot 消息只认已注册的交接单，注册失败会丢消息。
     this.ctx.collaboration.register(collaboration);

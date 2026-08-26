@@ -115,15 +115,21 @@ Copy-Item config/bots.example.json config/bots.json
 
 个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与开发 bot 的自动代码审查链。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
 
-`reviewBy` 填另一台已启用 bot 的 ID。开发 bot 的普通任务成功后，会在原话题发送审查卡片，再发送一条真正提及审查 bot 的富文本消息；审查 bot 会继承来源 bot 的工作目录并建立独立 CLI 会话。审查完成后，最终回答会登记为下一项协作任务，沿用同一个 `taskId` 并把 `round` 加一，再自动交回来源 bot。达到 `collaborationMaxRounds` 后只发送完成通知，不再继续派活，避免两个 bot 无限循环。目标不存在、未启用或指向自己时，程序会在启动阶段拒绝配置。
+`reviewBy` 只用于可选的结构化 QA Gate：开发 bot 成功后创建隔离快照并交给指定 QA，后续由 `qa-gate` 根据 `QAResult` 决定通过、返工或升级。普通团队分工不读取 `reviewBy`，统一由 Team Leader 调用 `dispatch_task`。
 
 在飞书群中 @任意成员发送 `/team`，会返回一张团队卡片，展示每位成员的职责、默认执行引擎、项目 Skill 与连接状态。
+
+## 团队派发工作流
+
+`dispatch-task` 插件向所有执行引擎动态注册 `dispatch_task` MCP 工具，但运行时只允许 `teamLeader` 调用。工具参数包含目标成员 `targetBotId`、协作目标 `objective`、完整要求 `instruction` 和可选期望产出 `expectedOutput`。校验通过后，`ctx.collaboration` 会登记一次性交接单、回复通用协作卡片并发送真正 `@` 目标 bot 的富文本消息；移除 `cordis.yml` 中的 `dispatch-task` 条目即可整体下线该入口。
+
+交接单保存真人发起人、固定编排者 `reportToBotId` 和轮次信息。普通成员完成后，结果始终回到编排者，由编排者继续调用 `dispatch_task` 或向真人收口，不会在成员之间无条件来回弹。非 Team Leader、自派发、未知成员或超过 `collaborationMaxRounds` 的调用都会被拒绝。
 
 ## 产品文档工作流
 
 产品经理使用 `grill-me` 完成澄清，再按全局 `defaultProductDeliveryMode` 选择唯一的方案交付方式：`local` 继续使用 `to-spec` 与 `to-tickets` 生成 `.scratch/<feature>/spec.md` 和 `issues`；`lark-doc` 使用用户级 `lark-doc` Skill 通过 `lark-cli docs +create --profile <botId> --as bot` 生成或更新飞书云文档。用户在单次任务中明确选择的方式会覆盖全局默认值，但不会同时维护两份方案。
 
-两种方式都通过 `request_spec_approval` 提交。`product-spec` 插件认领启用了 `to-spec` 或 `lark-doc` 的 bot：本地模式会校验 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件并记录内容指纹；飞书模式校验 `documentUrl` 使用 HTTPS、可信飞书系域名及 `/docx/` 或 `/wiki/` 路径，不读取本地文件。旧版本只提交 `specPath` 与 `ticketsPath` 的本地调用会自动按 `local` 兼容处理。随后任务卡只展示选中的唯一产物和“确认产品方案”按钮；只有任务发起人确认后才记录产品阶段就绪，本阶段不会自动派给开发者。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线这条能力。
+两种方式都通过 `request_spec_approval` 提交。`product-spec` 插件认领启用了 `to-spec` 或 `lark-doc` 的 bot：本地模式会校验 Spec 是文件、Tickets 目录至少包含一个 Markdown 文件并记录内容指纹；飞书模式校验 `documentUrl` 使用 HTTPS、可信飞书系域名及 `/docx/` 路径，不读取本地文件。旧版本只提交 `specPath` 与 `ticketsPath` 的本地调用会自动按 `local` 兼容处理。随后任务卡只展示选中的唯一产物和“确认产品方案”按钮；只有贯穿协作链路的真人发起人可以确认。若方案来自团队交接且同时装配了 `dispatch-task`，确认事件会自动回到原 `reportToBotId`，由 Team Leader 决定是否再用 `dispatch_task` 交给职责合适的成员；直接发给产品经理的任务仍只更新确认状态。移除 `cordis.yml` 中的 `product-spec` 条目即可整体下线产品确认，移除 `dispatch-task` 则只下线自动团队回传。
 
 ## lark-cli 多应用（profile）与授权流程
 
@@ -433,7 +439,7 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 
 终端应持续出现 `[进度]`，飞书卡片应每秒最多更新一次，完成后答案出现在绿色卡片正文。同一话题继续追问仍会续接原 CLI 会话。再发送一个长任务并点击“停止任务”，发起人会收到成功 Toast，卡片随后变灰，同一话题仍可继续提问；其他群成员点击时只会收到权限警告。
 
-子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认不设执行时限；调用方显式传入 `timeoutMs` 时才会自动超时，或由 `/close` 取消并终止 CLI 及其整棵子进程树。
+子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认不设执行时限；需要限制时可在 `.env` 中用 `CLI_TIMEOUT_MS` 统一配置，按引擎的 `<ENGINE_ID>_TIMEOUT_MS` 优先（例如 `CLAUDE_TIMEOUT_MS`、`CODEX_TIMEOUT_MS`）。显式超时或 `/close` 都会终止 CLI 及其整棵子进程树。
 
 Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 参数。首次 `codex exec` 使用 `--sandbox danger-full-access`；`codex exec resume` 使用 `--dangerously-bypass-approvals-and-sandbox`，因为续聊子命令不接受 `--sandbox`。Codex 返回 `stream disconnected before completion: Upstream request failed` 时，Runner 会把它视为瞬时流式断开，最多自动重试 5 次，依次等待 1 秒、1.5 秒、2 秒、2.5 秒、3 秒；已经建立 CLI 会话时优先使用续聊参数，没有会话 ID 时重新发起同一任务。Claude、认证、权限、会话失效和其他普通错误不会自动重试；用户在等待期间发送 `/close` 也会立即取消重试。
 
@@ -469,7 +475,7 @@ CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下�
 
 1. 开发 bot 更新原任务卡片为成功状态。
 2. `workspaces` 插件为 Developer 当前工作树创建隔离快照；revision 同时覆盖 Git HEAD、dirty diff 和未跟踪文件内容。
-3. 开发 bot 回复一张“代码审查已发起”卡片，再回复一条带任务编号的 `post` 消息，真实 `@` 审查 bot。
+3. 开发 bot 回复一张“协作任务已派发”卡片，再回复一条带任务编号的 `post` 消息，真实 `@` 审查 bot。
 4. 只有被提及且匹配任务编号的目标 bot 会领取交接单；领取后立即删除，重复事件不会再次执行。
 5. QA 在隔离快照中执行审查，并输出结构化 `QAResult`；报告 revision 与实际快照不一致、快照被修改或协议无效时一律按 `blocked` 处理。
 6. `pass` 立即结束链路；`changes_requested` 只把结构化缺陷交回 Developer 的源工作区；`blocked` 只升级 `teamLeader`。`collaborationMaxRounds` 仅是异常循环的安全上限。
@@ -481,7 +487,7 @@ CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下�
 1. 将开发 bot 的 `reviewBy` 配为 `qa`；QA 的默认 `workspace` 可独立配置，reviewBy 审查会自动使用一次性隔离快照。
 2. 运行 `pnpm build`、`pnpm test` 后启动 `pnpm start`，日志应打印两台 bot 的 `name` 和 `open_id`。
 3. 在新话题发送 `@开发助手 阅读 TASK.md，完成里面的功能并运行验证。`。
-4. 开发任务完成后，应看到“代码审查已发起”卡片和一条新的 `@审查助手` 富文本消息。
+4. 开发任务完成后，应看到“协作任务已派发”卡片和一条新的 `@审查助手` 富文本消息。
 5. QA 返回 `pass` 后不再派发；返回 `changes_requested` 后只有 Developer 收到返工任务；返回 `blocked` 后只有 Team Leader 收到升级任务。
 6. QA 报告中的 revision 必须与交接提示完全相同；在 QA 执行期间修改快照，应被闸门拒绝并升级。
 7. 向非目标 bot 转发这条通知、删除任务编号或重复投递时，目标 bot 都不应启动 CLI。
@@ -651,7 +657,7 @@ Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给�
 
 - **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败，执行时继承编排 bot 的代理配置。
 - **派发方式（默认 `topic`，`same-topic` 为兼容降级）**：`cordis.yml` 的 `orchestration.dispatchMode` 决定。默认 `topic`：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在编排所在群内发一条独立根消息（独立话题）`@` 目标 bot——同一 bot 可跨话题并行承接多个子任务，两个子任务各走各的话题、互不阻塞。`same-topic` 为兼容降级：改在当前话题 `@` 目标 bot，此时同一 bot 的多个子任务会被整轮拒绝。`reviewBy` 交接链不受影响。
-- **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；面板通过 `/panel` 实时查看。
+- **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；编排交接单明确禁止 collaboration 自动回传，因此叶子结果不会逐项通知真人；面板通过 `/panel` 实时查看。
 - **工作区隔离**：每个子任务使用目标 bot 自己配置的 `workspace`；不同 bot 若指向同一可写目录，整轮拒绝并要求配置独立 worktree 或改为串行任务。
 - **生命周期边界**：子任务 ID 会 trim 后校验唯一性；派发接口未返回 `message_id` 会立即将子任务标记为失败并撤销交接单。同一派发尝试的重复 `task/result`/`task/failed` 事件只接受首个终态；run 默认等待结果 30 分钟，超时后未完成子任务自动标记为失败并清理交接单。
 - **失败重试**：面板卡片上为 `failed` 子任务渲染「重试」按钮（可选插件 `orchestration/actions` 提供，点击重新派发、带发起人鉴权/防重复/次数上限 `maxRetry`）；也可在话题中直接 `@` 目标 bot 发送“继续执行”让目标 bot 基于已保存的原始子任务重试。移除 `orchestration/actions` 即下线一键重试（无按钮），保留手动「继续执行」。

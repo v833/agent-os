@@ -7,6 +7,8 @@ import test from "node:test";
 import {
   CollaborationInbox,
   collaborationTurnKey,
+  DispatchTaskRequestSchema,
+  findDispatchTaskRequest,
   type CollaborationMessage,
 } from "./collaboration.js";
 
@@ -14,12 +16,16 @@ function message(overrides: Partial<CollaborationMessage> = {}): CollaborationMe
   return {
     dispatchId: "dispatch-1",
     taskId: "task-1",
+    ownerOpenId: "ou_owner",
     fromBotId: "developer",
     toBotId: "reviewer",
+    reportToBotId: "developer",
+    objective: "检查实现",
+    instruction: "检查刚完成的实现",
+    expectedOutput: "给出审查结论",
     round: 1,
     maxRounds: 2,
     workspaceDir: "C:\\projects\\agent-os",
-    prompt: "检查刚完成的实现",
     ...overrides,
   };
 }
@@ -52,5 +58,35 @@ test("协作轮次键由整项任务、轮次、目标 bot 和交接单组成", 
   assert.equal(
     collaborationTurnKey(message()),
     collaborationTurnKey(message()),
+  );
+});
+
+test("dispatch_task 提取最近一次派发请求并拒绝非法参数", () => {
+  const first = {
+    targetBotId: "product",
+    objective: "形成产品方案",
+    instruction: "澄清需求并提交待确认方案。",
+    expectedOutput: "一份可确认的产品方案。",
+  };
+  const latest = {
+    targetBotId: "developer",
+    objective: "实现已确认方案",
+    instruction: "按已确认方案完成实现和验证。",
+  };
+  assert.equal(DispatchTaskRequestSchema.safeParse(first).success, true);
+  assert.deepEqual(
+    findDispatchTaskRequest([
+      { toolName: "dispatch_task", input: first },
+      { toolName: "Bash", input: {} },
+      { toolName: "dispatch_task", input: { ...latest, objective: "" } },
+      { toolName: "dispatch_task", input: latest },
+    ]),
+    latest,
+  );
+  assert.throws(
+    () => findDispatchTaskRequest([
+      { toolName: "dispatch_task", input: { ...first, targetBotId: "CEO" } },
+    ]),
+    /dispatch_task 参数非法/,
   );
 });

@@ -2,6 +2,20 @@
  * 同话题协作交接模型：保存一次带轮次的 bot 到 bot 任务投递，并保证只有目标 bot
  * 能领取一次。它位于飞书消息与 CLI 执行之间，进程重启时不恢复内存中的待领取单。
  */
+import { z } from "zod";
+
+/** dispatch-task 插件注册到应用工具服务的稳定工具名。 */
+export const DISPATCH_TASK_TOOL_NAME = "dispatch_task";
+
+/** dispatch-task 插件暴露给 Team Leader 的结构化派发参数。 */
+export const DispatchTaskRequestSchema = z.object({
+  targetBotId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,31}$/),
+  objective: z.string().trim().min(1).max(200),
+  instruction: z.string().trim().min(1).max(2_000),
+  expectedOutput: z.string().trim().min(1).max(500).optional(),
+});
+
+export type DispatchTaskRequest = z.infer<typeof DispatchTaskRequestSchema>;
 
 /** QA 质量闸门附加到通用交接单的状态；缺省表示普通 bot 协作。 */
 export interface QAReviewContext {
@@ -22,16 +36,44 @@ export interface QAReviewContext {
 export interface CollaborationMessage {
   dispatchId: string;
   taskId: string;
+  /** 整条团队任务的真人发起人；后续所有 bot 交接必须原样继承。 */
+  ownerOpenId: string;
+  ownerUnionId?: string;
   fromBotId: string;
   toBotId: string;
+  /** 当前成员完成后应把结果交回的编排 bot。 */
+  reportToBotId: string;
+  objective: string;
+  instruction: string;
+  expectedOutput?: string;
   /** bot 之间的第几次交接，从 1 开始。 */
   round: number;
   /** 本次协作允许发生的最大交接次数。 */
   maxRounds: number;
   workspaceDir: string;
-  prompt: string;
+  /** 结果由其他插件独立消费时，禁止 collaboration 自动回传或通知真人。 */
+  suppressAutomaticHandoff?: boolean;
   /** 仅 QA Gate 插件使用；通用 collaboration 插件看到它时不做普通轮次回传。 */
   qaReview?: QAReviewContext;
+}
+
+/** 从一轮 CLI 工具历史中提取最近一次团队派发请求；非法调用必须显式失败。 */
+export function findDispatchTaskRequest(
+  toolCalls: Array<{ toolName: string; input: unknown }> | undefined,
+): DispatchTaskRequest | undefined {
+  for (let index = (toolCalls?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const call = toolCalls?.[index];
+    if (call?.toolName !== DISPATCH_TASK_TOOL_NAME) continue;
+    const parsed = DispatchTaskRequestSchema.safeParse(call.input);
+    if (!parsed.success) {
+      const detail = parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "input"}: ${issue.message}`)
+        .join("; ");
+      throw new Error(`dispatch_task 参数非法: ${detail}`);
+    }
+    return parsed.data;
+  }
+  return undefined;
 }
 
 /**

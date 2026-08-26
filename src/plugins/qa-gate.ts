@@ -113,6 +113,12 @@ export class QAGate {
         replyToMessageId: payload.replyToMessageId,
         targetBotId: reviewerBotId,
         taskId: randomUUID(),
+        ownerOpenId: payload.senderOpenId ?? payload.botConfig.id,
+        ownerUnionId: payload.senderUnionId,
+        reportToBotId: payload.botConfig.id,
+        objective: `QA 审查：${payload.requestedPrompt}`,
+        instruction: this.reviewPrompt(payload.requestedPrompt, snapshot.revision),
+        expectedOutput: "一个与固定 revision 绑定的 QAResult JSON 对象。",
         round: 1,
         maxRounds: payload.botConfig.collaborationMaxRounds,
         workspaceDir: snapshot.workspaceDir,
@@ -125,7 +131,6 @@ export class QAGate {
           snapshotWorkspaceDir: snapshot.workspaceDir,
           revision: snapshot.revision,
         },
-        prompt: this.reviewPrompt(payload.requestedPrompt, snapshot.revision),
       });
     } catch (error) {
       await this.ctx.workspaces.releaseSnapshot(snapshot.workspaceDir);
@@ -173,6 +178,12 @@ export class QAGate {
         replyToMessageId: payload.replyToMessageId,
         targetBotId: review.reviewerBotId,
         taskId: payload.collaboration!.taskId,
+        ownerOpenId: payload.collaboration!.ownerOpenId,
+        ownerUnionId: payload.collaboration!.ownerUnionId,
+        reportToBotId: payload.collaboration!.reportToBotId,
+        objective: payload.collaboration!.objective,
+        instruction: this.reviewPrompt(review.originalPrompt, snapshot.revision),
+        expectedOutput: "一个与固定 revision 绑定的 QAResult JSON 对象。",
         round: payload.collaboration!.round + 1,
         maxRounds: payload.collaboration!.maxRounds,
         workspaceDir: snapshot.workspaceDir,
@@ -182,7 +193,6 @@ export class QAGate {
           snapshotWorkspaceDir: snapshot.workspaceDir,
           revision: snapshot.revision,
         },
-        prompt: this.reviewPrompt(review.originalPrompt, snapshot.revision),
       });
     } catch (error) {
       const cleanupErrors: string[] = [];
@@ -302,14 +312,19 @@ export class QAGate {
         replyToMessageId: payload.replyToMessageId,
         targetBotId: review.developerBotId,
         taskId: payload.collaboration!.taskId,
+        ownerOpenId: payload.collaboration!.ownerOpenId,
+        ownerUnionId: payload.collaboration!.ownerUnionId,
+        reportToBotId: payload.collaboration!.reportToBotId,
+        objective: payload.collaboration!.objective,
+        instruction: [
+          "QA 审查未通过，请只处理以下结构化缺陷并运行相关验证。",
+          resultJson(qaResult),
+        ].join("\n\n"),
+        expectedOutput: "完成缺陷修复并提供相关验证结果。",
         round: payload.collaboration!.round + 1,
         maxRounds: payload.collaboration!.maxRounds,
         workspaceDir: review.sourceWorkspaceDir,
         qaReview: { ...review, stage: "rework" },
-        prompt: [
-          "QA 审查未通过，请只处理以下结构化缺陷并运行相关验证。",
-          resultJson(qaResult),
-        ].join("\n\n"),
       });
     } finally {
       await this.releaseSnapshot(payload, review);
@@ -336,13 +351,22 @@ export class QAGate {
       replyToMessageId: payload.replyToMessageId,
       targetBotId: leaderId,
       taskId: payload.collaboration?.taskId ?? randomUUID(),
-      round: 1,
-      maxRounds: 1,
-      workspaceDir: review.sourceWorkspaceDir,
-      prompt: [
+      ownerOpenId:
+        payload.collaboration?.ownerOpenId ??
+        payload.senderOpenId ??
+        payload.botConfig.id,
+      ownerUnionId:
+        payload.collaboration?.ownerUnionId ?? payload.senderUnionId,
+      reportToBotId: leaderId,
+      objective: "处理 QA 审查阻塞",
+      instruction: [
         "QA 审查已阻塞，请负责人处理环境、权限或协议问题。",
         resultJson(qaResult),
       ].join("\n\n"),
+      expectedOutput: "解除阻塞并决定继续审查、返工或人工收口。",
+      round: 1,
+      maxRounds: 1,
+      workspaceDir: review.sourceWorkspaceDir,
     });
   }
 

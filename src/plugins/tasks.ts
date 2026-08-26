@@ -31,6 +31,27 @@ import type {
   TaskToolCallsPayload,
 } from "./types.js";
 
+/**
+ * 解析一轮 CLI 的可选执行时限。按引擎变量优先，例如 claude 对应
+ * CLAUDE_TIMEOUT_MS；未设置时再读取 CLI_TIMEOUT_MS，全部留空则不设时限。
+ */
+export function cliExecutionTimeoutMs(
+  cliId: string,
+  env: Record<string, string | undefined> = process.env,
+): number | undefined {
+  const engineKey = `${cliId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TIMEOUT_MS`;
+  const source = env[engineKey]?.trim() || env.CLI_TIMEOUT_MS?.trim();
+  if (!source) return undefined;
+  if (!/^\d+$/.test(source)) {
+    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
+  }
+  const timeoutMs = Number(source);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
+  }
+  return timeoutMs;
+}
+
 // Token、轮次和 CLI 耗时按执行轮累加；上下文占用与窗口大小是快照，只保留最新值。
 function accumulateCliStats(
   current: CliRunStats | undefined,
@@ -330,6 +351,7 @@ export class TasksService extends Service {
             taskId,
             suppressHandoff,
             senderOpenId,
+            senderUnionId,
             durationMs: Date.now() - taskStartTime,
             stats: observedStats,
             toolMetrics: snapshotToolMetrics(),
@@ -517,6 +539,8 @@ export class TasksService extends Service {
           senderRuntime,
           taskId,
           suppressHandoff,
+          senderOpenId,
+          senderUnionId,
           durationMs: Date.now() - taskStartTime,
           stats: observedStats ?? result.stats,
           toolCalls: result.toolCalls,
@@ -762,6 +786,7 @@ export class TasksService extends Service {
             taskId,
             suppressHandoff,
             senderOpenId,
+            senderUnionId,
             error: errorMessage,
             durationMs: Date.now() - taskStartTime,
             stats: observedStats,
@@ -809,6 +834,7 @@ export class TasksService extends Service {
       cwd: session.workspaceDir,
       sessionId: session.cliSessionId,
       signal,
+      timeoutMs: cliExecutionTimeoutMs(adapter.id),
       env,
       onEvent,
     });
@@ -819,5 +845,9 @@ export const name = "tasks";
 export const inject = ["config", "sessions", "cli", "cards"];
 
 export function apply(ctx: Context) {
+  // 环境变量属于启动配置；先按实际启用的引擎校验，避免任务进入 active 后才发现格式错误。
+  for (const cliId of new Set(ctx.config.bots.map((bot) => bot.defaultCliId))) {
+    cliExecutionTimeoutMs(cliId);
+  }
   new TasksService(ctx);
 }

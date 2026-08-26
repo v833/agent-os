@@ -216,7 +216,7 @@ async function handleMessage(
     session = await ctx.sessions.manager.transition(session.id, "idle");
   }
   const cliAdapter = ctx.cli.get(session.cliId, session.accessMode ?? "headless");
-  let requestedPrompt = collaboration?.prompt ?? cliRequest?.prompt ?? resolved;
+  let requestedPrompt = collaboration?.instruction ?? cliRequest?.prompt ?? resolved;
 
   console.log(
     `[收到] chat=${message.chatId} threadId=${message.threadId} rootId=${message.rootId} sender=${message.senderOpenId}`,

@@ -20,6 +20,13 @@ const PersistedProductSpecFlowSchema = z.object({
   sessionId: z.string().min(1),
   ownerOpenId: z.string(),
   ownerUnionId: z.string().optional(),
+  collaboration: z.object({
+    taskId: z.string().min(1),
+    fromBotId: z.string().min(1),
+    reportToBotId: z.string().min(1),
+    round: z.number().int().min(1),
+    maxRounds: z.number().int().min(1),
+  }).optional(),
   cardMessageId: z.string().optional(),
   workspaceDir: z.string().min(1),
   request: ProductSpecRequestSchema,

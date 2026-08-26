@@ -32,6 +32,7 @@ import * as applicationToolsPlugin from "./application-tools.js";
 import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
 import * as collaborationPlugin from "./collaboration.js";
+import * as dispatchTaskPlugin from "./dispatch-task.js";
 import * as commandsPlugin from "./commands.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
@@ -50,7 +51,11 @@ import * as teamPlugin from "./team.js";
 import * as workspacesPlugin from "./workspaces.js";
 import { waitForAllActive } from "./loader.js";
 import { retryToken } from "../core/orchestration.js";
-import type { BotRuntime, TaskResultPayload } from "./types.js";
+import type {
+  BotRuntime,
+  TaskResultPayload,
+  TaskToolCallsPayload,
+} from "./types.js";
 
 const tempDirs: string[] = [];
 test.after(async () => {
@@ -633,6 +638,27 @@ test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错
   assert.equal(unknown, undefined);
 });
 
+test("CLI 超时仅在显式配置时启用，并支持按引擎覆盖", () => {
+  assert.equal(tasksPlugin.cliExecutionTimeoutMs("codex", {}), undefined);
+  assert.equal(
+    tasksPlugin.cliExecutionTimeoutMs("codex", {
+      CLI_TIMEOUT_MS: "6000",
+      CODEX_TIMEOUT_MS: "9000",
+    }),
+    9_000,
+  );
+  assert.equal(
+    tasksPlugin.cliExecutionTimeoutMs("custom-engine", {
+      CUSTOM_ENGINE_TIMEOUT_MS: "12000",
+    }),
+    12_000,
+  );
+  assert.throws(
+    () => tasksPlugin.cliExecutionTimeoutMs("codex", { CLI_TIMEOUT_MS: "0" }),
+    /必须是正整数毫秒值/,
+  );
+});
+
 test("私聊成员不注入团队上下文，直接按指令干活", async () => {
   const host = await createHost();
   await host.root.parallel(
@@ -1063,6 +1089,156 @@ test("产品经理提交飞书云文档时无需本地产物即可确认", async
     runtimeConfig,
   );
   assert.equal(approved?.toast?.content, "产品方案已确认。");
+});
+
+test("协作产品方案继承真人 owner，确认后自动交回 Team Leader", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const productInput: BotConfig = {
+    ...baseBotConfig,
+    id: "product",
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([leaderInput, productInput]);
+  const leader = host.root.config.bot("leader")!;
+  const product = host.root.config.bot("product")!;
+  for (const config of [leader, product]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-os-team-product-"));
+  tempDirs.push(storeDir);
+  await host.root.plugin(productSpecPlugin, {
+    storePath: join(storeDir, "flows.json"),
+  });
+  await host.root.plugin(dispatchTaskPlugin);
+  await waitForAllActive(host.root);
+
+  const collaboration: CollaborationMessage = {
+    dispatchId: "product-turn-1",
+    taskId: "team-product-task",
+    ownerOpenId: "ou_owner",
+    ownerUnionId: "on_owner",
+    fromBotId: "leader",
+    toBotId: "product",
+    reportToBotId: "leader",
+    objective: "形成用户分组产品方案",
+    instruction: "澄清需求并提交待确认方案。",
+    expectedOutput: "一份可验收的产品方案。",
+    round: 1,
+    maxRounds: 4,
+    workspaceDir: product.workspaceDir,
+  };
+  const result = {
+    answer: "飞书产品文档已生成。",
+    sessionId: "sess-team-product",
+    toolCalls: [{
+      toolUseId: "tool-team-product",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户分组管理",
+        summary: "支持创建分组并维护分组成员。",
+        deliveryMode: "lark-doc" as const,
+        documentUrl: "https://example.feishu.cn/docx/TeamProduct123",
+      },
+    }],
+  };
+  const outcome = await host.root.serial("task/tool-calls", {
+    bot: host.bot,
+    botConfig: product,
+    session: { ...fakeSession(), botId: product.id, workspaceDir: product.workspaceDir },
+    requestedPrompt: collaboration.instruction,
+    answer: result.answer,
+    replyToMessageId: "product-message",
+    hasThread: true,
+    collaboration,
+    taskId: collaboration.taskId,
+    result,
+    runId: "run-team-product",
+    // 入站消息来自 leader bot；产品 Flow 必须忽略它，继承 collaboration 中的真人 owner。
+    senderOpenId: "leader_open",
+    senderUnionId: "leader_union",
+    cardMessageId: "card-team-product",
+  });
+  assert.ok(outcome);
+  await outcome.afterCardPublished?.();
+  const value = productSpecValueOf(outcome.card);
+  assert.equal(
+    (await host.root.serial(
+      "bot/card-action",
+      {
+        operatorOpenId: "leader_open",
+        operatorUnionId: "leader_union",
+        messageId: "card-team-product",
+        value,
+      },
+      host.bot,
+      product,
+    ))?.toast?.content,
+    "只有任务发起人可以确认。",
+  );
+  const approved = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      operatorUnionId: "on_owner",
+      messageId: "card-team-product",
+      value,
+    },
+    host.bot,
+    product,
+  );
+  assert.equal(approved?.toast?.content, "产品方案已确认。");
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  const returned = host.root.collaboration.consume(dispatchId, "leader");
+  assert.equal(returned?.ownerOpenId, "ou_owner");
+  assert.equal(returned?.ownerUnionId, "on_owner");
+  assert.equal(returned?.reportToBotId, "leader");
+  assert.equal(returned?.round, 2);
+  assert.match(returned?.instruction ?? "", /TeamProduct123/);
+  assert.match(returned?.instruction ?? "", /dispatch_task/);
+
+  const mentionsBeforeTerminalApproval = host.calls.mentions.length;
+  await dispatchTaskPlugin.handleApprovedProductSpec(host.root, {
+    flow: {
+      token: "terminal-product-flow",
+      taskId: "terminal-product-task",
+      botId: product.id,
+      sessionId: "terminal-product-session",
+      ownerOpenId: "ou_owner",
+      ownerUnionId: "on_owner",
+      collaboration: {
+        taskId: "terminal-product-task",
+        fromBotId: "leader",
+        reportToBotId: "leader",
+        round: 4,
+        maxRounds: 4,
+      },
+      workspaceDir: product.workspaceDir,
+      request: {
+        title: "末轮产品方案",
+        summary: "已经在最后一轮确认。",
+        deliveryMode: "lark-doc",
+        documentUrl: "https://example.feishu.cn/docx/TerminalProduct123",
+      },
+      status: "approved",
+    },
+    bot: host.bot,
+    botConfig: product,
+    replyToMessageId: "terminal-product-card",
+  });
+  assert.equal(
+    host.calls.mentions.length,
+    mentionsBeforeTerminalApproval + 1,
+    "最后一轮确认应只通知真人收口，不能继续派发 bot",
+  );
+  assert.match(host.calls.mentions.at(-1) ?? "", /产品方案“末轮产品方案”已确认/);
+  assert.doesNotMatch(host.calls.mentions.at(-1) ?? "", /协作结果已经返回/);
 });
 
 test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确认卡", async () => {
@@ -1716,6 +1892,188 @@ test("卡片停止按钮只能由任务发起人触发，并写入取消终态",
   assert.equal(cancelledEvents, 1);
 });
 
+test("dispatch_task 只允许 Team Leader 派发，并保留真人发起人与编排者", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const productInput: BotConfig = { ...baseBotConfig, id: "product" };
+  const host = await createHost([leaderInput, productInput]);
+  const leader = host.root.config.bot("leader")!;
+  const product = host.root.config.bot("product")!;
+  for (const config of [leader, product]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  await host.root.plugin(dispatchTaskPlugin);
+  await waitForAllActive(host.root);
+  assert.ok(
+    host.root.applicationTools.list().some((server) =>
+      server.tools.includes("dispatch_task"),
+    ),
+  );
+
+  const payload = {
+    bot: host.bot,
+    botConfig: leader,
+    session: { ...fakeSession(), botId: leader.id, workspaceDir: leader.workspaceDir },
+    requestedPrompt: "组织用户分组需求",
+    answer: "已决定先交给产品经理。",
+    replyToMessageId: "leader-message",
+    hasThread: true,
+    taskId: "team-task-1",
+    result: {
+      answer: "已决定先交给产品经理。",
+      toolCalls: [{
+        toolUseId: "dispatch-1",
+        toolName: "dispatch_task",
+        input: {
+          targetBotId: "product",
+          objective: "形成用户分组产品方案",
+          instruction: "澄清范围并提交一份待确认产品方案。",
+          expectedOutput: "一份可验收的产品方案。",
+        },
+      }],
+    },
+    runId: "run-dispatch-1",
+    senderOpenId: "ou_owner",
+    senderUnionId: "on_owner",
+    cardMessageId: "card-dispatch-1",
+  } satisfies TaskToolCallsPayload;
+  const outcome = await host.root.serial("task/tool-calls", payload);
+  assert.equal(outcome?.completion, "completed");
+  assert.equal(outcome?.suppressHandoff, true);
+  await outcome?.afterCardPublished?.();
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  const collaboration = host.root.collaboration.consume(dispatchId, "product");
+  assert.equal(collaboration?.ownerOpenId, "ou_owner");
+  assert.equal(collaboration?.ownerUnionId, "on_owner");
+  assert.equal(collaboration?.reportToBotId, "leader");
+  assert.equal(collaboration?.objective, "形成用户分组产品方案");
+
+  await assert.rejects(
+    host.root.serial("task/tool-calls", {
+      ...payload,
+      botConfig: product,
+      session: { ...payload.session, botId: product.id },
+    }),
+    /只有 Team Leader/,
+  );
+  await assert.rejects(
+    host.root.serial("task/tool-calls", {
+      ...payload,
+      result: {
+        ...payload.result,
+        toolCalls: [{
+          toolUseId: "dispatch-self",
+          toolName: "dispatch_task",
+          input: {
+            targetBotId: "leader",
+            objective: "错误自派发",
+            instruction: "不应执行。",
+          },
+        }],
+      },
+    }),
+    /不能把团队任务派发给当前 bot/,
+  );
+  await assert.rejects(
+    host.root.serial("task/tool-calls", {
+      ...payload,
+      collaboration: {
+        ...collaboration!,
+        round: collaboration!.maxRounds,
+      },
+    }),
+    /已达到轮次上限/,
+  );
+  await assert.rejects(
+    host.root.serial("task/tool-calls", {
+      ...payload,
+      result: {
+        ...payload.result,
+        toolCalls: [{
+          toolUseId: "dispatch-invalid",
+          toolName: "dispatch_task",
+          input: {
+            targetBotId: "CEO",
+            objective: "非法目标",
+            instruction: "这次调用不能被静默忽略。",
+          },
+        }],
+      },
+    }),
+    /dispatch_task 参数非法/,
+  );
+});
+
+test("普通成员结果固定交回 reportToBotId，编排者收口后通知真人", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const developerInput: BotConfig = { ...baseBotConfig, id: "developer" };
+  const host = await createHost([leaderInput, developerInput]);
+  const leader = host.root.config.bot("leader")!;
+  const developer = host.root.config.bot("developer")!;
+  for (const config of [leader, developer]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  const collaboration: CollaborationMessage = {
+    dispatchId: "member-turn-1",
+    taskId: "team-task-2",
+    ownerOpenId: "ou_owner",
+    ownerUnionId: "on_owner",
+    fromBotId: "leader",
+    toBotId: "developer",
+    reportToBotId: "leader",
+    objective: "实现用户分组",
+    instruction: "完成实现和验证。",
+    expectedOutput: "可交付实现。",
+    round: 1,
+    maxRounds: 4,
+    workspaceDir: developer.workspaceDir,
+  };
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: developer,
+    session: { ...fakeSession(), botId: developer.id, workspaceDir: developer.workspaceDir },
+    requestedPrompt: collaboration.instruction,
+    answer: "实现与测试均已完成。",
+    replyToMessageId: "developer-message",
+    hasThread: true,
+    collaboration,
+  });
+  const returnDispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(returnDispatchId);
+  const returned = host.root.collaboration.consume(returnDispatchId, "leader");
+  assert.equal(returned?.reportToBotId, "leader");
+  assert.equal(returned?.round, 2);
+  assert.match(returned?.instruction ?? "", /实现与测试均已完成/);
+
+  await host.root.parallel("task/result", {
+    bot: host.bot,
+    botConfig: leader,
+    session: { ...fakeSession(), botId: leader.id, workspaceDir: leader.workspaceDir },
+    requestedPrompt: returned!.instruction,
+    answer: "团队任务已完成。",
+    replyToMessageId: "leader-message",
+    hasThread: true,
+    collaboration: returned,
+  });
+  assert.ok(
+    host.calls.mentions.some((text) =>
+      text.includes("协作任务“实现用户分组”已经完成"),
+    ),
+  );
+});
+
 test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () => {
   const reviewConfig: BotConfig = {
     ...baseBotConfig,
@@ -1736,11 +2094,11 @@ test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () 
   // 协作插件监听 task/result，发出审查卡片与真实 @ 提及。
   await waitFor(() =>
     host.calls.cards.some((card) =>
-      cardSummaryContains(card, "代码审查已发起"),
+      cardSummaryContains(card, "协作任务已派发"),
     ),
   );
   assert.ok(
-    host.calls.mentions.some((text) => text.includes("新的代码审查任务")),
+    host.calls.mentions.some((text) => text.includes("新的协作任务")),
   );
 });
 
@@ -1832,7 +2190,7 @@ test("QAResult pass 立即结束 reviewBy，不再交回 Developer", async () =>
     bot: host.bot,
     botConfig: qa,
     session: { ...fakeSession(), botId: qa.id },
-    requestedPrompt: collaboration.prompt,
+    requestedPrompt: collaboration.instruction,
     answer: qaAnswer(revision, "pass"),
     replyToMessageId: "qa-message",
     hasThread: true,
@@ -1841,7 +2199,7 @@ test("QAResult pass 立即结束 reviewBy，不再交回 Developer", async () =>
 
   assert.ok(host.calls.mentions.some((text) => text.includes("QA 审查通过")));
   assert.equal(
-    host.calls.mentions.filter((text) => text.includes("审查反馈已经返回")).length,
+    host.calls.mentions.filter((text) => text.includes("协作结果已经返回")).length,
     0,
   );
   await assert.rejects(access(collaboration.workspaceDir), /ENOENT/);
@@ -1855,7 +2213,7 @@ test("QAResult changes_requested 只生成给 Developer 的返工交接", async 
     bot: host.bot,
     botConfig: qa,
     session: { ...fakeSession(), botId: qa.id },
-    requestedPrompt: collaboration.prompt,
+    requestedPrompt: collaboration.instruction,
     answer: qaAnswer(collaboration.qaReview!.revision, "changes_requested"),
     replyToMessageId: "qa-message",
     hasThread: true,
@@ -1885,7 +2243,7 @@ test("QAResult blocked 只升级 Team Leader，不回传 Developer", async () =>
     bot: host.bot,
     botConfig: qa,
     session: { ...fakeSession(), botId: qa.id },
-    requestedPrompt: collaboration.prompt,
+    requestedPrompt: collaboration.instruction,
     answer: qaAnswer(collaboration.qaReview!.revision, "blocked"),
     replyToMessageId: "qa-message",
     hasThread: true,
@@ -1910,7 +2268,7 @@ test("QA 快照被修改时拒绝 pass 并升级 Team Leader", async () => {
     bot: host.bot,
     botConfig: qa,
     session: { ...fakeSession(), botId: qa.id },
-    requestedPrompt: collaboration.prompt,
+    requestedPrompt: collaboration.instruction,
     answer: qaAnswer(collaboration.qaReview!.revision, "pass"),
     replyToMessageId: "qa-message",
     hasThread: true,
@@ -1933,7 +2291,7 @@ test("QA CLI 执行失败时生成 blocked 结论并升级 Team Leader", async (
     bot: host.bot,
     botConfig: qa,
     session: { ...fakeSession(), botId: qa.id },
-    requestedPrompt: collaboration.prompt,
+    requestedPrompt: collaboration.instruction,
     answer: "",
     replyToMessageId: "qa-message",
     hasThread: true,
@@ -1976,7 +2334,7 @@ test("Developer 返工后的复审快照创建失败时清理旧快照并升级 
       bot: host.bot,
       botConfig: developer,
       session: { ...fakeSession(), botId: developer.id },
-      requestedPrompt: rework.prompt,
+      requestedPrompt: rework.instruction,
       answer: "返工完成",
       replyToMessageId: "developer-message",
       hasThread: true,
@@ -2057,6 +2415,8 @@ test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示",
   assert.equal(dispatch.chatId, "chat1", "独立话题派发应发到编排所在群");
   const dispatchId = dispatch.text.match(/任务编号：([a-f0-9]{12})/)?.[1];
   assert.ok(dispatchId, "@ 派发必须携带协作交接单任务编号");
+  const subTaskMessage = host.root.collaboration.consume(dispatchId, "developer");
+  assert.ok(subTaskMessage, "编排子任务必须使用已登记的真实交接单");
   assert.equal(
     host.calls.mentions.length,
     0,
@@ -2086,8 +2446,13 @@ test("/orchestrate 拆解任务、并行派发、收集结果并 /panel 展示",
     answer: "A 模块分析完成",
     replyToMessageId: "m1",
     hasThread: false,
-    collaboration: subTaskCollaboration(host, "run-001", "t1", "developer"),
+    collaboration: subTaskMessage,
   });
+  assert.equal(
+    host.calls.mentions.length,
+    0,
+    "编排叶子结果由 orchestration 收集，不能逐项通知真人",
+  );
 
   // /panel 展示 run 进度：已完成子任务打勾、未完成保持等待。
   await host.root.parallel(
@@ -2685,12 +3050,16 @@ function subTaskCollaboration(
   return {
     dispatchId: sub.currentDispatchId ?? "",
     taskId: `${run.instanceId}#${subTaskId}`,
+    ownerOpenId: run.ownerOpenId,
     fromBotId: "testbot",
     toBotId,
+    reportToBotId: "testbot",
+    objective: `编排 ${runId} · ${subTaskId}`,
+    instruction: "分析模块 A",
     round: 1,
     maxRounds: 1,
     workspaceDir: process.cwd(),
-    prompt: "分析模块 A",
+    suppressAutomaticHandoff: true,
   };
 }
 

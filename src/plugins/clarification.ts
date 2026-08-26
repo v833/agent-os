@@ -68,8 +68,10 @@ export class ClarificationService extends Service {
       taskId: payload.taskId ?? payload.session.id,
       botId: payload.botConfig.id,
       sessionId: payload.session.id,
-      ownerOpenId: payload.senderOpenId,
-      ownerUnionId: payload.senderUnionId,
+      ownerOpenId:
+        payload.collaboration?.ownerOpenId ?? payload.senderOpenId,
+      ownerUnionId:
+        payload.collaboration?.ownerUnionId ?? payload.senderUnionId,
       originalMessageId: payload.replyToMessageId,
       requestedPrompt: payload.requestedPrompt,
       cardMessageId: payload.cardMessageId,
