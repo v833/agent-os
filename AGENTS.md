@@ -66,8 +66,10 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息、卡片回调和云文档评论翻译成 bot/message、bot/card-action、bot/document-comment 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
-- `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
-- `src/plugins/collaboration.ts`：collaboration 服务——交接单、轮次去重与审查派发；监听 task/result 自动交接
+- `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（可配置超时、active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
+- `src/plugins/collaboration.ts`：collaboration 服务——通用交接单、轮次去重、协作卡片与结果回传；普通成员完成后固定交回 reportToBotId
+- `src/plugins/dispatch-task.ts`：通用团队派发插件——注册 `dispatch_task`、校验 Team Leader/目标/轮次、监听产品确认事件，并通过 collaboration 服务真实派发
+- `src/plugins/dispatch-task-tool.ts`：dispatch-task 插件提供给 stdio/ACP MCP 注入的 Server 描述
 - `src/plugins/workspaces.ts`：workspaces 服务——创建/回收 QA 隔离快照并计算稳定工作树 revision
 - `src/plugins/qa-gate.ts`：QA 质量闸门——解析 QAResult、校验实际快照 revision，并按 pass/changes_requested/blocked 闭环路由
 - `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、task/message 改写、命令派发与任务启动
@@ -91,8 +93,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/project-skills.test.ts`：Skill 覆盖优先级、内置回退和真实缺失测试
 - `src/core/team-registry.ts`：团队成员注册表、团队上下文与项目 Skill 检查
 - `src/core/team-registry.test.ts`：团队成员查询、上下文和缺失 Skill 检查测试
-- `src/core/collaboration.ts`：bot 间同话题交接单、目标领取鉴权和协作轮次键
-- `src/core/collaboration.test.ts`：交接单一次性领取、目标鉴权和轮次键测试
+- `src/core/collaboration.ts`：bot 间通用交接单、`dispatch_task` Schema/提取、目标领取鉴权和协作轮次键
+- `src/core/collaboration.test.ts`：派发 Schema、交接单一次性领取、目标鉴权和轮次键测试
 - `src/core/orchestration.ts`：编排数据契约——run/子任务结构（ownerOpenId/retryCount）、拆解解析、taskId 编解码、一次性重试令牌与运行表裁剪
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
 - `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
@@ -157,6 +159,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/mcp/clarification-tools.ts`：stdio 与 HTTP MCP 复用的 `request_clarification` 注册定义
 - `src/mcp/clarification-http-server.ts`：仅监听 loopback 的无状态 HTTP MCP Server，兼容不接受 ACP stdio MCP 的 DimAgent 版本
 - `src/mcp/loopback-http-server.ts`：应用工具插件共用的无状态 loopback Streamable HTTP MCP 传输
+- `src/mcp/dispatch-task-server.ts`：团队派发 stdio MCP Server——向 headless CLI 提供 `dispatch_task`
+- `src/mcp/dispatch-task-tools.ts`：stdio 与 HTTP MCP 复用的 `dispatch_task` 注册定义
 - `src/mcp/product-spec-server.ts`：产品文档 stdio MCP Server——向 headless CLI 提供 `request_spec_approval`
 - `src/mcp/product-spec-tools.ts`：stdio 与 HTTP MCP 复用的 `request_spec_approval` 注册定义
 - `src/im/lark.ts`：飞书收发、卡片动作回调、云文档评论订阅/回复、卡片更新、消息资源下载与结果提醒（sendResultNotification）

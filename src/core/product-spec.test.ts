@@ -259,6 +259,13 @@ test("云文档 Flow 持久化后可按 Docx token 找回原产品会话", async
       sessionId: "session-cloud",
       ownerOpenId: "ou_owner",
       workspaceDir: "C:\\workspace",
+      collaboration: {
+        taskId: "team-task",
+        fromBotId: "leader",
+        reportToBotId: "leader",
+        round: 1,
+        maxRounds: 4,
+      },
       request: validLarkRequest,
     });
     const restored = new JsonProductSpecFlowStore(filePath);
@@ -269,6 +276,11 @@ test("云文档 Flow 持久化后可按 Docx token 找回原产品会话", async
     assert.equal(
       restored.findPendingByDocument("product", "AbCdEf123")?.sessionId,
       "session-cloud",
+    );
+    assert.equal(
+      restored.findPendingByDocument("product", "AbCdEf123")?.collaboration
+        ?.reportToBotId,
+      "leader",
     );
     assert.equal(restored.findPendingByDocument("other", "AbCdEf123"), undefined);
   } finally {

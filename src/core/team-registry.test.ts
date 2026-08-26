@@ -60,6 +60,11 @@ test("contextFor 生成成员名单、Skill 提示与当前身份约束", () => 
   assert.match(context, /product：产品经理，负责澄清需求；Skills：\$grill-me/);
   assert.match(context, /developer：开发工程师/);
   assert.match(context, /你当前以 product 的身份工作/);
+  assert.match(context, /不要自行调用该工具/);
+  assert.match(
+    registry.contextFor("ceo-assistant"),
+    /使用 dispatch_task 工具/,
+  );
   assert.match(context, /不能冒充这些长期团队成员/);
   assert.throws(() => registry.contextFor("outsider"), /团队成员不存在: outsider/);
 });

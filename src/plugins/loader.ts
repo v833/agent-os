@@ -14,6 +14,7 @@ import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
 import * as cliPlugin from "./cli.js";
 import * as collaborationPlugin from "./collaboration.js";
+import * as dispatchTaskPlugin from "./dispatch-task.js";
 import * as commandsPlugin from "./commands.js";
 import * as configPlugin from "./config.js";
 import * as cdCommand from "./commands/cd.js";
@@ -79,6 +80,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/orchestrate": orchestrateCommand,
   "commands/panel": panelCommand,
   collaboration: collaborationPlugin,
+  "dispatch-task": dispatchTaskPlugin,
   workspaces: workspacesPlugin,
   "qa-gate": qaGatePlugin,
   orchestration: orchestrationPlugin,

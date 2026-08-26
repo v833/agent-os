@@ -10,6 +10,7 @@ import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
 import type { OrchestrationRun } from "../core/orchestration.js";
+import type { ProductSpecFlow } from "../core/product-spec.js";
 import type { QAResult } from "../core/qa-result.js";
 import type { Session } from "../core/session-manager.js";
 import type { CliAdapter, CliRunResult, CliRunStats } from "../cli/types.js";
@@ -132,6 +133,10 @@ declare module "cordis" {
     "task/paused"(payload: TaskResultPayload): void | Promise<void>;
     /** 一轮任务由发起人主动停止；与失败事件分开，避免误触发认证或编排失败处理。 */
     "task/cancelled"(payload: TaskResultPayload): void | Promise<void>;
+    /** 产品方案由真人确认；可选团队派发插件据此把结果交回原编排者。 */
+    "product-spec/approved"(
+      payload: ProductSpecApprovedPayload,
+    ): void | Promise<void>;
     /** QA Gate 已解析、校验并绑定实际 revision 的结构化审查结论。 */
     "qa/result"(payload: QAResultPayload): void | Promise<void>;
     /** 编排运行状态更新广播；orchestration 服务发出，live-panel 插件消费并节流刷新面板卡片。 */
@@ -212,6 +217,14 @@ export interface TaskMessageOutcome {
   originalRequestedPrompt?: string;
 }
 
+/** 产品方案确认事件只携带公共契约，不让 product-spec 依赖具体协作实现。 */
+export interface ProductSpecApprovedPayload {
+  flow: ProductSpecFlow;
+  bot: Bot;
+  botConfig: BotConfig;
+  replyToMessageId: string;
+}
+
 /** 应用工具插件认领任务结果后返回的替代卡片与任务生命周期。 */
 export interface TaskToolCallsOutcome {
   card: CardJson;
@@ -280,6 +293,8 @@ export interface TaskResultPayload {
   suppressHandoff?: boolean;
   /** 任务发起人 open_id；auth 等插件用它校验后续卡片动作的权限。 */
   senderOpenId?: string;
+  /** 任务发起人 union_id；跨 bot 产品确认时优先用它识别同一真人。 */
+  senderUnionId?: string;
   /** 失败任务的错误摘要（仅 task/failed 携带），auth 插件据此识别认证需求。 */
   error?: string;
   /** CLI 执行统计（Token 消耗、耗时、缓存等），供可观测性插件与下游使用。 */

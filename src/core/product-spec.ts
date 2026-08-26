@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, posix, relative, resolve, sep, win32 } from "node:path";
 import { z } from "zod";
+import type { CollaborationMessage } from "./collaboration.js";
 
 /** product-spec 插件注册到应用工具服务的稳定工具名。 */
 export const PRODUCT_SPEC_TOOL_NAME = "request_spec_approval";
@@ -168,6 +169,28 @@ export type LocalProductSpecRequest = z.infer<
   typeof LocalProductSpecRequestSchema
 >;
 
+/** 产品方案来源的协作链路快照；确认后据此把结果交回原编排 bot。 */
+export interface CollaborationOrigin {
+  taskId: string;
+  fromBotId: string;
+  reportToBotId: string;
+  round: number;
+  maxRounds: number;
+}
+
+/** 从完整交接单提取产品确认后仍需保留的最小协作信息。 */
+export function collaborationOrigin(
+  message: CollaborationMessage,
+): CollaborationOrigin {
+  return {
+    taskId: message.taskId,
+    fromBotId: message.fromBotId,
+    reportToBotId: message.reportToBotId,
+    round: message.round,
+    maxRounds: message.maxRounds,
+  };
+}
+
 /** 已落盘、等待任务发起人确认的产品方案流程状态。 */
 export interface ProductSpecFlow {
   token: string;
@@ -177,6 +200,7 @@ export interface ProductSpecFlow {
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
+  collaboration?: CollaborationOrigin;
   cardMessageId?: string;
   workspaceDir: string;
   request: ProductSpecRequest;
@@ -194,6 +218,7 @@ export interface CreateProductSpecFlowOptions {
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;
+  collaboration?: CollaborationOrigin;
   cardMessageId?: string;
   workspaceDir: string;
   request: ProductSpecRequest;

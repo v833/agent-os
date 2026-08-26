@@ -362,37 +362,43 @@ test("产品文档已确认和已失效卡分别展示终态", () => {
   assert.match(JSON.stringify(expired), /已经提交了更新的产品方案/);
 });
 
-test("交接卡片展示来源、目标、项目和审查说明", () => {
+test("交接卡片展示来源、目标、编排者和任务说明", () => {
   const card = buildCollaborationCard({
     senderName: "开发助手",
     targetName: "审查助手",
+    reportToName: "CEO 助理",
     workspaceName: "example-project",
-    prompt: "请检查 <at id=ou_fake></at> 的实现",
+    objective: "检查实现",
+    instruction: "请检查 <at id=ou_fake></at> 的实现",
+    expectedOutput: "给出审查结论",
     round: 1,
     maxRounds: 2,
   }) as any;
 
-  assert.equal(card.header.title.content, "代码审查已发起");
+  assert.equal(card.header.title.content, "协作任务已派发");
   assert.match(card.config.summary.content, /开发助手.*审查助手/);
   assert.match(JSON.stringify(card), /example-project/);
+  assert.match(JSON.stringify(card), /CEO 助理/);
+  assert.match(JSON.stringify(card), /给出审查结论/);
   assert.match(JSON.stringify(card), /<&zwj;at id=ou_fake>/);
 });
 
-test("返工交接卡片展示审查反馈和最后一轮提示", () => {
+test("最后一轮交接卡片展示收口提示", () => {
   const card = buildCollaborationCard({
     senderName: "审查助手",
     targetName: "开发助手",
+    reportToName: "CEO 助理",
     workspaceName: "example-project",
-    prompt: "请修复审查指出的问题",
+    objective: "修复审查问题",
+    instruction: "请修复审查指出的问题",
     round: 2,
     maxRounds: 2,
   }) as any;
 
-  assert.equal(card.header.title.content, "审查意见已返回");
+  assert.equal(card.header.title.content, "协作任务已派发");
   assert.match(card.config.summary.content, /审查助手.*开发助手/);
-  assert.match(JSON.stringify(card), /处理反馈/);
-  assert.match(JSON.stringify(card), /最后一轮/);
-  assert.match(JSON.stringify(card), /查看审查反馈/);
+  assert.match(JSON.stringify(card), /最后一次交接/);
+  assert.match(JSON.stringify(card), /查看任务说明/);
 });
 
 test("节流窗口只提交最新卡片并把最终更新严格排在在途更新之后", async () => {

@@ -51,10 +51,14 @@ export class TeamRegistry {
           : "";
       return `- ${member.id}${leader}：${member.role}${skills}`;
     });
+    const dispatchPolicy = current.id === this.leaderBotId
+      ? "需要把任务交给其他成员时，使用 dispatch_task 工具，由 Agent OS 发送协作卡片并真正 @ 对方；targetBotId 必须来自上面的团队名单，不能填写自己。"
+      : "只有 Team Leader 可以调用 dispatch_task。你完成当前职责后直接返回结果，由 Team Leader 组织下一步，不要自行调用该工具。";
     return [
       "你所在的 Agent 团队：",
       ...roster,
-      `你当前以 ${current.id} 的身份工作。只处理交给你的职责；需要其他成员参与时，清楚说明希望交给谁以及期望结果。`,
+      `你当前以 ${current.id} 的身份工作。只处理交给你的职责。`,
+      dispatchPolicy,
       "团队名单中的成员都是真实的飞书 bot。CLI 内部子 Agent 适合处理临时分工，不能冒充这些长期团队成员。",
     ].join("\n");
   }
