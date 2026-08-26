@@ -223,6 +223,7 @@ function createFakeBot(
   connectionState: BotConnectionState = "connected",
   failOptions: {
     replyCard?: boolean;
+    emptyReplyCard?: boolean;
     updateCard?: boolean;
     failUpdateCardAt?: number;
     sendMention?: boolean;
@@ -252,6 +253,7 @@ function createFakeBot(
     replyCard: async (_id: string, card: Record<string, unknown>) => {
       if (failOptions.replyCard) throw new Error("模拟：首次挂卡片失败");
       calls.cards.push(card);
+      if (failOptions.emptyReplyCard) return undefined;
       return `card-${calls.cards.length}`;
     },
     replyMention: async (_id: string, _target: BotIdentity, text: string) => {
@@ -449,6 +451,7 @@ async function createHost(
   actions = false,
   botFailOptions: {
     replyCard?: boolean;
+    emptyReplyCard?: boolean;
     updateCard?: boolean;
     failUpdateCardAt?: number;
     sendMention?: boolean;
@@ -720,6 +723,42 @@ test("/team 仅把真实 connected 长连接标为在线", async () => {
     JSON.stringify(host.calls.cards[0]).includes("未连接"),
     "重连中的 bot 不能显示为已连接",
   );
+});
+
+test("任务卡片响应缺少 message_id 时 startTask 返回失败并回收会话", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    { emptyReplyCard: true },
+  );
+  const botConfig = host.root.config.bot("testbot")!;
+  const resolved = await host.root.sessions.manager.resolve(
+    incomingMessage({ text: "执行看板任务" }),
+    botConfig.defaultCliId,
+    botConfig.id,
+    botConfig.workspaceDir,
+    botConfig.accessMode,
+  );
+
+  const started = await host.root.tasks.startTask({
+    bot: host.bot,
+    botConfig,
+    session: resolved.session,
+    hasThread: false,
+    replyToMessageId: "message-without-card-id",
+    senderOpenId: "ou_owner",
+    taskId: "board-start-failed",
+    requestedPrompt: "执行看板任务",
+    isCompacting: false,
+    resources: [],
+  });
+
+  assert.equal(started, false);
+  assert.equal(host.cli.captures.length, 0);
+  assert.equal(host.root.sessions.manager.get(resolved.session.id)?.status, "idle");
 });
 
 test("普通任务走完卡片、执行与结果通知的生命周期", async () => {

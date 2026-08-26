@@ -121,14 +121,17 @@ export class TasksService extends Service {
     console.log(`[会话] id=${sessionId} status=idle`);
   }
 
-  /** 启动一轮任务；内部异常统一消费，不向上抛出。 */
-  startTask(input: StartTaskInput): void {
-    void this.runTask(input).catch((error) => {
-      console.error("[任务] 回传或收尾失败:", (error as Error).message);
-    });
+  /** 启动一轮任务；返回是否已完成前置准备并进入执行链，运行期结果仍走任务事件。 */
+  async startTask(input: StartTaskInput): Promise<boolean> {
+    try {
+      return await this.runTask(input);
+    } catch (error) {
+      console.error("[任务] 启动失败:", (error as Error).message);
+      return false;
+    }
   }
 
-  private async runTask(input: StartTaskInput): Promise<void> {
+  private async runTask(input: StartTaskInput): Promise<boolean> {
     const {
       bot,
       botConfig,
@@ -211,7 +214,7 @@ export class TasksService extends Service {
       if (this.activeRuns.get(session.id) === activeRun) {
         this.activeRuns.delete(session.id);
       }
-      return;
+      return false;
     }
 
     let cardId: string | undefined;
@@ -247,7 +250,7 @@ export class TasksService extends Service {
         this.activeRuns.delete(session.id);
       }
       await this.markSessionIdle(session.id);
-      return;
+      return false;
     }
     console.log(`[卡片] 已发送 message_id=${cardId} inThread=${hasThread}`);
 
@@ -819,6 +822,7 @@ export class TasksService extends Service {
         // 卡片更新、飞书回复或 finally 持久化失败也必须被消费，避免未处理拒绝。
         console.error("[任务] 回传或收尾失败:", (error as Error).message);
       });
+    return true;
   }
 
   /** 通过 cli 服务启动一轮 CLI 子进程并转发流式事件。 */

@@ -83,6 +83,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/commands/metrics.ts`：/metrics 命令插件——展示系统吞吐、Token 消耗、耗时分布与成员指标
 - `src/plugins/observability.ts`：observability 可观测性服务插件——监听任务开始、成功、失败、暂停、取消与 QA 结论，记录 Trace、Token 与多维指标
 - `src/plugins/observability.test.ts`：可观测性插件集成测试——测试指标统计、Trace 归档落盘与 /metrics 命令
+- `src/plugins/bitable-board.ts`：bitable-board 看板插件——把任务生命周期同步到飞书多维表格，并轮询待处理记录反向拉起任务
+- `src/plugins/bitable-board.test.ts`：看板插件集成测试——覆盖事件聚合、状态同步、失败重试、重启补拉与反向任务启动
 - `src/plugins/host.test.ts`：最小 Agent OS 集成测试——事件路由、命令派发、任务生命周期、停止与协作交接
 
 ### 核心与执行引擎（纯函数模块，供服务插件复用）
@@ -123,6 +125,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
 - `src/core/observability.ts`：可观测性核心领域模型——Span/Trace 拓扑、Token 消耗聚合、时延分位数与系统指标大盘
 - `src/core/observability.test.ts`：可观测性核心领域模型单元测试——Trace/Span、Token 聚合与分位数测试
+- `src/core/bitable-board.ts`：多维表格任务看板领域模型——字段契约、事件状态映射、记录解析与生命周期快照合并
+- `src/core/bitable-board.test.ts`：看板领域模型单元测试——覆盖配置、状态机、产物提取、记录解析与指标聚合
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
 - `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args/session 配置驱动）以标准接入方式登记，与具体供应商解耦
 - `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、会话配置、展示名回退、compact 与失效会话识别测试

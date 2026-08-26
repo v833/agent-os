@@ -50,7 +50,7 @@ export const DEFAULT_BOARD_FIELDS: BoardFields = {
   owner: "发起人",
   state: "当前状态",
   round: "轮次",
-  artifact: "产物链接",
+  artifact: "产物链接(文档/PR)",
   tokens: "消耗Token",
   duration: "耗时",
   chatId: "群聊ID",
@@ -88,7 +88,8 @@ export type BoardStateInput =
   | { kind: "tool-calls"; toolCalls?: Array<{ toolName: string; input: unknown }> }
   | { kind: "result"; awaitingQa?: boolean }
   | { kind: "failed" }
-  | { kind: "spec-approved" }
+  | { kind: "cancelled" }
+  | { kind: "spec-approved"; continues: boolean }
   | { kind: "qa-result"; verdict: QAResult["verdict"] };
 
 /** 事件→看板状态：方案确认中优先于开发中，QA 轮从开始即标记验收态。 */
@@ -106,9 +107,11 @@ export function stateForEvent(input: BoardStateInput): BoardState {
       // 已进入 reviewBy 链路时等待 qa/result 给出终态，不能提前标记完成。
       return input.awaitingQa ? BOARD_STATES.QA : BOARD_STATES.DONE;
     case "failed":
+    case "cancelled":
       return BOARD_STATES.FAILED;
     case "spec-approved":
-      return BOARD_STATES.DEV;
+      // 直接产品任务到确认即完成；协作任务还需恢复 Developer 执行，因此回到开发中。
+      return input.continues ? BOARD_STATES.DEV : BOARD_STATES.DONE;
     case "qa-result":
       return input.verdict === "pass"
         ? BOARD_STATES.DONE
@@ -162,7 +165,19 @@ export interface BoardRecord {
   bot: string;
   owner: string;
   state: string;
+  round?: number;
+  artifact?: string;
+  tokens?: number;
+  durationMs?: number;
   chatId: string;
+}
+
+function boardFieldNumber(value: unknown): number | undefined {
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const text = boardFieldText(value).trim();
+  if (!text) return undefined;
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 /** 把 Bitable 返回的原始记录解析为看板记录（按字段名映射取值）。 */
@@ -178,6 +193,10 @@ export function parseBoardRecord(
     bot: boardFieldText(value[fields.bot]).trim(),
     owner: boardFieldText(value[fields.owner]).trim(),
     state: boardFieldText(value[fields.state]).trim(),
+    round: boardFieldNumber(value[fields.round]),
+    artifact: boardFieldText(value[fields.artifact]).trim() || undefined,
+    tokens: boardFieldNumber(value[fields.tokens]),
+    durationMs: boardFieldNumber(value[fields.duration]),
     chatId: boardFieldText(value[fields.chatId]).trim(),
   };
 }
@@ -194,6 +213,58 @@ export interface BoardSnapshot {
   tokens?: number;
   durationMs?: number;
   chatId?: string;
+}
+
+/** 判断外部记录里的状态是否属于看板状态机。 */
+export function isBoardState(value: string): value is BoardState {
+  return Object.values(BOARD_STATES).some((state) => state === value);
+}
+
+function mergeArtifactUrls(current?: string, next?: string): string | undefined {
+  const urls = [current, next]
+    .flatMap((value) => value?.split("\n") ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return urls.length > 0 ? [...new Set(urls)].join("\n") : undefined;
+}
+
+function mergeMetric(
+  current: number | undefined,
+  next: number | undefined,
+  accumulate: boolean,
+): number | undefined {
+  if (next === undefined) return current;
+  if (current === undefined) return next;
+  return accumulate ? current + next : current;
+}
+
+/**
+ * 合并同一任务的生命周期快照：标题和发起人保持稳定，负责人/状态/轮次取最新，
+ * 产物取并集；只有确认是新运行时才累计 Token 与耗时，避免 task/result 与
+ * qa/result 对同一轮统计两次。
+ */
+export function mergeBoardSnapshots(
+  current: BoardSnapshot | undefined,
+  next: BoardSnapshot,
+  accumulateStats: boolean,
+): BoardSnapshot {
+  if (!current) return { ...next };
+  return {
+    taskId: next.taskId,
+    title: current.title || next.title,
+    bot: next.bot || current.bot,
+    owner: current.owner || next.owner,
+    state: next.state,
+    round: next.round ?? current.round,
+    artifact: mergeArtifactUrls(current.artifact, next.artifact),
+    tokens: mergeMetric(current.tokens, next.tokens, accumulateStats),
+    durationMs: mergeMetric(
+      current.durationMs,
+      next.durationMs,
+      accumulateStats,
+    ),
+    chatId: next.chatId || current.chatId,
+  };
 }
 
 /** Bitable 字段值支持的类型；单选/多选按官方数据结构分别是 string / string[]。 */

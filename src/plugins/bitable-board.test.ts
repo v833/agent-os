@@ -16,7 +16,11 @@ import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { Session } from "../core/session-manager.js";
 import type { Bot, BotIdentity } from "../im/lark.js";
-import type { StartTaskInput, TaskResultPayload } from "./types.js";
+import type {
+  QAResultPayload,
+  StartTaskInput,
+  TaskResultPayload,
+} from "./types.js";
 import {
   BoardService,
   createBitableRecordClient,
@@ -59,12 +63,16 @@ class FakeSessionsService extends Service {
 class FakeTasksService extends Service {
   readonly started: StartTaskInput[] = [];
 
-  constructor(ctx: Context) {
+  constructor(
+    ctx: Context,
+    private readonly succeeds: boolean,
+  ) {
     super(ctx, "tasks");
   }
 
-  startTask(input: StartTaskInput): void {
+  async startTask(input: StartTaskInput): Promise<boolean> {
     this.started.push(input);
+    return this.succeeds;
   }
 }
 
@@ -202,13 +210,14 @@ function setup(options: {
   bots?: BotConfig[];
   client?: BitableRecordClient;
   maxRetries?: number;
+  taskStartSucceeds?: boolean;
 } = {}) {
   const root = new Context();
   const bots = options.bots ?? [createBotConfig("developer")];
   const config = new FakeConfigService(root, bots);
   const lark = new FakeLarkService(root);
   const sessions = new FakeSessionsService(root);
-  const tasks = new FakeTasksService(root);
+  const tasks = new FakeTasksService(root, options.taskStartSucceeds ?? true);
   const fakeBot = createFakeBot();
   for (const botConfig of bots) {
     lark.runtimes.set(botConfig.id, { config: botConfig, bot: fakeBot.bot });
@@ -255,6 +264,7 @@ function resultPayload(overrides: Partial<TaskResultPayload> = {}): TaskResultPa
     durationMs: 30000,
     stats: { totalTokens: 1200 },
     toolCalls: [],
+    traceId: "trace-result-1",
     ...overrides,
   };
 }
@@ -408,6 +418,145 @@ test("节流窗口内同一任务只保留最新状态写入一次", async () =>
   assert.equal(
     fakeClient.calls.creates[0][DEFAULT_BOARD_FIELDS.state],
     BOARD_STATES.DONE,
+  );
+  service.stop();
+});
+
+test("QA 紧接开发结果时保留稳定标题、产物和累计指标", async () => {
+  const { root, service, fakeClient } = setup({
+    bots: [createBotConfig("developer"), createBotConfig("qa")],
+  });
+  await service.init();
+  const taskId = "task-aggregate";
+  await root.parallel("task/result", resultPayload({
+    taskId,
+    botConfig: { ...createBotConfig("developer"), reviewBy: "qa" },
+    toolCalls: [{
+      toolUseId: "tool-pr",
+      toolName: "publish_pr",
+      input: { url: "https://example.com/pr/42" },
+    }],
+    traceId: "trace-developer",
+  }));
+  await root.parallel("task/started", {
+    botConfig: createBotConfig("qa"),
+    session: createSession("qa"),
+    taskId,
+    traceId: "trace-qa",
+    startedAt: Date.now(),
+    requestedPrompt: "执行 QA 审查",
+    senderOpenId: "ou_user1",
+    collaboration: qaCollaboration("review"),
+  });
+  await service.flushNow();
+
+  const created = fakeClient.calls.creates[0];
+  assert.equal(created[DEFAULT_BOARD_FIELDS.title], "修复登录超时问题");
+  assert.equal(created[DEFAULT_BOARD_FIELDS.bot], "qa");
+  assert.equal(created[DEFAULT_BOARD_FIELDS.state], BOARD_STATES.QA);
+  assert.equal(created[DEFAULT_BOARD_FIELDS.round], 1);
+  assert.equal(created[DEFAULT_BOARD_FIELDS.artifact], "https://example.com/pr/42");
+  assert.equal(created[DEFAULT_BOARD_FIELDS.tokens], 1200);
+  assert.equal(created[DEFAULT_BOARD_FIELDS.duration], 30000);
+  assert.equal(created[DEFAULT_BOARD_FIELDS.chatId], "chat-001");
+
+  const qaPayload: QAResultPayload = {
+    ...resultPayload({
+      taskId,
+      botConfig: createBotConfig("qa"),
+      session: createSession("qa"),
+      requestedPrompt: "执行 QA 审查",
+      collaboration: qaCollaboration("review"),
+      stats: { totalTokens: 300 },
+      durationMs: 5000,
+      traceId: "trace-qa",
+    }),
+    qaResult: {
+      verdict: "pass",
+      revision: "rev-1",
+      tests: [],
+      findings: [],
+      nextAction: "close",
+    },
+  };
+  await root.parallel("task/result", qaPayload);
+  await root.parallel("qa/result", qaPayload);
+  await service.flushNow();
+
+  const updated = fakeClient.calls.updates.at(-1)?.fields;
+  assert.equal(updated?.[DEFAULT_BOARD_FIELDS.state], BOARD_STATES.DONE);
+  assert.equal(updated?.[DEFAULT_BOARD_FIELDS.title], "修复登录超时问题");
+  assert.equal(updated?.[DEFAULT_BOARD_FIELDS.tokens], 1500);
+  assert.equal(updated?.[DEFAULT_BOARD_FIELDS.duration], 35000);
+  service.stop();
+});
+
+test("直接产品方案确认后完成，协作方案确认后继续开发", async () => {
+  const { root, service, fakeClient, bot } = setup();
+  await service.init();
+  const baseFlow = {
+    token: "flow-1",
+    taskId: "task-direct-spec",
+    botId: "developer",
+    sessionId: "session-1",
+    ownerOpenId: "ou_user1",
+    workspaceDir: "/workspace",
+    request: {
+      deliveryMode: "lark-doc" as const,
+      title: "登录方案",
+      summary: "统一登录",
+      documentUrl: "https://example.feishu.cn/docx/Abc123XYZ",
+    },
+    status: "approved" as const,
+  };
+  await root.parallel("product-spec/approved", {
+    flow: baseFlow,
+    bot,
+    botConfig: createBotConfig(),
+    replyToMessageId: "card-direct",
+  });
+  await service.flushNow();
+  assert.equal(
+    fakeClient.calls.creates[0][DEFAULT_BOARD_FIELDS.state],
+    BOARD_STATES.DONE,
+  );
+
+  await root.parallel("product-spec/approved", {
+    flow: {
+      ...baseFlow,
+      token: "flow-2",
+      taskId: "task-collaboration-spec",
+      collaboration: {
+        taskId: "task-collaboration-spec",
+        fromBotId: "leader",
+        reportToBotId: "leader",
+        round: 1,
+        maxRounds: 4,
+      },
+    },
+    bot,
+    botConfig: createBotConfig(),
+    replyToMessageId: "card-collaboration",
+  });
+  await service.flushNow();
+  assert.equal(
+    fakeClient.calls.creates[1][DEFAULT_BOARD_FIELDS.state],
+    BOARD_STATES.DEV,
+  );
+  service.stop();
+});
+
+test("取消任务写入失败终态", async () => {
+  const { root, service, fakeClient } = setup();
+  await service.init();
+  await root.parallel("task/cancelled", resultPayload({
+    taskId: "task-cancelled",
+    traceId: "trace-cancelled",
+  }));
+  await service.flushNow();
+  assert.equal(
+    fakeClient.calls.creates[0][DEFAULT_BOARD_FIELDS.state],
+    BOARD_STATES.FAILED,
   );
   service.stop();
 });
@@ -583,13 +732,46 @@ test("反向拉起负责人未注册时跳过", async () => {
   service.stop();
 });
 
-test("scan 后历史待处理记录不自动触发", async () => {
+test("启动扫描后会拉起停机期间遗留的待处理记录", async () => {
   const { service, fakeClient, tasks } = setup();
+  const pendingRecord: BoardRecord = {
+    recordId: "rec-offline",
+    taskId: "",
+    title: "停机期间新增的任务",
+    bot: "developer",
+    owner: "ou_user1",
+    state: BOARD_STATES.TODO,
+    chatId: "oc_group1",
+  };
+  fakeClient.seedList([pendingRecord]);
   await service.init();
-  // scan 已把历史记录标记为 seen，轮询不应触发。
+  fakeClient.seedList([pendingRecord]);
   await service.pullOnce();
-  assert.equal(tasks.started.length, 0);
+  assert.equal(tasks.started.length, 1);
   assert.ok(fakeClient.calls.lists >= 1);
+  service.stop();
+});
+
+test("任务服务拒绝启动时回滚触发标记并在下轮重试", async () => {
+  const { service, fakeClient, tasks } = setup({ taskStartSucceeds: false });
+  await service.init();
+  const pendingRecord: BoardRecord = {
+    recordId: "rec-start-failed",
+    taskId: "",
+    title: "启动失败后重试",
+    bot: "developer",
+    owner: "ou_user1",
+    state: BOARD_STATES.TODO,
+    chatId: "oc_group1",
+  };
+  fakeClient.seedList([pendingRecord]);
+  await service.pullOnce();
+  fakeClient.seedList([{
+    ...pendingRecord,
+    taskId: "BR-rec-start-failed",
+  }]);
+  await service.pullOnce();
+  assert.equal(tasks.started.length, 2);
   service.stop();
 });
 

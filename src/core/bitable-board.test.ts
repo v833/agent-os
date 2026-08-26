@@ -10,6 +10,7 @@ import {
   buildBoardFields,
   detectReverseTriggers,
   extractArtifactUrls,
+  mergeBoardSnapshots,
   parseBoardRecord,
   reverseTaskId,
   stateForEvent,
@@ -50,7 +51,15 @@ test("stateForEvent 按事件映射看板状态", () => {
   assert.equal(stateForEvent({ kind: "result", awaitingQa: false }), BOARD_STATES.DONE);
   assert.equal(stateForEvent({ kind: "result", awaitingQa: true }), BOARD_STATES.QA);
   assert.equal(stateForEvent({ kind: "failed" }), BOARD_STATES.FAILED);
-  assert.equal(stateForEvent({ kind: "spec-approved" }), BOARD_STATES.DEV);
+  assert.equal(stateForEvent({ kind: "cancelled" }), BOARD_STATES.FAILED);
+  assert.equal(
+    stateForEvent({ kind: "spec-approved", continues: false }),
+    BOARD_STATES.DONE,
+  );
+  assert.equal(
+    stateForEvent({ kind: "spec-approved", continues: true }),
+    BOARD_STATES.DEV,
+  );
   assert.equal(
     stateForEvent({ kind: "qa-result", verdict: "pass" }),
     BOARD_STATES.DONE,
@@ -63,6 +72,10 @@ test("stateForEvent 按事件映射看板状态", () => {
     stateForEvent({ kind: "qa-result", verdict: "blocked" }),
     BOARD_STATES.FAILED,
   );
+});
+
+test("默认字段名与 issue 9 数据模型一致", () => {
+  assert.equal(DEFAULT_BOARD_FIELDS.artifact, "产物链接(文档/PR)");
 });
 
 test("buildBoardFields 输出单选字符串与可选数字字段", () => {
@@ -107,6 +120,10 @@ test("parseBoardRecord 兼容单选数组与链接对象字段", () => {
         [DEFAULT_BOARD_FIELDS.title]: "任务标题",
         [DEFAULT_BOARD_FIELDS.state]: [BOARD_STATES.TODO],
         [DEFAULT_BOARD_FIELDS.bot]: { text: "developer" },
+        [DEFAULT_BOARD_FIELDS.round]: 2,
+        [DEFAULT_BOARD_FIELDS.artifact]: { link: "https://example.com/pr/42" },
+        [DEFAULT_BOARD_FIELDS.tokens]: 1200,
+        [DEFAULT_BOARD_FIELDS.duration]: "30000",
         [DEFAULT_BOARD_FIELDS.chatId]: "",
       },
     },
@@ -116,7 +133,52 @@ test("parseBoardRecord 兼容单选数组与链接对象字段", () => {
   assert.equal(record.taskId, "t1");
   assert.equal(record.state, BOARD_STATES.TODO);
   assert.equal(record.bot, "developer");
+  assert.equal(record.round, 2);
+  assert.equal(record.artifact, "https://example.com/pr/42");
+  assert.equal(record.tokens, 1200);
+  assert.equal(record.durationMs, 30000);
   assert.equal(record.chatId, "");
+});
+
+test("mergeBoardSnapshots 保留稳定字段并按运行累计指标", () => {
+  const initial = {
+    taskId: "task-1",
+    title: "实现登录功能",
+    bot: "developer",
+    owner: "ou_owner",
+    state: BOARD_STATES.QA,
+    round: 1,
+    artifact: "https://example.com/pr/42",
+    tokens: 1200,
+    durationMs: 30000,
+    chatId: "oc_group",
+  };
+  const merged = mergeBoardSnapshots(
+    initial,
+    {
+      taskId: "task-1",
+      title: "执行 QA 审查",
+      bot: "qa",
+      owner: "ou_owner",
+      state: BOARD_STATES.DONE,
+      round: 2,
+      artifact: "https://example.com/report/42",
+      tokens: 300,
+      durationMs: 5000,
+    },
+    true,
+  );
+  assert.equal(merged.title, "实现登录功能");
+  assert.equal(merged.bot, "qa");
+  assert.equal(merged.state, BOARD_STATES.DONE);
+  assert.equal(merged.round, 2);
+  assert.equal(merged.tokens, 1500);
+  assert.equal(merged.durationMs, 35000);
+  assert.equal(
+    merged.artifact,
+    "https://example.com/pr/42\nhttps://example.com/report/42",
+  );
+  assert.equal(merged.chatId, "oc_group");
 });
 
 test("extractArtifactUrls 优先产品文档并去重", () => {
@@ -247,7 +309,7 @@ test("detectReverseTriggers 非待处理或缺少负责人不触发", () => {
   assert.equal(triggers.length, 0);
 });
 
-test("detectReverseTriggers 重启后已存在记录不自动触发", () => {
+test("detectReverseTriggers 不重复触发已经确认启动的记录", () => {
   const records = [
     {
       recordId: "rec-old",
@@ -259,7 +321,7 @@ test("detectReverseTriggers 重启后已存在记录不自动触发", () => {
       chatId: "oc_123",
     },
   ];
-  // 模拟扫描后的 seen：所有历史记录 triggered=true。
+  // task/started 已确认启动后，状态仍短暂为待处理也不能重复派发。
   const seen = new Map([["rec-old", { state: BOARD_STATES.TODO, triggered: true }]]);
   const { triggers } = detectReverseTriggers(records, seen);
   assert.equal(triggers.length, 0);

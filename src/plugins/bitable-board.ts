@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { IncomingMessage } from "../im/lark.js";
 import {
+  BOARD_STATES,
   DEFAULT_BOARD_FIELDS,
   type BoardFields,
   type BoardRecord,
@@ -19,6 +20,8 @@ import {
   buildBoardFields,
   detectReverseTriggers,
   extractArtifactUrls,
+  isBoardState,
+  mergeBoardSnapshots,
   parseBoardRecord,
   reverseTaskId,
   stateForEvent,
@@ -187,6 +190,8 @@ function sleep(ms: number): Promise<void> {
 
 /** 扫描失败的首次重试延迟；网络/权限恢复后自动补建索引，不阻塞启动。 */
 const SCAN_RETRY_DELAY_MS = 15_000;
+/** 终态事件只会相邻到达；保留最近运行即可去重，避免长期重复任务让集合无界增长。 */
+const MAX_COUNTED_RUNS_PER_TASK = 64;
 
 /**
  * 看板同步服务：维护 taskId→recordId 索引、节流合并队列与反向拉起轮询。
@@ -196,10 +201,14 @@ const SCAN_RETRY_DELAY_MS = 15_000;
 export class BoardService {
   /** taskId → 已关联的看板记录 ID；create 后立即写入，重启后由全量扫描重建。 */
   readonly recordIndex = new Map<string, string>();
-  /** 反向拉起轮询的状态快照；仅存内存，重启后旧记录不会自动触发。 */
+  /** 反向拉起轮询的状态快照；启动扫描将 TODO 视为未触发，以补拉停机期间新增记录。 */
   readonly seenRecords = new Map<string, SeenBoardRecord>();
-  /** 节流窗口内待写入的任务快照；同一任务只保留最新一条。 */
+  /** 节流窗口内待写入的任务累计快照；同一任务只保留一条待写记录。 */
   private readonly pending = new Map<string, BoardSnapshot>();
+  /** 每个任务的累计快照；避免阶段切换覆盖稳定字段和历史指标。 */
+  private readonly snapshots = new Map<string, BoardSnapshot>();
+  /** 已累计统计的运行 ID；task/result 与 qa/result 会共享同一 traceId。 */
+  private readonly countedRuns = new Map<string, Set<string>>();
   private flushTimer?: ReturnType<typeof setTimeout>;
   private flushing = false;
   private pollTimer?: ReturnType<typeof setInterval>;
@@ -276,12 +285,38 @@ export class BoardService {
   /** 全量扫描看板记录：重建 taskId→recordId 索引，并标记所有记录为已见。 */
   private async scan(): Promise<void> {
     const records = await this.client.list();
+    this.recordIndex.clear();
+    this.seenRecords.clear();
     for (const record of records) {
-      if (record.taskId) this.recordIndex.set(record.taskId, record.recordId);
+      if (record.taskId) {
+        this.recordIndex.set(record.taskId, record.recordId);
+        if (isBoardState(record.state)) {
+          const stored: BoardSnapshot = {
+            taskId: record.taskId,
+            title: record.title,
+            bot: record.bot,
+            owner: record.owner,
+            state: record.state,
+            round: record.round,
+            artifact: record.artifact,
+            tokens: record.tokens,
+            durationMs: record.durationMs,
+            chatId: record.chatId,
+          };
+          const pending = this.snapshots.get(record.taskId);
+          const merged = pending
+            ? mergeBoardSnapshots(stored, pending, true)
+            : stored;
+          this.snapshots.set(record.taskId, merged);
+          if (this.pending.has(record.taskId)) {
+            this.pending.set(record.taskId, merged);
+          }
+        }
+      }
       this.seenRecords.set(record.recordId, {
         state: record.state,
-        // 重启前已存在的记录不自动触发，避免把历史待处理记录全部拉起。
-        triggered: true,
+        // “待处理”就是持久任务队列；重启后必须重新检查，避免停机期间的任务丢失。
+        triggered: record.state !== BOARD_STATES.TODO,
       });
     }
     console.log(
@@ -302,6 +337,8 @@ export class BoardService {
           kind: "started",
           qaStage: payload.collaboration?.qaReview?.stage,
         }),
+        round: payload.collaboration?.round,
+        chatId: payload.session.chatId,
       });
     });
     this.ctx.on(
@@ -349,7 +386,7 @@ export class BoardService {
         tokens: payload.stats?.totalTokens,
         durationMs: payload.durationMs,
         chatId: payload.session.chatId,
-      });
+      }, this.statsKey(payload));
     });
     this.ctx.on("task/failed", (payload: TaskResultPayload) => {
       if (!payload.taskId) return;
@@ -363,7 +400,21 @@ export class BoardService {
         tokens: payload.stats?.totalTokens,
         durationMs: payload.durationMs,
         chatId: payload.session.chatId,
-      });
+      }, this.statsKey(payload));
+    });
+    this.ctx.on("task/cancelled", (payload: TaskResultPayload) => {
+      if (!payload.taskId) return;
+      this.enqueueSnapshot({
+        taskId: payload.taskId,
+        title: fitTitle(payload.requestedPrompt),
+        bot: payload.botConfig.id,
+        owner: payload.senderOpenId ?? "",
+        state: stateForEvent({ kind: "cancelled" }),
+        round: payload.collaboration?.round,
+        tokens: payload.stats?.totalTokens,
+        durationMs: payload.durationMs,
+        chatId: payload.session.chatId,
+      }, this.statsKey(payload));
     });
     this.ctx.on(
       "product-spec/approved",
@@ -374,7 +425,10 @@ export class BoardService {
           title: fitTitle(flow.request.title),
           bot: flow.botId,
           owner: flow.ownerOpenId,
-          state: stateForEvent({ kind: "spec-approved" }),
+          state: stateForEvent({
+            kind: "spec-approved",
+            continues: Boolean(flow.collaboration),
+          }),
           chatId: "",
         });
       },
@@ -395,17 +449,45 @@ export class BoardService {
         tokens: payload.stats?.totalTokens,
         durationMs: payload.durationMs,
         chatId: payload.session.chatId,
-      });
+      }, this.statsKey(payload));
     });
   }
 
+  /** 兼容旧事件缺少 traceId；同一 QA 结果的两个终态事件仍使用相同回退键。 */
+  private statsKey(payload: TaskResultPayload): string {
+    return payload.traceId ?? [
+      payload.session.id,
+      payload.botConfig.id,
+      payload.collaboration?.dispatchId ?? "direct",
+      payload.durationMs ?? "unknown",
+      payload.stats?.totalTokens ?? "unknown",
+    ].join(":");
+  }
+
   /**
-   * 入队一条同步快照：同一 taskId 在节流窗口内合并，只保留最新状态；
+   * 入队一条同步快照：同一 taskId 在节流窗口内合并状态并保留稳定字段、产物和累计指标；
    * 首次扫描完成后按节流窗口启动 flush，扫描失败期间仅保留内存快照。
    */
-  enqueueSnapshot(snapshot: BoardSnapshot): void {
+  enqueueSnapshot(snapshot: BoardSnapshot, statsKey?: string): void {
     if (!this.resolvedConfig.sync) return;
-    this.pending.set(snapshot.taskId, snapshot);
+    let accumulateStats = true;
+    if (statsKey) {
+      const counted = this.countedRuns.get(snapshot.taskId) ?? new Set<string>();
+      accumulateStats = !counted.has(statsKey);
+      counted.add(statsKey);
+      if (counted.size > MAX_COUNTED_RUNS_PER_TASK) {
+        const oldest = counted.values().next().value;
+        if (oldest !== undefined) counted.delete(oldest);
+      }
+      this.countedRuns.set(snapshot.taskId, counted);
+    }
+    const merged = mergeBoardSnapshots(
+      this.snapshots.get(snapshot.taskId),
+      snapshot,
+      accumulateStats,
+    );
+    this.snapshots.set(snapshot.taskId, merged);
+    this.pending.set(snapshot.taskId, merged);
     this.scheduleFlush();
   }
 
@@ -601,7 +683,7 @@ export class BoardService {
       console.error(`[看板] 向群 ${chatId} 发送开工消息未返回 message_id`);
       return false;
     }
-    this.ctx.tasks.startTask({
+    const started = await this.ctx.tasks.startTask({
       bot: runtime.bot,
       botConfig,
       session,
@@ -614,6 +696,10 @@ export class BoardService {
       isCompacting: false,
       resources: [],
     });
+    if (!started) {
+      console.error(`[看板] 记录 ${trigger.recordId} 的任务未能进入执行链`);
+      return false;
+    }
     console.log(
       `[看板] 已反向拉起任务 taskId=${taskId} bot=${trigger.bot} chat=${chatId} record=${trigger.recordId}`,
     );
