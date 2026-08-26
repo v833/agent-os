@@ -435,6 +435,8 @@ export class TasksService extends Service {
     };
     if (!isCompacting) {
       // 开始事件只提供旁路观测，不得因可选监听器异常或耗时而阻断 CLI 主流程。
+      // 携带 requestedPrompt/senderOpenId/collaboration，供看板等观察者展示标题、
+      // 发起人并识别 QA 轮；旧广播缺省这些字段时消费者按 undefined 处理。
       void this.ctx
         .parallel("task/started", {
           botConfig,
@@ -442,6 +444,9 @@ export class TasksService extends Service {
           taskId,
           traceId: activeRun.runId,
           startedAt: taskStartTime,
+          requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
+          ...(senderOpenId ? { senderOpenId } : {}),
+          ...(collaboration ? { collaboration } : {}),
         })
         .catch((error) => {
           const detail =

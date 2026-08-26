@@ -2142,6 +2142,7 @@ async function beginQaReview(
     answer: "开发完成",
     replyToMessageId: "m1",
     hasThread: false,
+    taskId: "qa-task-1",
   });
   const dispatchId = host.calls.mentions
     .at(-1)
@@ -2149,6 +2150,7 @@ async function beginQaReview(
   assert.ok(dispatchId, "QA 派发必须携带任务编号");
   const collaboration = host.root.collaboration.consume(dispatchId, "qa");
   assert.ok(collaboration?.qaReview?.revision, "QA 交接单必须携带 revision");
+  assert.equal(collaboration.taskId, "qa-task-1", "QA 必须沿用原交付任务 ID");
   assert.notEqual(
     collaboration.workspaceDir,
     collaboration.qaReview.sourceWorkspaceDir,

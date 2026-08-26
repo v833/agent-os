@@ -112,7 +112,9 @@ export class QAGate {
         senderBot: payload.bot,
         replyToMessageId: payload.replyToMessageId,
         targetBotId: reviewerBotId,
-        taskId: randomUUID(),
+        // QA 是原交付任务的生命周期阶段，必须沿用同一 taskId，供看板等观察者
+        // 在同一条记录上继续流转；旧入口未提供 taskId 时才生成兼容 ID。
+        taskId: payload.taskId ?? randomUUID(),
         ownerOpenId: payload.senderOpenId ?? payload.botConfig.id,
         ownerUnionId: payload.senderUnionId,
         reportToBotId: payload.botConfig.id,

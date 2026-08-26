@@ -10,6 +10,7 @@ import { parse as parseYaml } from "yaml";
 
 import * as applicationToolsPlugin from "./application-tools.js";
 import * as authPlugin from "./auth.js";
+import * as bitableBoardPlugin from "./bitable-board.js";
 import * as cardsPlugin from "./cards.js";
 import * as clarificationPlugin from "./clarification.js";
 import * as cliPlugin from "./cli.js";
@@ -57,6 +58,7 @@ const pluginRegistry: Record<string, Plugin> = {
   cli: cliPlugin,
   "application-tools": applicationToolsPlugin,
   auth: authPlugin,
+  "bitable-board": bitableBoardPlugin,
   clarification: clarificationPlugin,
   "engines/claude": claudeEngine,
   "engines/codex": codexEngine,
