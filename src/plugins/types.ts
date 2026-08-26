@@ -276,6 +276,12 @@ export interface TaskStartedPayload {
   taskId?: string;
   traceId: string;
   startedAt: number;
+  /** 本轮任务指令（原始请求），供看板等观察者展示标题；兼容旧广播可缺省。 */
+  requestedPrompt?: string;
+  /** 任务发起人 open_id；可缺省（旧广播或定时入口）。 */
+  senderOpenId?: string;
+  /** 协作交接单；QA 轮携带 qaReview，观察者可据此标记“QA验收中”。 */
+  collaboration?: CollaborationMessage;
 }
 
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */

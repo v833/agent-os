@@ -84,6 +84,19 @@ plugins:
       maxTracesInMemory: 500
       exportToFile: false
       traceLogPath: "data/traces.jsonl"
+  # 飞书多维表格任务看板：把任务生命周期实时同步到 Bitable，并轮询表格反向拉起新任务。
+  # 启用前需要：1) 应用开通 bitable:app 读写权限；2) 创建多维表格并配置 issue 规定的字段；
+  # 3) 在下方填入 appToken/tableId 并把 disabled 改为 false（botId 缺省使用 Team Leader）。
+  # 移除本条目或保持 disabled: true 即可下线，不影响核心任务执行。
+  - name: bitable-board
+    disabled: true
+    config:
+      appToken: ""
+      tableId: ""
+      # sync: true          # 单向事件同步（Agent OS ➔ Bitable）
+      # pull: true          # 反向任务拉起（Bitable ➔ Agent OS）
+      # pollIntervalMs: 30000
+      # fallbackChatId: ""  # 记录未填“群聊ID”时反向拉起所在群聊
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification

@@ -636,6 +636,57 @@ Agent OS 可以把飞书从“被动响应”升级为“主动指挥”：用 `
 - 任务卡片上的“停止任务”按钮按配置者的 `openId` 鉴权，配置者可以随时停止定时触发的执行。
 - 在 `cordis.yml` 中移除 `schedule` 或 `commands/schedule` 即可整体下线定时能力。
 
+## 多维表格任务看板（bitable-board）
+
+Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看板，也能从表格反向拉起新任务：管理者在表格里新增一行“待处理”记录并指定负责人，Agent OS 自动驱动对应 Bot 开工并把结果写回该记录。这是独立插件 `bitable-board`（`src/plugins/bitable-board.ts` + 数据契约 `src/core/bitable-board.ts`），在 `cordis.yml` 中移除条目或保持 `disabled: true` 即整体下线，不影响核心任务执行。
+
+### 前置配置
+
+1. 在[飞书开放平台](https://open.feishu.cn/)为应用开通多维表格读写权限（`bitable:app`）。
+2. 新建一张多维表格，字段按下表（也可在 `cordis.yml` 用 `fields` 覆盖字段名）：
+
+| 字段名 | 类型 | 说明 |
+| --- | --- | --- |
+| 任务ID | 文本 | Agent OS 任务标识；反向拉起的记录由系统自动回写 |
+| 任务标题 | 文本 | 必填；反向拉起时作为 Bot 的任务指令 |
+| 负责人(Bot) | 文本 | 必填；`config/bots.json` 中的 bot id（如 `developer`） |
+| 发起人 | 文本 | 可选；发起人 open_id，用于停止按钮鉴权 |
+| 当前状态 | 单选 | 待处理 / 方案确认中 / 开发中 / QA验收中 / 已完成 / 失败 |
+| 轮次 | 数字 | 协作交接轮次 |
+| 产物链接 | 文本 | 产品文档 / PR 等链接（从工具调用自动提取） |
+| 消耗Token | 数字 | 任务总 Token 消耗 |
+| 耗时 | 数字 | 任务耗时（毫秒） |
+| 群聊ID | 文本 | 可选；反向拉起时任务执行的群聊 |
+| 创建时间 / 更新时间 | 自动 | 使用多维表格系统自动字段 |
+
+3. 在 `cordis.yml` 启用插件并填入 `appToken`、`tableId`：
+
+```yaml
+- name: bitable-board
+  config:
+    appToken: "你的 app_token"
+    tableId: "你的 table_id"
+    # botId: ""              # 调用 Bitable API 的 bot，缺省用 Team Leader
+    # sync: true             # 单向事件同步（Agent OS ➔ Bitable）
+    # pull: true             # 反向任务拉起（Bitable ➔ Agent OS）
+    # pollIntervalMs: 30000  # 反向拉起轮询间隔
+    # fallbackChatId: ""     # 记录未填“群聊ID”时的执行群聊
+```
+
+### 同步语义
+
+- **事件同步**：监听 `task/started`、`task/tool-calls`、`task/result`、`task/failed`、`product-spec/approved`、`qa/result`，按“任务ID”字段 Upsert 记录。状态机：开发中 →（提交产品方案）方案确认中 →（方案确认）开发中 →（QA 轮）QA验收中 →（QA 结论）已完成 / 开发中 / 失败；失败任务标记“失败”。
+- **队列与节流**：高频事件先进内存队列，节流窗口（默认 1.5s）内同一任务只保留最新状态；写入失败按指数退避重试（默认 3 次），Bitable API 异常不阻塞主任务与卡片响应。
+- **反向拉起**：轮询（默认 30s）检测“当前状态=待处理”的记录（新建或从其他状态改回），在记录的“群聊ID”或 `fallbackChatId` 群中向负责人 Bot 发起任务，并把任务ID回写记录；进程重启后历史记录不会自动触发，把状态改回“待处理”即可重新开工。
+
+### 验收
+
+1. 表格中手动新增一行（任务标题、负责人、当前状态=待处理），等待一个轮询周期。
+2. 对应 Bot 应在群聊中收到开工消息并开始执行，表格记录自动更新为“开发中”。
+3. 任务完成后记录自动更新为“已完成”，并回填 Token、耗时、产物链接。
+4. 把记录状态改回“待处理”，任务会再次拉起。
+5. 在 `cordis.yml` 设置 `disabled: true` 后重启，普通任务执行不受影响。
+
 ## 多话题并行编排
 
 Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给不同 bot 独立执行，再用一张面板汇总进度——`orchestration` 服务插件 + `/orchestrate`、`/panel` 命令插件。
