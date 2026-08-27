@@ -4,10 +4,8 @@ dist/
 config/bots.json
 data/
 *.log
-docs/*
-!docs/agents/
-docs/agents/*
-!docs/agents/issue-tracker.md
+docs/.vitepress/dist/
+docs/.vitepress/cache/
 # 本地运行产物与机器相关配置（含绝对路径），禁止提交
 .scratch/
 .mcp.json
