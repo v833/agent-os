@@ -17,7 +17,9 @@ export type SlashCommand =
   /** 发起 CLI 登录卡片；cliId 缺省表示当前会话的引擎。 */
   | { name: "login"; cliId?: CliId }
   /** 可观测性与指标大盘查询。 */
-  | { name: "metrics"; args?: string };
+  | { name: "metrics"; args?: string }
+  /** 任务看板初始化、链接与状态大盘。 */
+  | { name: "board"; args?: string };
 
 // 飞书还原提及后可能得到“@机器人名称 /status”，机器人名称允许包含空格，
 // 因此名称段用非贪婪匹配，避免把后面的命令内容吞进显示名。
@@ -25,6 +27,7 @@ const COMMAND_RE = /^(?:@.+?\s+)?\/(close|status|help|new|resume|team)\s*$/;
 const CD_RE = /^(?:@.+?\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+?\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
 const METRICS_RE = /^(?:@.+?\s+)?\/metrics(?:\s+([\s\S]+?))?\s*$/;
+const BOARD_RE = /^(?:@.+?\s+)?\/board(?:\s+([\s\S]+?))?\s*$/;
 /** 未显式注入注册表时的回退引擎集合（router 会传入真实注册表，保持两者同步）。 */
 const DEFAULT_CLI_IDS = ["codex", "claude", "dimagent", "agy"] as const;
 // /schedule add 的周期用双引号包裹，避免任务文本里出现斜杠时误切分。
@@ -103,6 +106,14 @@ export function parseCommand(text: string): SlashCommand | undefined {
     return {
       name: "metrics",
       args: metricsMatch[1]?.trim() || undefined,
+    };
+  }
+
+  const boardMatch = BOARD_RE.exec(value);
+  if (boardMatch) {
+    return {
+      name: "board",
+      args: boardMatch[1]?.trim() || undefined,
     };
   }
 

@@ -43,6 +43,7 @@ import type { ClarificationService } from "./clarification.js";
 import type { ProductSpecService } from "./product-spec.js";
 import type { ProductCommentsService } from "./product-comments.js";
 import type { ObservabilityService } from "./observability.js";
+import type { BitableBoardService } from "./bitable-board.js";
 
 declare module "cordis" {
   interface Context {
@@ -82,6 +83,8 @@ declare module "cordis" {
     productComments: ProductCommentsService;
     /** 可观测性与链路追踪：收集全链路 Span、Token 成本、时延与多维指标。 */
     observability: ObservabilityService;
+    /** 飞书多维表格任务看板：双向任务同步与反向拉起服务。 */
+    bitableBoard: BitableBoardService;
   }
 
   interface Events {

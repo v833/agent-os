@@ -640,6 +640,10 @@ Agent OS 可以把飞书从“被动响应”升级为“主动指挥”：用 `
 
 Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看板，也能从表格反向拉起新任务：管理者在表格里新增一行“待处理”记录并指定负责人，Agent OS 自动驱动对应 Bot 开工并把结果写回该记录。这是独立插件 `bitable-board`（`src/plugins/bitable-board.ts` + 数据契约 `src/core/bitable-board.ts`），在 `cordis.yml` 中移除条目或保持 `disabled: true` 即整体下线，不影响核心任务执行。
 
+### 一键初始化（推荐）
+
+无需手动建表与提取 `appToken/tableId`：在飞书群聊中发送 `/board init [看板名称]`，Agent OS 自动创建多维表格、10 个标准字段与 6 色状态枚举、看板视图，并把**初始化群绑定为反向拉起的回退群聊**（记录未填“群聊ID”也能开工），完成后持久化到 `data/bitable-board.json` 并就地热挂载，无需重启。重启后自动从缓存恢复挂载。使用 `/board link`、`/board status` 查询状态，`/board init --force` 覆盖重建。
+
 ### 前置配置
 
 1. 在[飞书开放平台](https://open.feishu.cn/)为应用开通多维表格读写权限（`bitable:app`）。

@@ -199,6 +199,37 @@ test("loader 找不到装配文件时报错", async () => {
   );
 });
 
+test("loader 接受 config 为空的 YAML 块（解析为 null）", async () => {
+  await withTempDir(async (dir) => {
+    process.env.TEST_APP_ID = "cli_test";
+    process.env.TEST_APP_SECRET = "test_secret";
+    const botsPath = await writeBotsConfig(dir);
+    const ymlPath = join(dir, "cordis.yml");
+    await writeFile(
+      ymlPath,
+      [
+        "plugins:",
+        `  - name: config`,
+        `    config:`,
+        `      botsPath: ${yamlPath(botsPath)}`,
+        `  - name: cli`,
+        "  - name: cards",
+        "    config:",
+        "      # 空块只有注释，YAML 会解析为 null；必须与缺失一样放行。",
+        "  - name: commands",
+      ].join("\n"),
+    );
+
+    const root = new Context();
+    await root.plugin(loader, { path: ymlPath });
+
+    await root.inject(["cards", "commands"], (ctx) => {
+      assert.equal(typeof ctx.cards.task, "function");
+      assert.equal(ctx.commands.has("help"), false);
+    });
+  });
+});
+
 test("loader 拒绝空插件列表", async () => {
   await withTempDir(async (dir) => {
     const ymlPath = join(dir, "cordis.yml");

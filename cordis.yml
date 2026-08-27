@@ -41,6 +41,7 @@ plugins:
   - name: cards
   - name: commands
   - name: commands/help
+  - name: commands/board
   - name: commands/metrics
   # /login：为当前会话引擎（或 "/<engine> login"）发起登录卡片；依赖 auth 插件。
   - name: commands/login
@@ -85,18 +86,20 @@ plugins:
       exportToFile: false
       traceLogPath: "data/traces.jsonl"
   # 飞书多维表格任务看板：把任务生命周期实时同步到 Bitable，并轮询表格反向拉起新任务。
-  # 启用前需要：1) 应用开通 bitable:app 读写权限；2) 创建多维表格并配置 issue 规定的字段；
-  # 3) 在下方填入 appToken/tableId 并把 disabled 改为 false（botId 缺省使用 Team Leader）。
-  # 移除本条目或保持 disabled: true 即可下线，不影响核心任务执行。
+  # 两种挂载方式二选一：
+  #   1) 一键初始化：群聊中发送 /board init 自动建表并热挂载，配置持久化到 data/bitable-board.json，重启自愈；
+  #   2) 静态配置：已有表格时在下方填入 appToken/tableId 即可挂载（无需 /board init）。
+  # 移除本条目或设置 disabled: true 即可下线看板服务。
   - name: bitable-board
-    disabled: true
     config:
-      appToken: ""
-      tableId: ""
-      # sync: true          # 单向事件同步（Agent OS ➔ Bitable）
-      # pull: true          # 反向任务拉起（Bitable ➔ Agent OS）
-      # pollIntervalMs: 30000
-      # fallbackChatId: ""  # 记录未填“群聊ID”时反向拉起所在群聊
+      # appToken: ""          # 静态配置模式：多维表格 app_token
+      # tableId: ""           # 静态配置模式：数据表 ID
+      # fallbackChatId: ""    # 反向拉起回退群聊（记录未填“群聊ID”时开工的群）：
+      #                       #   - /board init 模式：自动绑定初始化群并持久化，无需配置
+      #                       #   - 静态配置模式：需手动指定，否则缺群聊ID的记录会被跳过
+      # sync: true            # 单向事件同步（Agent OS ➔ Bitable）
+      # pull: true            # 反向任务拉起（Bitable ➔ Agent OS）
+      # pollIntervalMs: 30000 # 反向拉起轮询间隔（毫秒）
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification

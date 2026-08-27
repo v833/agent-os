@@ -6,15 +6,18 @@
 import type { Context } from "cordis";
 import type { CommandHandler } from "../types.js";
 
-const handler: CommandHandler = async ({
-  ctx,
-  bot,
-  botConfig,
-  message,
-  hasThread,
-  command,
-}) => {
-  const args = command.name === "metrics" ? (command.args ?? "") : "";
+function createHandler(pluginCtx: Context): CommandHandler {
+  return async ({
+    bot,
+    botConfig,
+    message,
+    hasThread,
+    command,
+  }) => {
+    // 命令 handler 在 router 的上下文被调用，而 router 未注入 observability；
+    // 因此这里统一用插件自身 ctx（inject 已声明 observability），而不是 commandContext.ctx。
+    const ctx = pluginCtx;
+    const args = command.name === "metrics" ? (command.args ?? "") : "";
   const subCommand = args.trim().toLowerCase();
   const filter = { botId: botConfig.id, chatId: message.chatId };
 
@@ -101,11 +104,12 @@ const handler: CommandHandler = async ({
   // 默认：当前 Bot、当前群聊或私聊范围内的指标大盘
   const report = ctx.observability.formatSummaryMarkdown(filter);
   await bot.reply(message.messageId, report, hasThread);
-};
+  };
+}
 
 export const name = "commands/metrics";
 export const inject = ["commands", "observability"];
 
 export function apply(ctx: Context) {
-  ctx.commands.register("metrics", handler);
+  ctx.commands.register("metrics", createHandler(ctx));
 }
