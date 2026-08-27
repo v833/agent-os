@@ -44,4 +44,5 @@ jobs:
           REMOTE_USER: ${{ secrets.SERVER_USER || 'root' }}
           TARGET: "/opt/agent-os-docs/dist/"
           SCRIPT_AFTER: |
+            chmod -R a+rX /opt/agent-os-docs/dist
             echo "Docs updated successfully."

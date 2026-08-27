@@ -13,6 +13,7 @@ pnpm docs:build
 
 Write-Host "===> 2. 正在上传构建产物至目标服务器 $Server..." -ForegroundColor Cyan
 scp -i $KeyPath -r docs/.vitepress/dist/* "${User}@${Server}:${RemoteDir}"
+ssh -i $KeyPath -o BatchMode=yes "${User}@${Server}" "chmod -R a+rX ${RemoteDir}"
 
 Write-Host "===> 3. 正在验证公网服务响应 (https://agent-os.wq1115.com/)..." -ForegroundColor Cyan
 $res = Invoke-WebRequest -Uri "https://agent-os.wq1115.com/" -UseBasicParsing
