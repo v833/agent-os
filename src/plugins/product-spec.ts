@@ -156,6 +156,7 @@ export class ProductSpecService extends Service {
       bot,
       botConfig,
       replyToMessageId: action.messageId,
+      ...(action.value.handoffToLeader === true ? { handoffToLeader: true } : {}),
     });
     return {
       toast: { type: "success", content: "产品方案已确认。" },

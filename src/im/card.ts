@@ -999,9 +999,29 @@ export function buildProductSpecApprovalCard(flow: ProductSpecFlow): CardJson {
         },
       }],
     },
+    // 协作来源的任务确认后会自动交回原编排者，无需“交给 Leader”按钮；只有直接产品任务需要。
+    ...(flow.collaboration
+      ? []
+      : [{
+          tag: "button",
+          text: { tag: "plain_text", content: "确认并交给 Leader" },
+          type: "default",
+          width: "fill",
+          size: "medium",
+          behaviors: [{
+            type: "callback",
+            value: {
+              action: "approve_product_spec",
+              flowToken: flow.token,
+              handoffToLeader: true,
+            },
+          }],
+        }]),
     {
       tag: "markdown",
-      content: "_确认后只记录“产品方案已就绪”，本节不会自动交给开发。_",
+      content: flow.collaboration
+        ? "_确认后自动交回原编排者继续推进。_"
+        : "_直接确认仅记录“产品方案已就绪”；选择“交给 Leader”会把方案作为团队任务派发给 Leader，由其组织开发。_",
     },
   ];
 

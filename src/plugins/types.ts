@@ -226,6 +226,8 @@ export interface ProductSpecApprovedPayload {
   bot: Bot;
   botConfig: BotConfig;
   replyToMessageId: string;
+  /** 直接产品任务确认时用户选择把方案交给 Team Leader 继续组织；协作任务无需此字段。 */
+  handoffToLeader?: boolean;
 }
 
 /** 应用工具插件认领任务结果后返回的替代卡片与任务生命周期。 */

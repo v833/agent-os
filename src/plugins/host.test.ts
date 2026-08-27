@@ -371,6 +371,7 @@ function clarificationValueOf(
 /** 从产品方案待确认卡里取出一次性确认 token。 */
 function productSpecValueOf(
   card: Record<string, unknown>,
+  filter?: (value: Record<string, unknown>) => boolean,
 ): Record<string, unknown> {
   const elements = (card.body as { elements?: unknown[] } | undefined)
     ?.elements ?? [];
@@ -384,7 +385,8 @@ function productSpecValueOf(
         value !== null &&
         (value as { action?: string }).action === "approve_product_spec"
       ) {
-        return value as Record<string, unknown>;
+        const record = value as Record<string, unknown>;
+        if (!filter || filter(record)) return record;
       }
     }
   }
@@ -1278,6 +1280,225 @@ test("协作产品方案继承真人 owner，确认后自动交回 Team Leader",
   );
   assert.match(host.calls.mentions.at(-1) ?? "", /产品方案“末轮产品方案”已确认/);
   assert.doesNotMatch(host.calls.mentions.at(-1) ?? "", /协作结果已经返回/);
+});
+
+test("直接产品任务确认后按用户选择交给 Team Leader 或仅记录", async () => {
+  const leaderInput: BotConfig = {
+    ...baseBotConfig,
+    id: "leader",
+    skills: ["grill-me", "lark-doc"],
+  };
+  const productInput: BotConfig = {
+    ...baseBotConfig,
+    id: "product",
+    skills: ["grill-me", "lark-doc"],
+  };
+  const host = await createHost([leaderInput, productInput]);
+  const leader = host.root.config.bot("leader")!;
+  const product = host.root.config.bot("product")!;
+  for (const config of [leader, product]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  const storeDir = await mkdtemp(join(tmpdir(), "agent-os-direct-product-"));
+  tempDirs.push(storeDir);
+  await host.root.plugin(productSpecPlugin, {
+    storePath: join(storeDir, "flows.json"),
+  });
+  await host.root.plugin(dispatchTaskPlugin);
+  await waitForAllActive(host.root);
+
+  /** 直接产品任务：用户直接在产品 bot 发起，不经过协作交接单。 */
+  const directResult = {
+    answer: "飞书产品文档已生成。",
+    sessionId: "sess-direct-product",
+    toolCalls: [{
+      toolUseId: "tool-direct-product",
+      toolName: "request_spec_approval",
+      input: {
+        title: "用户分组管理",
+        summary: "支持创建分组并维护分组成员。",
+        deliveryMode: "lark-doc" as const,
+        documentUrl: "https://example.feishu.cn/docx/DirectProduct123",
+      },
+    }],
+  };
+  const outcome = await host.root.serial("task/tool-calls", {
+    bot: host.bot,
+    botConfig: product,
+    session: {
+      ...fakeSession(),
+      botId: product.id,
+      workspaceDir: product.workspaceDir,
+    },
+    requestedPrompt: "形成用户分组产品方案",
+    answer: directResult.answer,
+    replyToMessageId: "product-message",
+    hasThread: true,
+    taskId: "direct-product-task",
+    result: directResult,
+    runId: "run-direct-product",
+    senderOpenId: "ou_owner",
+    senderUnionId: "on_owner",
+    cardMessageId: "card-direct-product",
+  });
+  assert.ok(outcome);
+  await outcome.afterCardPublished?.();
+  // 直接任务卡片必须同时提供“确认产品方案”和“确认并交给 Leader”两个按钮。
+  const plainValue = productSpecValueOf(
+    outcome.card,
+    (value) => value.handoffToLeader !== true,
+  );
+  const handoffValue = productSpecValueOf(
+    outcome.card,
+    (value) => value.handoffToLeader === true,
+  );
+  assert.ok(plainValue && handoffValue);
+
+  // 场景一：普通确认只记录已就绪，不派发协作单。
+  const mentionsBeforePlain = host.calls.mentions.length;
+  const plainApproved = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      operatorUnionId: "on_owner",
+      messageId: "card-direct-product",
+      value: plainValue,
+    },
+    host.bot,
+    product,
+  );
+  assert.equal(plainApproved?.toast?.content, "产品方案已确认。");
+  assert.equal(
+    host.calls.mentions.length,
+    mentionsBeforePlain,
+    "普通确认不能派发协作单",
+  );
+
+  // 场景二：用户选择“确认并交给 Leader”时，方案作为团队任务派发给 Team Leader。
+  const outcome2 = await host.root.serial("task/tool-calls", {
+    bot: host.bot,
+    botConfig: product,
+    session: {
+      ...fakeSession(),
+      id: "s2",
+      botId: product.id,
+      workspaceDir: product.workspaceDir,
+    },
+    requestedPrompt: "形成第二个产品方案",
+    answer: "第二个产品文档已生成。",
+    replyToMessageId: "product-message-2",
+    hasThread: true,
+    taskId: "direct-product-task-2",
+    result: {
+      answer: "第二个产品文档已生成。",
+      sessionId: "sess-direct-product-2",
+      toolCalls: [{
+        toolUseId: "tool-direct-product-2",
+        toolName: "request_spec_approval",
+        input: {
+          title: "订单导出",
+          summary: "支持按条件导出订单明细。",
+          deliveryMode: "lark-doc" as const,
+          documentUrl: "https://example.feishu.cn/docx/DirectProduct456",
+        },
+      }],
+    },
+    runId: "run-direct-product-2",
+    senderOpenId: "ou_owner",
+    senderUnionId: "on_owner",
+    cardMessageId: "card-direct-product-2",
+  });
+  assert.ok(outcome2);
+  await outcome2.afterCardPublished?.();
+  const handoff = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      operatorUnionId: "on_owner",
+      messageId: "card-direct-product-2",
+      value: productSpecValueOf(
+        outcome2.card,
+        (value) => value.handoffToLeader === true,
+      ),
+    },
+    host.bot,
+    product,
+  );
+  assert.equal(handoff?.toast?.content, "产品方案已确认。");
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId, "交给 Leader 应产生协作派发通知");
+  const handedOff = host.root.collaboration.consume(dispatchId, "leader");
+  assert.equal(handedOff?.ownerOpenId, "ou_owner");
+  assert.equal(handedOff?.ownerUnionId, "on_owner");
+  assert.equal(handedOff?.reportToBotId, "leader");
+  assert.equal(handedOff?.round, 1);
+  assert.match(handedOff?.instruction ?? "", /DirectProduct456/);
+  assert.match(handedOff?.instruction ?? "", /dispatch_task/);
+
+  // 场景三：产品 bot 本身就是 Team Leader 时，交给 Leader 只提示真人，不派发。
+  const outcome3 = await host.root.serial("task/tool-calls", {
+    bot: host.bot,
+    botConfig: leader,
+    session: {
+      ...fakeSession(),
+      id: "s3",
+      botId: leader.id,
+      workspaceDir: leader.workspaceDir,
+    },
+    requestedPrompt: "Leader 直接产出产品方案",
+    answer: "Leader 产品文档已生成。",
+    replyToMessageId: "leader-message",
+    hasThread: true,
+    taskId: "direct-leader-product-task",
+    result: {
+      answer: "Leader 产品文档已生成。",
+      sessionId: "sess-leader-product",
+      toolCalls: [{
+        toolUseId: "tool-leader-product",
+        toolName: "request_spec_approval",
+        input: {
+          title: "权限矩阵",
+          summary: "梳理各角色可访问的模块。",
+          deliveryMode: "lark-doc" as const,
+          documentUrl: "https://example.feishu.cn/docx/LeaderProduct789",
+        },
+      }],
+    },
+    runId: "run-leader-product",
+    senderOpenId: "ou_owner",
+    senderUnionId: "on_owner",
+    cardMessageId: "card-leader-product",
+  });
+  assert.ok(outcome3);
+  await outcome3.afterCardPublished?.();
+  const mentionsBeforeSelf = host.calls.mentions.length;
+  const leaderApproved = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      operatorUnionId: "on_owner",
+      messageId: "card-leader-product",
+      value: productSpecValueOf(
+        outcome3.card,
+        (value) => value.handoffToLeader === true,
+      ),
+    },
+    host.bot,
+    leader,
+  );
+  assert.equal(leaderApproved?.toast?.content, "产品方案已确认。");
+  assert.match(
+    host.calls.mentions.at(-1) ?? "",
+    /已是 Team Leader/,
+    "Leader 自己产出方案时确认并交给 Leader 应提示真人直接组织",
+  );
+  assert.equal(host.calls.mentions.length, mentionsBeforeSelf + 1);
 });
 
 test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确认卡", async () => {

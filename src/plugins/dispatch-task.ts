@@ -78,23 +78,60 @@ export async function handleDispatchTask(
   };
 }
 
-/** 把协作来源的已确认产品方案交回原编排者；直接产品任务无需派发。 */
+/** 把协作来源的已确认产品方案交回原编排者；直接产品任务仅在用户选择时派发给 Leader。 */
 export async function handleApprovedProductSpec(
   ctx: Context,
   payload: ProductSpecApprovedPayload,
 ): Promise<void> {
   const { flow, bot, botConfig, replyToMessageId } = payload;
-  if (!flow.collaboration) return;
-  const collaboration = flow.collaboration;
   const productDescription =
     flow.request.deliveryMode === "lark-doc"
       ? `文档 URL：${flow.request.documentUrl}`
       : `Spec：${flow.request.specPath}\nTickets：${flow.request.ticketsPath}`;
-  if (collaboration.round >= collaboration.maxRounds) {
+  if (flow.collaboration) {
+    // 协作来源的产品任务：确认后把结果交回原编排 bot 继续推进。
+    const collaboration = flow.collaboration;
+    if (collaboration.round >= collaboration.maxRounds) {
+      await bot.sendResultNotification({
+        replyToMessageId,
+        target: { openId: flow.ownerOpenId, name: "" },
+        text: `产品方案“${flow.request.title}”已确认，协作已达到 ${collaboration.maxRounds} 轮上限，请查看方案并决定下一步。`,
+        replyInThread: true,
+      });
+      return;
+    }
+    await ctx.collaboration.sendDispatch({
+      senderConfig: botConfig,
+      senderBot: bot,
+      replyToMessageId,
+      targetBotId: collaboration.reportToBotId,
+      taskId: collaboration.taskId,
+      ownerOpenId: flow.ownerOpenId,
+      ownerUnionId: flow.ownerUnionId,
+      reportToBotId: collaboration.reportToBotId,
+      objective: `产品方案已确认：${flow.request.title}`,
+      instruction: [
+        `${botConfig.role} 已经完成产品方案，用户确认通过。`,
+        `方案标题：${flow.request.title}`,
+        `方案摘要：${flow.request.summary}`,
+        productDescription,
+        "请基于这份已确认方案继续组织后续工作：需要其他成员参与时，使用 dispatch_task 交给团队名单中职责合适的成员。",
+      ].join("\n\n"),
+      expectedOutput: "继续推进原任务，或在已经完成时向用户给出最终结论。",
+      round: collaboration.round + 1,
+      maxRounds: collaboration.maxRounds,
+      workspaceDir: flow.workspaceDir,
+    });
+    return;
+  }
+  // 直接产品任务：只有用户显式选择“交给 Leader”才派发给团队 Leader 组织开发。
+  if (!payload.handoffToLeader) return;
+  const leaderId = ctx.team.leaderBotId;
+  if (leaderId === botConfig.id) {
     await bot.sendResultNotification({
       replyToMessageId,
       target: { openId: flow.ownerOpenId, name: "" },
-      text: `产品方案“${flow.request.title}”已确认，协作已达到 ${collaboration.maxRounds} 轮上限，请查看方案并决定下一步。`,
+      text: `产品方案“${flow.request.title}”已确认。当前产品 bot 已是 Team Leader，请在话题里直接组织后续开发。`,
       replyInThread: true,
     });
     return;
@@ -103,22 +140,22 @@ export async function handleApprovedProductSpec(
     senderConfig: botConfig,
     senderBot: bot,
     replyToMessageId,
-    targetBotId: collaboration.reportToBotId,
-    taskId: collaboration.taskId,
+    targetBotId: leaderId,
+    taskId: flow.taskId,
     ownerOpenId: flow.ownerOpenId,
     ownerUnionId: flow.ownerUnionId,
-    reportToBotId: collaboration.reportToBotId,
+    reportToBotId: leaderId,
     objective: `产品方案已确认：${flow.request.title}`,
     instruction: [
       `${botConfig.role} 已经完成产品方案，用户确认通过。`,
       `方案标题：${flow.request.title}`,
       `方案摘要：${flow.request.summary}`,
       productDescription,
-      "请基于这份已确认方案继续组织后续工作：需要其他成员参与时，使用 dispatch_task 交给团队名单中职责合适的成员。",
+      "你是团队 Leader。请基于这份已确认方案组织后续工作：需要开发成员参与时，使用 dispatch_task 派给团队名单中职责合适的开发成员。",
     ].join("\n\n"),
-    expectedOutput: "继续推进原任务，或在已经完成时向用户给出最终结论。",
-    round: collaboration.round + 1,
-    maxRounds: collaboration.maxRounds,
+    expectedOutput: "把后续实现派发给合适成员，并在完成时向用户给出最终结论。",
+    round: 1,
+    maxRounds: botConfig.collaborationMaxRounds,
     workspaceDir: flow.workspaceDir,
   });
 }
