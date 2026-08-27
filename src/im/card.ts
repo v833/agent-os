@@ -76,6 +76,60 @@ export interface TeamCardOptions {
   members: TeamCardMember[];
 }
 
+export interface BoardInitProgressCardOptions {
+  name?: string;
+}
+
+export interface BoardReadyCardOptions {
+  name: string;
+  url: string;
+  appToken: string;
+  tableId: string;
+  kanbanViewId?: string;
+}
+
+export interface BoardErrorCardOptions {
+  error: string;
+  isPermissionError?: boolean;
+  name?: string;
+  /** 建表已成功但挂载失败时展示已创建表格标识，避免用户重复建表。 */
+  appToken?: string;
+}
+
+export interface BoardConflictCardOptions {
+  /** 当前已挂载看板名称（展示用）。 */
+  name: string;
+  url: string;
+  tableId: string;
+  /** 用户请求创建的新看板名称；确认覆盖时用它创建，而不是旧名称。 */
+  requestedName?: string;
+  /** 当前已挂载看板 appToken；确认动作据此校验卡片对应的看板版本。 */
+  appToken?: string;
+  confirm?: boolean;
+}
+
+/** 看板已创建但首次扫描未就绪的降级提示卡。 */
+export interface BoardDegradedCardOptions {
+  name: string;
+  url: string;
+  appToken: string;
+  tableId: string;
+}
+
+export interface BoardStatusCardOptions {
+  mounted: boolean;
+  degraded: boolean;
+  initializing: boolean;
+  name?: string;
+  url?: string;
+  tableId?: string;
+  indexedTasksCount: number;
+  seenRecordsCount: number;
+  pendingSyncCount: number;
+  syncEnabled: boolean;
+  pullEnabled: boolean;
+}
+
 /** 编排面板卡片输入：一次或多次 /orchestrate 的运行快照；maxRetry 决定重试按钮。 */
 export interface OrchestrationPanelOptions {
   runs: OrchestrationRun[];
@@ -1394,6 +1448,290 @@ export function buildOrchestrationPanelCard(
         { tag: "hr" },
         ...runElements,
       ],
+    },
+  };
+}
+
+/** 生成任务看板初始化进行中的进度卡片。 */
+export function buildBoardInitProgressCard(
+  options: BoardInitProgressCardOptions = {},
+): CardJson {
+  const name = options.name?.trim() || "Agent OS 任务看板";
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `⏳ 正在创建任务看板「${name}」` },
+    },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: "⏳ 正在创建任务看板" },
+      subtitle: { tag: "plain_text", content: name },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            "正在通过飞书 OpenAPI 自动初始化多维表格任务看板：",
+            "1. 📑 创建多维表格应用与数据表",
+            "2. 🏷️ 配置 10 个标准业务字段与 6 色状态枚举",
+            "3. 📊 创建按「当前状态」分组的看板视图",
+            "4. ⚡ 持久化配置并就地挂载同步服务",
+            "",
+            "_通常只需 2~3 秒，完成后本卡片会自动更新为就绪状态。_",
+          ].join("\n"),
+        },
+      ],
+    },
+  };
+}
+
+/** 生成任务看板初始化完成后的绿色就绪卡片。 */
+export function buildBoardReadyCard(options: BoardReadyCardOptions): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: `📊 任务看板「${options.name}」已创建就绪` },
+    },
+    header: {
+      template: "green",
+      title: { tag: "plain_text", content: "📊 Agent OS 任务看板已就绪" },
+      subtitle: { tag: "plain_text", content: options.name },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content:
+            "飞书多维表格看板已初始化完成，已自动挂载双向事件同步与反向任务拉起能力。",
+        },
+        { tag: "hr" },
+        {
+          tag: "markdown",
+          content: [
+            `🔗 **访问链接** · [点击直达多维表格看板](${escapeFeishuMarkdownLink(options.url)})`,
+            `🔑 **App Token** · \`${escapeInlineCode(options.appToken)}\``,
+            `📋 **数据表 ID** · \`${escapeInlineCode(options.tableId)}\``,
+            `🏷️ **看板名称** · ${escapeFeishuMarkdown(options.name)}`,
+            options.kanbanViewId
+              ? `📊 **默认视图 ID** · \`${escapeInlineCode(options.kanbanViewId)}\``
+              : "📊 **默认视图** · 看板视图",
+          ].join("\n"),
+        },
+        {
+          tag: "markdown",
+          content:
+            "💡 **使用提示**：在表格中新增一行并将状态设为「待处理」，Bot 会自动收到并在本群开工。",
+        },
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "打开多维表格" },
+          type: "primary",
+          url: options.url,
+        },
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "查看看板状态" },
+          type: "default",
+          behaviors: [{
+            type: "callback",
+            value: { action: "board_status" },
+          }],
+        },
+      ],
+    },
+  };
+}
+
+/** 生成任务看板初始化失败的红色错误卡片。 */
+export function buildBoardErrorCard(options: BoardErrorCardOptions): CardJson {
+  const isPerm = options.isPermissionError ?? options.error.includes("403");
+  const guide = isPerm
+    ? "\n\n💡 **权限开通指引**：\n请前往 [飞书开放平台](https://open.feishu.cn/) 控制台，在对应应用的「权限管理」中开通 **多维表格 (`bitable:app`)** 权限并发布新版本后重试。"
+    : "";
+  const orphanHint = options.appToken
+    ? `\n\n⚠️ **注意**：多维表格已创建（App Token \`${escapeInlineCode(options.appToken)}\`），仅挂载失败。请勿点击重试以免重复建表，可在云盘手动删除该表格，或使用 \`/board init --force\` 覆盖重建。`
+    : "";
+  // 表格已创建（孤儿）时不提供“重试”按钮，避免一键重复创建 Base；
+  // 未创建表时才允许重试，并携带空版本令牌供动作处理校验。
+  const retryButton = options.appToken
+    ? []
+    : [{
+        tag: "button",
+        text: { tag: "plain_text", content: "重试初始化" },
+        type: "primary",
+        behaviors: [{
+          type: "callback",
+          value: {
+            action: "board_retry_init",
+            name: options.name || "Agent OS 任务看板",
+            appToken: "",
+          },
+        }],
+      }];
+
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: "❌ 任务看板初始化失败" },
+    },
+    header: {
+      template: "red",
+      title: { tag: "plain_text", content: "❌ 任务看板初始化失败" },
+      subtitle: { tag: "plain_text", content: isPerm ? "应用权限不足" : "初始化异常" },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: `初始化过程遇到错误：\n\`${escapeInlineCode(options.error)}\`${guide}${orphanHint}`,
+        },
+        ...retryButton,
+      ],
+    },
+  };
+}
+
+/** 生成已有活跃看板时的黄色冲突提醒卡片。 */
+export function buildBoardConflictCard(
+  options: BoardConflictCardOptions,
+): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: "⚠️ 当前已存在运行中的任务看板" },
+    },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: "⚠️ 已存在运行中的任务看板" },
+      subtitle: { tag: "plain_text", content: options.name },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            `当前系统已挂载看板 **${escapeFeishuMarkdown(options.name)}**：`,
+            `🔗 **访问链接** · [点击直达多维表格](${escapeFeishuMarkdownLink(options.url)})`,
+            `📋 **数据表 ID** · \`${escapeInlineCode(options.tableId)}\``,
+            "",
+            options.requestedName && options.requestedName !== options.name
+              ? `你将用新名称 **${escapeFeishuMarkdown(options.requestedName)}** 覆盖并重新创建。`
+              : "",
+            "如需强制重新创建并覆盖当前看板，请使用指令：",
+            "`/board init --force [看板名称]`",
+          ].filter(Boolean).join("\n"),
+        },
+        {
+          tag: "button",
+          text: { tag: "plain_text", content: "打开当前多维表格" },
+          type: "default",
+          url: options.url,
+        },
+        {
+          tag: "button",
+          text: {
+            tag: "plain_text",
+            content: options.confirm ? "确认覆盖并创建" : "覆盖并创建新看板",
+          },
+          type: options.confirm ? "danger" : "default",
+          behaviors: [{
+            type: "callback",
+            value: {
+              action: options.confirm ? "board_force_init" : "board_force_init_confirm",
+              // 用用户请求的新名称创建，而不是当前已挂载的旧名称。
+              name: options.requestedName || options.name,
+              // 携带当前看板 appToken，供动作处理校验卡片对应版本。
+              appToken: options.appToken || "",
+            },
+          }],
+        },
+      ],
+    },
+  };
+}
+
+/** 生成看板已创建但首次扫描未就绪的橙色降级提示卡。 */
+export function buildBoardDegradedCard(
+  options: BoardDegradedCardOptions,
+): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      summary: { content: "🟠 任务看板已创建，同步暂未就绪" },
+    },
+    header: {
+      template: "orange",
+      title: { tag: "plain_text", content: "🟠 任务看板已创建，同步暂未就绪" },
+      subtitle: { tag: "plain_text", content: options.name },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [
+        {
+          tag: "markdown",
+          content: [
+            `多维表格 **${escapeFeishuMarkdown(options.name)}** 已创建，但首次扫描暂时失败，事件同步与反向拉起将自动重试恢复。`,
+            `🔗 **访问链接** · [点击直达多维表格](${escapeFeishuMarkdownLink(options.url)})`,
+            `🔑 **App Token** · \`${escapeInlineCode(options.appToken)}\``,
+            `📋 **数据表 ID** · \`${escapeInlineCode(options.tableId)}\``,
+            "",
+            "若长时间未恢复，请检查应用是否具备多维表格访问权限。",
+          ].join("\n"),
+        },
+      ],
+    },
+  };
+}
+
+/** 生成卡片动作回传的看板状态摘要。 */
+export function buildBoardStatusCard(options: BoardStatusCardOptions): CardJson {
+  const state = options.initializing
+    ? "⏳ 初始化中"
+    : options.degraded
+      ? "🟠 降级"
+      : options.mounted
+        ? "🟢 已挂载"
+        : "⚪ 未挂载";
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: "📈 任务看板运行状态" } },
+    header: {
+      template: options.degraded ? "orange" : "blue",
+      title: { tag: "plain_text", content: "📈 飞书任务看板运行状态" },
+      subtitle: { tag: "plain_text", content: state },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: [{
+        tag: "markdown",
+        content: [
+          `**挂载状态**：${state}`,
+          options.name ? `**看板名称**：${escapeFeishuMarkdown(options.name)}` : "",
+          options.url ? `**访问链接**：[打开看板](${escapeFeishuMarkdownLink(options.url)})` : "",
+          options.tableId ? `**数据表 ID**：\`${escapeInlineCode(options.tableId)}\`` : "",
+          `**已关联任务数**：${options.indexedTasksCount}`,
+          `**已见记录数**：${options.seenRecordsCount}`,
+          `**待冲刷快照数**：${options.pendingSyncCount}`,
+          `**事件同步**：${options.syncEnabled ? "开启" : "关闭"}`,
+          `**反向拉起**：${options.pullEnabled ? "开启" : "关闭"}`,
+        ].filter(Boolean).join("\n"),
+      }],
     },
   };
 }

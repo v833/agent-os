@@ -31,6 +31,22 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "metrics",
     args: "bot developer",
   });
+  assert.deepEqual(parseCommand("/board"), {
+    name: "board",
+    args: undefined,
+  });
+  assert.deepEqual(parseCommand("@Agent OS /board init 敏捷开发大盘"), {
+    name: "board",
+    args: "init 敏捷开发大盘",
+  });
+  assert.deepEqual(parseCommand("/board link"), {
+    name: "board",
+    args: "link",
+  });
+  assert.deepEqual(parseCommand("/board status"), {
+    name: "board",
+    args: "status",
+  });
 });
 
 test("解析 /cd 的查询、带空格路径和机器人提及", () => {

@@ -18,6 +18,7 @@ import * as collaborationPlugin from "./collaboration.js";
 import * as dispatchTaskPlugin from "./dispatch-task.js";
 import * as commandsPlugin from "./commands.js";
 import * as configPlugin from "./config.js";
+import * as boardCommand from "./commands/board.js";
 import * as cdCommand from "./commands/cd.js";
 import * as closeCommand from "./commands/close.js";
 import * as compactCommand from "./commands/compact.js";
@@ -68,6 +69,7 @@ const pluginRegistry: Record<string, Plugin> = {
   lark: larkPlugin,
   cards: cardsPlugin,
   commands: commandsPlugin,
+  "commands/board": boardCommand,
   "commands/help": helpCommand,
   "commands/login": loginCommand,
   "commands/metrics": metricsCommand,
@@ -99,7 +101,9 @@ const pluginRegistry: Record<string, Plugin> = {
 
 const LoaderEntrySchema = z.object({
   name: z.string().min(1),
-  config: z.record(z.string(), z.unknown()).optional(),
+  // yaml 空块（如 `config:` 下只有注释）会解析为 null，需与缺失一样放行，
+  // 由装配处 `entry.config ?? {}` 归一化为空对象。
+  config: z.record(z.string(), z.unknown()).nullish(),
   disabled: z.boolean().optional(),
 });
 

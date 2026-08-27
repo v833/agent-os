@@ -13,6 +13,11 @@ import {
   buildAuthSubmittingCard,
   buildAuthDeviceWaitingCard,
   buildAuthSuccessCard,
+  buildBoardConflictCard,
+  buildBoardDegradedCard,
+  buildBoardErrorCard,
+  buildBoardInitProgressCard,
+  buildBoardReadyCard,
   buildClarificationCard,
   buildClarificationContinuingCard,
   buildClarificationSupersededCard,
@@ -83,7 +88,6 @@ test("运行中卡片展示 Codex 进度、上下文、轨迹和安全停止参�
     runId: "run-1",
   });
 });
-
 test("新 CLI 会话使用新会话基础口径且缺少 runId 时不渲染停止按钮", () => {
   const card = buildTaskCard({
     title: "Claude Code",
@@ -690,4 +694,128 @@ test("登录相关卡片均能生成且结构完整", () => {
   assert.equal(JSON.stringify(submitting).length > 0, true);
   assert.equal(JSON.stringify(deviceWaiting).length > 0, true);
   assert.equal(JSON.stringify(success).length > 0, true);
+});
+
+test("任务看板初始化进行中卡片结构合法且含步骤说明", () => {
+  const card = buildBoardInitProgressCard({ name: "研发任务看板" });
+  assert.equal(card.schema, "2.0");
+  const header = card.header as { template: string; title: { content: string }; subtitle?: { content: string } };
+  assert.equal(header.template, "blue");
+  assert.ok(header.title.content.includes("正在创建任务看板"));
+  assert.equal(header.subtitle?.content, "研发任务看板");
+
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> };
+  const md = body.elements.find((e) => e.tag === "markdown");
+  assert.ok(md?.content?.includes("创建多维表格应用"));
+  assert.ok(md?.content?.includes("配置 10 个标准业务字段"));
+});
+
+test("任务看板就绪卡片结构合法且含链接、表格ID与直达按钮", () => {
+  const card = buildBoardReadyCard({
+    name: "研发任务看板",
+    url: "https://feishu.cn/base/bascn123456",
+    appToken: "bascn123456",
+    tableId: "tbl987654",
+  });
+  assert.equal(card.schema, "2.0");
+  const header = card.header as { template: string; title: { content: string }; subtitle?: { content: string } };
+  assert.equal(header.template, "green");
+  assert.ok(header.title.content.includes("已就绪"));
+
+  const body = card.body as { elements: Array<{ tag: string; content?: string; url?: string }> };
+  const mdList = body.elements.filter((e) => e.tag === "markdown");
+  const allText = mdList.map((m) => m.content).join("\n");
+  assert.ok(allText.includes("tbl987654"));
+  assert.ok(allText.includes("https://feishu.cn/base/bascn123456"));
+  assert.ok(allText.includes("待处理"));
+
+  const button = body.elements.find(
+    (e) => e.tag === "button" && e.url === "https://feishu.cn/base/bascn123456",
+  );
+  assert.ok(button, "应包含直达多维表格的按钮");
+});
+
+test("任务看板错误卡片正确展示错误信息与 403 权限指引", () => {
+  const permErrorCard = buildBoardErrorCard({
+    error: "403 Forbidden: bitable:app 权限不足",
+    isPermissionError: true,
+  });
+  const header = permErrorCard.header as { template: string };
+  assert.equal(header.template, "red");
+  const body = permErrorCard.body as { elements: Array<{ tag: string; content?: string }> };
+  const content = body.elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(content.includes("bitable:app"));
+  assert.ok(content.includes("open.feishu.cn"));
+
+  const genericErrorCard = buildBoardErrorCard({
+    error: "网络超时",
+    isPermissionError: false,
+  });
+  const genericContent = (genericErrorCard.body as { elements: Array<{ tag: string; content?: string }> }).elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(genericContent.includes("网络超时"));
+  assert.ok(!genericContent.includes("open.feishu.cn"));
+});
+
+test("任务看板冲突提醒卡片展示已有看板信息与 force 参数提示", () => {
+  const card = buildBoardConflictCard({
+    name: "已有看板",
+    url: "https://feishu.cn/base/bascnExisting",
+    tableId: "tblExisting",
+  });
+  assert.equal(card.schema, "2.0");
+  const header = card.header as { template: string };
+  assert.equal(header.template, "orange");
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> };
+  const content = body.elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(content.includes("已有看板"));
+  assert.ok(content.includes("--force"));
+});
+
+test("冲突卡片携带用户请求的新名称且确认按钮使用新名称创建", () => {
+  const card = buildBoardConflictCard({
+    name: "已有看板",
+    url: "https://feishu.cn/base/bascnExisting",
+    tableId: "tblExisting",
+    requestedName: "研发大盘",
+    appToken: "bascnExisting",
+    confirm: true,
+  });
+  const body = card.body as { elements: Array<{ tag: string; content?: string; behaviors?: Array<{ value: Record<string, unknown> }> }> };
+  const content = body.elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(content.includes("研发大盘"), "应提示将用新名称覆盖");
+  const confirmButton = body.elements.find(
+    (e) =>
+      e.tag === "button" &&
+      (e.behaviors?.[0]?.value as { action?: string } | undefined)?.action ===
+        "board_force_init",
+  );
+  const value = confirmButton?.behaviors?.[0]?.value;
+  assert.equal(value?.name, "研发大盘", "确认按钮 value 必须携带用户请求的新名称");
+  assert.equal(value?.appToken, "bascnExisting");
+});
+
+test("任务看板降级卡片橙色展示同步暂未就绪", () => {
+  const card = buildBoardDegradedCard({
+    name: "降级看板",
+    url: "https://feishu.cn/base/bascnDegraded",
+    appToken: "bascnDegraded",
+    tableId: "tblDegraded",
+  });
+  assert.equal(card.schema, "2.0");
+  const header = card.header as { template: string };
+  assert.equal(header.template, "orange");
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> };
+  const content = body.elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(content.includes("tblDegraded"));
+  assert.ok(content.includes("同步暂未就绪") || content.includes("自动重试恢复"));
+});
+
+test("错误卡片在建表已成功时提示已创建 App Token", () => {
+  const card = buildBoardErrorCard({
+    error: "挂载失败",
+    appToken: "bascnOrphan",
+  });
+  const body = card.body as { elements: Array<{ tag: string; content?: string }> };
+  const content = body.elements.find((e) => e.tag === "markdown")?.content ?? "";
+  assert.ok(content.includes("bascnOrphan"), "应提示已创建的 App Token 避免重复建表");
 });

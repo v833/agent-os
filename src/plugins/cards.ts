@@ -13,6 +13,12 @@ import {
   buildAuthSubmittingCard,
   buildAuthDeviceWaitingCard,
   buildAuthSuccessCard,
+  buildBoardConflictCard,
+  buildBoardDegradedCard,
+  buildBoardErrorCard,
+  buildBoardInitProgressCard,
+  buildBoardReadyCard,
+  buildBoardStatusCard,
   buildClarificationCard,
   buildClarificationContinuingCard,
   buildClarificationSupersededCard,
@@ -27,6 +33,12 @@ import {
   buildTeamCard,
   splitLongText,
   ThrottledCardUpdater,
+  type BoardConflictCardOptions,
+  type BoardDegradedCardOptions,
+  type BoardErrorCardOptions,
+  type BoardInitProgressCardOptions,
+  type BoardReadyCardOptions,
+  type BoardStatusCardOptions,
   type CardJson,
   type ClarificationCardOptions,
   type ClarificationStateCardOptions,
@@ -110,6 +122,30 @@ export class CardsService extends Service {
 
   orchestrationPanel(options: OrchestrationPanelOptions): CardJson {
     return buildOrchestrationPanelCard(options);
+  }
+
+  boardInitProgress(options?: BoardInitProgressCardOptions): CardJson {
+    return buildBoardInitProgressCard(options);
+  }
+
+  boardReady(options: BoardReadyCardOptions): CardJson {
+    return buildBoardReadyCard(options);
+  }
+
+  boardError(options: BoardErrorCardOptions): CardJson {
+    return buildBoardErrorCard(options);
+  }
+
+  boardStatus(options: BoardStatusCardOptions): CardJson {
+    return buildBoardStatusCard(options);
+  }
+
+  boardConflict(options: BoardConflictCardOptions): CardJson {
+    return buildBoardConflictCard(options);
+  }
+
+  boardDegraded(options: BoardDegradedCardOptions): CardJson {
+    return buildBoardDegradedCard(options);
   }
 
   throttled(updateCard: (card: CardJson) => Promise<void>): ThrottledCardUpdater {
