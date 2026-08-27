@@ -14,8 +14,7 @@ export default defineConfig({
       { text: '快速上手', link: '/guide/getting-started' },
       { text: '使用说明书', link: '/guide/user-manual' },
       { text: '团队协作', link: '/guide/team-agents' },
-      { text: '命令大全', link: '/guide/commands' },
-      { text: '规划方案', link: '/team/vitepress-plan' }
+      { text: '命令大全', link: '/guide/commands' }
     ],
     sidebar: [
       {
@@ -41,8 +40,7 @@ export default defineConfig({
       {
         text: '运维与进阶',
         items: [
-          { text: '常见问题与排查', link: '/guide/faq' },
-          { text: '团队分工与文档规划', link: '/team/vitepress-plan' }
+          { text: '常见问题与排查', link: '/guide/faq' }
         ]
       }
     ],
