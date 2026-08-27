@@ -30,7 +30,12 @@ export default defineConfig({
         items: [
           { text: '完整使用说明书', link: '/guide/user-manual' },
           { text: '团队 Bot 协作流程', link: '/guide/team-agents' },
-          { text: '斜杠命令全解析', link: '/guide/commands' }
+          { text: '斜杠命令全解析', link: '/guide/commands' },
+          { text: '定时任务', link: '/guide/schedule' },
+          { text: '任务看板', link: '/guide/board' },
+          { text: '并行编排', link: '/guide/orchestration' },
+          { text: '可观测性大盘', link: '/guide/observability' },
+          { text: 'CLI 登录', link: '/guide/login' }
         ]
       },
       {
@@ -42,7 +47,7 @@ export default defineConfig({
       }
     ],
     socialLinks: [
-      { icon: 'github', link: 'https://github.com' }
+      { icon: 'github', link: 'https://github.com/v833/agent-os' }
     ],
     footer: {
       message: 'Released under the MIT License.',

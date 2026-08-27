@@ -23,10 +23,13 @@ const HELP_TEXT = [
   "/board init --force [看板名称] 覆盖重建任务看板",
   "/board link 查看当前任务看板链接",
   "/board status 查看任务看板同步状态",
+  "/orchestrate <大任务> 拆解任务并并行派发给团队",
+  "/panel 查看当前编排运行进度面板",
   "/help 查看命令",
   "/claude <任务> 新话题使用 Claude Code",
   "/codex <任务> 新话题使用 Codex",
   "/dimagent <任务> 新话题使用 DimAgent",
+  "/agy <任务> 新话题使用 Antigravity",
 ].join("\n");
 
 const handler: CommandHandler = async ({ bot, message, hasThread }) => {
