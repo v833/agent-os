@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: "Agent OS"
-  text: "把飞书变成 AI 编程指挥台"
-  tagline: "在熟悉的飞书群聊中，一键调度 Claude Code、Codex、DimAgent 与 Antigravity，享受多 Agent 自主协同的研发新体验。"
+  text: "在飞书中使用 AI 编程 CLI"
+  tagline: "在飞书话题群中调度 Claude Code、Codex、DimAgent 与 Antigravity，配合角色化分工协同完成研发任务。"
   image:
     src: /logo.png
     alt: Agent OS Logo
@@ -21,15 +21,15 @@ hero:
 
 features:
   - icon: 💬
-    title: 飞书原生对话即开发
-    details: 无需打开复杂的命令行界面，在飞书话题群中 @机器人 提需求，即可直接驱动顶尖 AI 编程 CLI 处理复杂代码任务。
+    title: 飞书话题驱动
+    details: 在话题群中 @机器人 提交需求并保留上下文，无需在本地终端手动输入。
   - icon: 🎛️
-    title: 实时进度卡片与交互
-    details: 工具调用轨迹、执行耗时、上下文消耗全流程实时刷新；支持澄清表单即时交互与发起人随时安全终止。
+    title: 实时执行卡片
+    details: 卡片实时更新工具调用、耗时与 Token 消耗，支持发起人随时停止与澄清表单交互。
   - icon: 🤝
-    title: 多 Agent 团队自动化协同
-    details: CEO 助理拆解统筹、产品经理澄清形成 Spec、开发工程师编码实现、QA 工程师隔离快照审查，流水线自主交接流转。
+    title: 角色化分工协作
+    details: CEO 助理拆解目标、产品经理编写文档、开发工程师写代码、QA 工程师在快照环境执行测试。
   - icon: 🔌
-    title: 一切皆为插件架构
-    details: 平台、引擎、命令、协作均为独立插件，通过声明式配置文件即插即用，轻松扩展更多企业系统与多模型能力。
+    title: 插件化装配
+    details: 执行引擎、斜杠命令与协作机制均以插件形式提供，通过 cordis.yml 声明配置。
 ---
