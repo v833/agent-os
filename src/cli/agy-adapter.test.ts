@@ -187,6 +187,58 @@ test("AgyAdapter 兼容 tool_name 与 tool_info.name 分开提供 MCP 工具名"
   );
 });
 
+test("AgyAdapter 解析 call_mcp_tool 惰性转发的工具调用并提取内层参数", () => {
+  const adapter = new AgyAdapter(() => [
+    {
+      id: "agent_os_dispatch_task",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["dispatch_task"],
+    },
+  ]);
+  const events = adapter.parseEvents(
+    JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 6,
+        state: "ACTIVE",
+        step_type: "tool",
+        tool_name: "call_mcp_tool",
+        tool_info: {
+          name: "call_mcp_tool",
+          parameters: {
+            ServerName: "agent_os_dispatch_task",
+            ToolName: "dispatch_task",
+            Arguments: JSON.stringify({
+              targetBotId: "product",
+              objective: "编写规范",
+              instruction: "请细化需求",
+            }),
+          },
+        },
+      },
+    }),
+  );
+  assert.deepEqual(events, [
+    {
+      type: "tool_start",
+      toolUseId: "step-6",
+      toolName: "call_mcp_tool",
+      label: "调用 call_mcp_tool",
+    },
+    {
+      type: "tool_call",
+      toolUseId: "step-6",
+      toolName: "dispatch_task",
+      input: {
+        targetBotId: "product",
+        objective: "编写规范",
+        instruction: "请细化需求",
+      },
+    },
+  ]);
+});
+
 test("AgyAdapter 解析终态 result（response 为最终回答）", () => {
   const adapter = new AgyAdapter();
 

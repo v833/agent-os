@@ -5,6 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ApplicationToolServer } from "./app-tools.js";
 
@@ -79,10 +80,15 @@ export async function ensureMcpConfigFile(
   }
 }
 
-/** 确保 agy 在指定工作区发现当前已注册的 Agent OS MCP Server。 */
-export function ensureAgyMcpConfig(
+/** 确保 agy 在指定工作区及全局配置发现当前已注册的 Agent OS MCP Server。 */
+export async function ensureAgyMcpConfig(
   cwd: string,
   servers: readonly ApplicationToolServer[],
 ): Promise<void> {
-  return ensureMcpConfigFile(join(cwd, ".agents", "mcp_config.json"), servers, "agy");
+  await ensureMcpConfigFile(join(cwd, ".agents", "mcp_config.json"), servers, "agy");
+  await ensureMcpConfigFile(
+    join(homedir(), ".gemini", "config", "mcp_config.json"),
+    servers,
+    "agy global",
+  ).catch(() => undefined);
 }

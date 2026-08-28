@@ -237,10 +237,35 @@ export class AgyAdapter implements CliAdapter {
             toolName,
             label,
           });
-          const applicationToolName = [
-            step.tool_name,
-            step.tool_info?.name,
-          ]
+          const params = step.tool_info?.parameters as Record<string, unknown> | undefined;
+          let candidateNames: (string | undefined)[] = [step.tool_name, step.tool_info?.name];
+          let inputData = step.tool_info?.parameters ?? {};
+          // agy 惰性加载 MCP 工具时通过内置 call_mcp_tool 转发，解析内层实际工具名与入参
+          if ((toolName === "call_mcp_tool" || step.tool_info?.name === "call_mcp_tool") && params) {
+            const innerTool =
+              (typeof params.ToolName === "string" ? params.ToolName : undefined) ??
+              (typeof params.tool_name === "string" ? params.tool_name : undefined);
+            if (innerTool) {
+              const serverName = params.ServerName ?? params.server_name;
+              candidateNames = [
+                innerTool,
+                serverName ? `${serverName}.${innerTool}` : undefined,
+                serverName ? `mcp__${serverName}__${innerTool}` : undefined,
+              ];
+            }
+            let rawArgs = params.Arguments ?? params.arguments;
+            if (typeof rawArgs === "string") {
+              try {
+                rawArgs = JSON.parse(rawArgs);
+              } catch {
+                // 保持字符串
+              }
+            }
+            if (typeof rawArgs === "object" && rawArgs !== null) {
+              inputData = rawArgs as Record<string, unknown>;
+            }
+          }
+          const applicationToolName = candidateNames
             .map((candidate) =>
               findAgyApplicationTool(this.applicationTools(), candidate),
             )
@@ -250,7 +275,7 @@ export class AgyAdapter implements CliAdapter {
               type: "tool_call",
               toolUseId,
               toolName: applicationToolName,
-              input: step.tool_info?.parameters ?? {},
+              input: inputData,
             });
           }
         }
