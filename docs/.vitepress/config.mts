@@ -40,8 +40,7 @@ export default defineConfig({
       {
         text: '运维与进阶',
         items: [
-          { text: '常见问题与排查', link: '/guide/faq' },
-          { text: '竞品对比与补全方向', link: '/guide/comparison-botmux' }
+          { text: '常见问题与排查', link: '/guide/faq' }
         ]
       }
     ],
