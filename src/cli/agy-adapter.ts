@@ -81,6 +81,7 @@ interface AgyEvent {
     response?: string;
     num_turns?: number;
     usage?: AgyUsage;
+    error?: string;
   };
   error?: string;
 }
@@ -106,6 +107,7 @@ export class AgyAdapter implements CliAdapter {
 
   constructor(
     private readonly applicationTools: ApplicationToolProvider = () => [],
+    private readonly printTimeout: string = process.env.AGY_PRINT_TIMEOUT?.trim() || "30m",
   ) {}
 
   async prepareRun(cwd: string): Promise<void> {
@@ -115,6 +117,8 @@ export class AgyAdapter implements CliAdapter {
   /** 构造首次执行的命令行参数 */
   buildArgs(prompt: string): string[] {
     return [
+      "--print-timeout",
+      this.printTimeout,
       "--dangerously-skip-permissions",
       "-p",
       prompt,
@@ -128,6 +132,8 @@ export class AgyAdapter implements CliAdapter {
     return [
       "--conversation",
       sessionId,
+      "--print-timeout",
+      this.printTimeout,
       "--dangerously-skip-permissions",
       "-p",
       prompt,
@@ -291,14 +297,22 @@ export class AgyAdapter implements CliAdapter {
     // 3. 终态 result：response 为最终回答，usage 为统计。
     if (raw.event === "result" && raw.result) {
       const result = raw.result;
-      // 状态明确失败且没有回答时按 error 处理，避免把失败当成功。
+      const errorMessage = result.error ?? raw.error;
+      const isErrorStatus = /error|failure|cancel/i.test(result.status ?? "");
+      // 满足以下任一条件视为失败：
+      // 1. 存在显式错误信息（result.error 或 raw.error）
+      // 2. 状态为明确失败（如 ERROR/FAILURE/CANCEL）
+      // 3. 缺少有效回答且状态非成功
       const failed =
-        result.response === undefined &&
-        /error|failure|cancel/i.test(result.status ?? "");
+        Boolean(errorMessage) ||
+        isErrorStatus ||
+        (result.response === undefined && Boolean(result.status));
       if (failed) {
         events.push({
           type: "error",
-          message: `agy 执行未完成（${result.status ?? "failed"}）`,
+          message:
+            errorMessage ??
+            `agy 执行未完成（${result.status ?? "failed"}）`,
           ...(sessionId ? { sessionId } : {}),
         });
       } else {
@@ -310,10 +324,8 @@ export class AgyAdapter implements CliAdapter {
           ...(stats ? { stats } : {}),
         });
       }
-    }
-
-    // 4. 显式错误字段。
-    if (raw.error) {
+    } else if (raw.error) {
+      // 4. 显式错误字段（非 result 事件下的顶层 error）。
       events.push({
         type: "error",
         message: raw.error,

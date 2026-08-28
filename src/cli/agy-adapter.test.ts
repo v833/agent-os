@@ -15,6 +15,8 @@ test("AgyAdapter 默认使用 headless，并构造首次/续聊参数", () => {
   assert.equal(adapter.accessMode, "headless");
   assert.equal(adapter.displayName, "Antigravity");
   assert.deepEqual(adapter.buildArgs("1加1等于几？"), [
+    "--print-timeout",
+    "30m",
     "--dangerously-skip-permissions",
     "-p",
     "1加1等于几？",
@@ -24,9 +26,22 @@ test("AgyAdapter 默认使用 headless，并构造首次/续聊参数", () => {
   assert.deepEqual(adapter.buildResumeArgs("继续", "conv-abc"), [
     "--conversation",
     "conv-abc",
+    "--print-timeout",
+    "30m",
     "--dangerously-skip-permissions",
     "-p",
     "继续",
+    "--output-format",
+    "stream-json",
+  ]);
+
+  const customAdapter = new AgyAdapter(() => [], "45m");
+  assert.deepEqual(customAdapter.buildArgs("你好"), [
+    "--print-timeout",
+    "45m",
+    "--dangerously-skip-permissions",
+    "-p",
+    "你好",
     "--output-format",
     "stream-json",
   ]);
@@ -280,6 +295,27 @@ test("AgyAdapter 状态失败且无回答时发 error，显式 error 字段也�
   assert.deepEqual(
     adapter.parseEvents(JSON.stringify({ event: "error", error: "conversation not found" })),
     [{ type: "error", message: "conversation not found" }],
+  );
+  // 提取 agy 超时真实错误（result 内嵌 error 与 status=ERROR）
+  assert.deepEqual(
+    adapter.parseEvents(
+      JSON.stringify({
+        event: "result",
+        result: {
+          conversation_id: "conv-timeout",
+          status: "ERROR",
+          response: "",
+          error: "timeout waiting for response",
+        },
+      }),
+    ),
+    [
+      {
+        type: "error",
+        message: "timeout waiting for response",
+        sessionId: "conv-timeout",
+      },
+    ],
   );
   // 非法 JSON 静默忽略。
   assert.deepEqual(adapter.parseEvents("not-json"), []);
