@@ -77,7 +77,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
 - `src/plugins/orchestration/actions.ts`：面板动作子插件（可选）——启动时置位重试能力，认领 retry_subtask 卡片动作并映射 toast；移除即无重试按钮
 - `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/agy/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
-- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
+- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/doc/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
 - `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
 - `src/plugins/commands/team.ts`：/team 命令插件——经 ctx.team、ctx.lark、ctx.cli 与 ctx.cards 展示成员和真实长连接状态
 - `src/plugins/commands/metrics.ts`：/metrics 命令插件——展示系统吞吐、Token 消耗、耗时分布与成员指标
@@ -123,6 +123,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/product-spec-store.ts`：产品方案 Flow JSON 持久化——原子写盘并在重启后恢复待确认云文档与会话关联
 - `src/core/product-spec.test.ts`：产品文档 Schema、路径安全、真实落盘与确认状态测试
 - `src/core/topic-task.ts`：按群 ID 与话题 ID 生成稳定任务编号
+- `src/core/interaction-policy.ts`：集中定义 direct/team 与 /doc 的交互能力策略，跨任务/事件透传
+- `src/core/interaction-policy.test.ts`：交互策略能力矩阵与缺省归一化测试
 - `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
 - `src/core/observability.ts`：可观测性核心领域模型——Span/Trace 拓扑、Token 消耗聚合、时延分位数与系统指标大盘
 - `src/core/observability.test.ts`：可观测性核心领域模型单元测试——Trace/Span、Token 聚合与分位数测试

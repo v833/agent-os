@@ -6,6 +6,10 @@
 import { Service, type Context } from "cordis";
 import { Cron } from "croner";
 import type { CliAccessMode, CliId } from "../cli/types.js";
+import {
+  interactionPolicyOf,
+  type InteractionPolicy,
+} from "../core/interaction-policy.js";
 import { parseSchedule } from "../core/schedule-parser.js";
 import {
   JsonScheduleStore,
@@ -26,6 +30,8 @@ export interface RegisterScheduleOptions {
   accessMode: CliAccessMode;
   workspaceDir: string;
   ownerOpenId: string;
+  /** 注册入口解析出的交互策略。 */
+  interaction?: InteractionPolicy;
 }
 
 /** 一次触发的结果，供命令回显与测试断言。 */
@@ -75,6 +81,7 @@ export class ScheduleService extends Service {
   async register(options: RegisterScheduleOptions): Promise<ScheduleTask> {
     const spec = parseSchedule(options.schedule);
     const now = new Date().toISOString();
+    const interaction = interactionPolicyOf(options);
     const task: ScheduleTask = {
       id: nextScheduleId(this.tasks.values()),
       schedule: options.schedule,
@@ -90,6 +97,7 @@ export class ScheduleService extends Service {
       accessMode: options.accessMode,
       workspaceDir: options.workspaceDir,
       ownerOpenId: options.ownerOpenId,
+      interaction,
       enabled: true,
       createdAt: now,
       updatedAt: now,
@@ -217,7 +225,7 @@ export class ScheduleService extends Service {
       return { status: "skipped", reason: "closed" };
     }
 
-    this.ctx.tasks.startTask({
+    const started = await this.ctx.tasks.startTask({
       bot,
       botConfig,
       session: resolved.session,
@@ -226,8 +234,22 @@ export class ScheduleService extends Service {
       senderOpenId: task.ownerOpenId,
       requestedPrompt: task.prompt,
       isCompacting: false,
+      interaction: interactionPolicyOf(task),
       resources: [],
     });
+    if (!started) {
+      const latestStatus = this.ctx.sessions.manager.get(
+        resolved.session.id,
+      )?.status;
+      if (latestStatus === "active" || latestStatus === "closed") {
+        await this.markSkipped(task);
+        return {
+          status: "skipped",
+          reason: latestStatus === "active" ? "busy" : "closed",
+        };
+      }
+      return { status: "error", reason: "任务未能进入执行链" };
+    }
     await this.markRun(task);
     return { status: "started" };
   }

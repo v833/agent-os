@@ -74,7 +74,20 @@ export class JsonProductSpecFlowStore extends ProductSpecFlowStore {
       `${JSON.stringify(this.snapshot(), null, 2)}\n`,
       "utf8",
     );
-    renameSync(temporaryPath, this.filePath);
+    // Windows 下文件可能被防病毒、文件检索或异步读取短暂占用导致 EPERM/EBUSY，有限重试后覆盖。
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      try {
+        renameSync(temporaryPath, this.filePath);
+        return;
+      } catch (error) {
+        lastError = error;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EPERM" && code !== "EBUSY") throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+      }
+    }
+    throw lastError;
   }
 }
 

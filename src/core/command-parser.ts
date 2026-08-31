@@ -8,6 +8,7 @@ import type { CliId } from "../cli/types.js";
 export type SlashCommand =
   | { name: "close" | "status" | "help" | "new" | "resume" | "team" }
   | { name: "compact"; instructions?: string }
+  | { name: "doc"; prompt?: string }
   | { name: "cd"; path?: string }
   | { name: "schedule"; action: "add"; schedule: string; prompt: string }
   | { name: "schedule"; action: "list" }
@@ -26,6 +27,7 @@ export type SlashCommand =
 const COMMAND_RE = /^(?:@.+?\s+)?\/(close|status|help|new|resume|team)\s*$/;
 const CD_RE = /^(?:@.+?\s+)?\/cd(?:\s+([\s\S]+?))?\s*$/;
 const COMPACT_RE = /^(?:@.+?\s+)?\/compact(?:\s+([\s\S]+?))?\s*$/;
+const DOC_RE = /^(?:@.+?\s+)?\/doc(?:\s+([\s\S]+?))?\s*$/;
 const METRICS_RE = /^(?:@.+?\s+)?\/metrics(?:\s+([\s\S]+?))?\s*$/;
 const BOARD_RE = /^(?:@.+?\s+)?\/board(?:\s+([\s\S]+?))?\s*$/;
 /** 未显式注入注册表时的回退引擎集合（router 会传入真实注册表，保持两者同步）。 */
@@ -64,6 +66,13 @@ export function parseCommand(text: string): SlashCommand | undefined {
     return {
       name: "compact",
       instructions: compactMatch[1]?.trim() || undefined,
+    };
+  }
+  const docMatch = DOC_RE.exec(value);
+  if (docMatch) {
+    return {
+      name: "doc",
+      prompt: docMatch[1]?.trim() || undefined,
     };
   }
 

@@ -22,6 +22,7 @@ import * as boardCommand from "./commands/board.js";
 import * as cdCommand from "./commands/cd.js";
 import * as closeCommand from "./commands/close.js";
 import * as compactCommand from "./commands/compact.js";
+import * as docCommand from "./commands/doc.js";
 import * as helpCommand from "./commands/help.js";
 import * as loginCommand from "./commands/login.js";
 import * as metricsCommand from "./commands/metrics.js";
@@ -76,6 +77,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/new": newCommand,
   "commands/resume": resumeCommand,
   "commands/compact": compactCommand,
+  "commands/doc": docCommand,
   "commands/status": statusCommand,
   "commands/team": teamCommand,
   "commands/cd": cdCommand,

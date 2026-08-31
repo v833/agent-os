@@ -15,6 +15,7 @@ import {
 } from "../core/product-spec.js";
 import type { BotConfig } from "../core/bot-registry.js";
 import { JsonProductSpecFlowStore } from "../core/product-spec-store.js";
+import { interactionPolicyOf } from "../core/interaction-policy.js";
 import type { Bot, CardAction, CardActionResponse } from "../im/lark.js";
 import { startLoopbackMcpHttpServer } from "../mcp/loopback-http-server.js";
 import { registerProductSpecTool } from "../mcp/product-spec-tools.js";
@@ -44,6 +45,10 @@ export class ProductSpecService extends Service {
   async handleToolCalls(
     payload: TaskToolCallsPayload,
   ): Promise<TaskToolCallsOutcome | undefined> {
+    // 私聊和显式 /doc 都是普通交付，不进入产品方案确认或团队派发流程。
+    if (!interactionPolicyOf(payload).capabilities.runProductWorkflow) {
+      return undefined;
+    }
     if (!managesProductSpec(payload.botConfig.skills)) return undefined;
     const request = findProductSpecRequest(payload.result.toolCalls);
     if (!request) return undefined;
@@ -95,6 +100,10 @@ export class ProductSpecService extends Service {
   async checkCompletion(
     payload: TaskCompletionCheckPayload,
   ): Promise<TaskCompletionCheckOutcome | undefined> {
+    // 产品方案校验不能污染私聊；/doc 只表示文档交付，不要求 request_spec_approval。
+    if (!interactionPolicyOf(payload).capabilities.runProductWorkflow) {
+      return undefined;
+    }
     if (!managesProductSpec(payload.botConfig.skills)) return undefined;
     const result = await ensureProductSpecSubmission({
       result: payload.result,

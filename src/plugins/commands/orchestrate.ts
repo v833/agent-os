@@ -5,11 +5,29 @@
  * 因此 orchestration 插件可独立下线。在 cordis.yml 中移除本插件即可下线该命令。
  */
 import type { Context } from "cordis";
+import { interactionPolicyOf } from "../../core/interaction-policy.js";
 import type { CommandHandler } from "../types.js";
 
 function createHandler(pluginCtx: Context): CommandHandler {
-  return async ({ bot, message, session, hasThread, command, botConfig }) => {
+  return async ({
+    bot,
+    message,
+    session,
+    hasThread,
+    command,
+    botConfig,
+    interaction: inputInteraction,
+  }) => {
+    const interaction = interactionPolicyOf({ interaction: inputInteraction });
     if (command.name !== "orchestrate") return;
+    if (!interaction.capabilities.collaborateWithBots) {
+      await bot.reply(
+        message.messageId,
+        "私聊模式不会与其他 bot 互动，请在群聊或话题中使用 /orchestrate。",
+        hasThread,
+      );
+      return;
+    }
     const prompt = command.prompt;
     if (!prompt) {
       await bot.reply(

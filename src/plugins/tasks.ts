@@ -10,7 +10,8 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { CliAdapter, CliEvent, CliRunStats } from "../cli/types.js";
 import { CliRunError } from "../cli/runner.js";
-import { botCliEnvironment, buildBotPrompt, DIRECT_CHAT_ROLE } from "../core/bot-registry.js";
+import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
+import { interactionPolicyOf } from "../core/interaction-policy.js";
 import {
   isRetryRequest,
   resolveRetryPrompt,
@@ -150,46 +151,85 @@ export class TasksService extends Service {
       resources,
       suppressHandoff,
     } = input;
+    const interaction = interactionPolicyOf(input);
+    // direct 是任务级硬边界：无论 bot 配置了 reviewBy 还是模型调用了协作工具，
+    // 结果事件都不能触发 QA 或其他自动交接。
+    const effectiveSuppressHandoff =
+      suppressHandoff || interaction.capabilities.suppressHandoff;
     const cliAdapter = this.getSessionAdapter(session);
     const taskTitle = isCompacting ? "整理上下文" : cliAdapter.displayName;
     const taskStartTime = Date.now();
 
-    // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
-    // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
-    const teamContext = this.ctx.root.bail(
-      "task/prompt-context",
-      botConfig,
-      { isDirect: input.isDirect ?? false },
-    );
-    // 私聊直接指挥：角色切换为直接执行者（不做团队分工），群聊保留团队型角色。
-    const effectiveBotConfig = input.isDirect
-      ? { ...botConfig, role: DIRECT_CHAT_ROLE }
-      : botConfig;
-    const prompt = await buildBotPrompt(
-      effectiveBotConfig,
-      resolveRetryPrompt(session, requestedPrompt),
-      teamContext ?? "",
-      this.ctx.config.defaultProductDeliveryMode,
-    );
-    // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
+    const currentSession = this.ctx.sessions.manager.get(session.id);
     if (
-      !isCompacting &&
-      (!session.retryPrompt || !isRetryRequest(requestedPrompt))
+      !currentSession ||
+      (currentSession.status !== "creating" && currentSession.status !== "idle")
     ) {
-      await this.ctx.sessions.manager.setRetryPrompt(
-        session.id,
-        requestedPrompt,
+      throw new Error(
+        `会话 ${currentSession?.status ?? "missing"} 不能启动新任务`,
       );
     }
-    await this.ctx.sessions.manager.transition(session.id, "active");
-
     const run = new AbortController();
     const activeRun: ActiveRun = {
       controller: run,
       ownerOpenId: senderOpenId,
       runId: randomUUID(),
     };
+    // transition 在首次 await 前同步把内存状态置为 active；紧接着登记运行实例，
+    // 让同一事件循环中的后续入口无法越过状态检查，/close 也能立即取得取消句柄。
+    const claim = this.ctx.sessions.manager.transition(session.id, "active");
     this.activeRuns.set(session.id, activeRun);
+    try {
+      await claim;
+    } catch (error) {
+      if (this.activeRuns.get(session.id) === activeRun) {
+        this.activeRuns.delete(session.id);
+      }
+      throw error;
+    }
+
+    // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
+    // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
+    let teamContext: string | undefined;
+    let prompt = "";
+    try {
+      teamContext = this.ctx.root.bail(
+        "task/prompt-context",
+        botConfig,
+        { interaction },
+      );
+      prompt = await buildBotPrompt(
+        botConfig,
+        resolveRetryPrompt(session, requestedPrompt),
+        teamContext ?? "",
+        this.ctx.config.defaultProductDeliveryMode,
+        { interaction },
+      );
+      // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
+      if (
+        !isCompacting &&
+        (!session.retryPrompt || !isRetryRequest(requestedPrompt))
+      ) {
+        await this.ctx.sessions.manager.setRetryPrompt(
+          session.id,
+          requestedPrompt,
+        );
+      }
+    } catch (error) {
+      // 已认领会话但尚未进入执行链；准备失败必须释放运行实例并允许用户重试。
+      if (this.activeRuns.get(session.id) === activeRun) {
+        this.activeRuns.delete(session.id);
+      }
+      try {
+        await this.markSessionIdle(session.id);
+      } catch (cleanupError) {
+        console.error(
+          "[会话] 任务准备失败后恢复空闲状态失败:",
+          (cleanupError as Error).message,
+        );
+      }
+      throw error;
+    }
 
     for (const resource of resources) {
       try {
@@ -352,7 +392,8 @@ export class TasksService extends Service {
             collaboration,
             senderRuntime,
             taskId,
-            suppressHandoff,
+            suppressHandoff: effectiveSuppressHandoff,
+            interaction,
             senderOpenId,
             senderUnionId,
             durationMs: Date.now() - taskStartTime,
@@ -445,6 +486,7 @@ export class TasksService extends Service {
           botConfig,
           session: this.ctx.sessions.manager.get(session.id) ?? session,
           taskId,
+          interaction,
           traceId: activeRun.runId,
           startedAt: taskStartTime,
           requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
@@ -473,10 +515,11 @@ export class TasksService extends Service {
         this.ctx.sessions.manager.get(session.id) ?? session;
       // 纠正轮沿用本轮私聊/群聊语义（角色与团队上下文策略一致）。
       const prompt = await buildBotPrompt(
-        effectiveBotConfig,
+        botConfig,
         correctionPrompt,
         teamContext ?? "",
         this.ctx.config.defaultProductDeliveryMode,
+        { interaction },
       );
       beginCliExecution();
       const corrected = await this.runCliTask(
@@ -546,7 +589,8 @@ export class TasksService extends Service {
           collaboration,
           senderRuntime,
           taskId,
-          suppressHandoff,
+          suppressHandoff: effectiveSuppressHandoff,
+          interaction,
           senderOpenId,
           senderUnionId,
           durationMs: Date.now() - taskStartTime,
@@ -596,7 +640,7 @@ export class TasksService extends Service {
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
-            isDirect: input.isDirect ?? false,
+            interaction,
             cardMessageId: cardId,
           };
           const initialToolOutcome = await this.ctx.serial(
@@ -623,6 +667,7 @@ export class TasksService extends Service {
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
+            interaction,
             cardMessageId: cardId,
             signal: run.signal,
             runCorrection,
@@ -663,7 +708,7 @@ export class TasksService extends Service {
             runId: activeRun.runId,
             senderOpenId,
             senderUnionId,
-            isDirect: input.isDirect ?? false,
+            interaction,
             cardMessageId: cardId,
           };
           const outcome = await this.ctx.serial("task/tool-calls", toolPayload);
@@ -792,7 +837,8 @@ export class TasksService extends Service {
             collaboration,
             senderRuntime,
             taskId,
-            suppressHandoff,
+            suppressHandoff: effectiveSuppressHandoff,
+            interaction,
             senderOpenId,
             senderUnionId,
             error: errorMessage,

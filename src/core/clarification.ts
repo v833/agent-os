@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CollaborationMessage } from "./collaboration.js";
+import type { InteractionPolicy } from "./interaction-policy.js";
 
 /** clarification 插件注册到应用工具服务的稳定工具名。 */
 export const CLARIFICATION_TOOL_NAME = "request_clarification";
@@ -86,7 +87,7 @@ export interface ClarificationFlow {
   cardMessageId?: string;
   replyInThread: boolean;
   /** 私聊标记：澄清恢复执行时保持原消息的团队上下文策略。 */
-  isDirect?: boolean;
+  interaction?: InteractionPolicy;
   request: ClarificationRequest;
   currentIndex: number;
   answers: ClarificationAnswer[];
@@ -103,7 +104,7 @@ export interface CreateClarificationFlowOptions {
   requestedPrompt: string;
   cardMessageId?: string;
   replyInThread: boolean;
-  isDirect?: boolean;
+  interaction?: InteractionPolicy;
   request: ClarificationRequest;
   collaboration?: CollaborationMessage;
 }

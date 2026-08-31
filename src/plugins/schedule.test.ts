@@ -17,6 +17,7 @@ import type {
 } from "../cli/types.js";
 import type { RunCliOptions } from "../cli/runner.js";
 import type { BotConfig } from "../core/bot-registry.js";
+import { createInteractionPolicy } from "../core/interaction-policy.js";
 import { parseSchedule } from "../core/schedule-parser.js";
 import {
   JsonScheduleStore,
@@ -78,13 +79,15 @@ class FakeLarkService extends Service {
 /** 假 tasks 服务：只记录 startTask 调用，不真正执行 CLI。 */
 class FakeTasksService extends Service {
   started: StartTaskInput[] = [];
+  startSucceeds = true;
 
   constructor(ctx: Context) {
     super(ctx, "tasks");
   }
 
-  startTask(input: StartTaskInput): void {
+  async startTask(input: StartTaskInput): Promise<boolean> {
     this.started.push(input);
+    return this.startSucceeds;
   }
 }
 
@@ -301,6 +304,33 @@ test("trigger 到点执行：发锚点消息并交给 tasks.startTask", async (t
   assert.equal(started.senderOpenId, "ou_owner");
   assert.equal(started.session.threadId, "omt_thread");
   assert.ok(host.schedule.get(task.id)?.lastRunAt);
+});
+
+test("tasks 拒绝启动时定时任务不记录为已运行", async (t) => {
+  const host = await createHost(t);
+  const task = await host.schedule.register(registerOptions());
+  host.tasks.startSucceeds = false;
+
+  const outcome = await host.schedule.trigger(task.id);
+
+  assert.deepEqual(outcome, { status: "error", reason: "任务未能进入执行链" });
+  assert.equal(host.tasks.started.length, 1);
+  assert.equal(host.schedule.get(task.id)?.lastRunAt, undefined);
+});
+
+test("私聊注册的定时任务触发时保持 direct 模式", async (t) => {
+  const host = await createHost(t);
+  const task = await host.schedule.register(
+    registerOptions({
+      chatId: "ou_direct",
+      threadId: "",
+      interaction: createInteractionPolicy("direct"),
+    }),
+  );
+
+  await host.schedule.trigger(task.id);
+
+  assert.equal(host.tasks.started[0]?.interaction?.mode, "direct");
 });
 
 test("目标话题 active 时到点触发会跳过并记录", async (t) => {

@@ -7,6 +7,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
 import type { CliAccessMode, CliId } from "../cli/types.js";
+import {
+  interactionPolicyOf,
+  type InteractionPolicy,
+} from "./interaction-policy.js";
 
 /** 一条持久化的定时任务；触发所需的目标地址与引擎选择全部内联。 */
 export interface ScheduleTask {
@@ -32,6 +36,8 @@ export interface ScheduleTask {
   workspaceDir: string;
   /** 配置者 openId：任务卡片停止按钮的鉴权发起人。 */
   ownerOpenId: string;
+  /** 注册时解析出的交互策略；旧记录缺省按 team 模式恢复。 */
+  interaction?: InteractionPolicy;
   enabled: boolean;
   lastRunAt?: string;
   /** 到点但因目标话题忙碌或关闭而跳过的时刻。 */
@@ -62,6 +68,19 @@ const ScheduleSchema = z.object({
   accessMode: z.enum(["headless", "acp"]).optional(),
   workspaceDir: z.string().min(1),
   ownerOpenId: z.string(),
+  interaction: z
+    .object({
+      mode: z.enum(["direct", "team"]),
+      documentRequested: z.boolean(),
+      capabilities: z.object({
+        acceptBotMessages: z.boolean(),
+        collaborateWithBots: z.boolean(),
+        runProductWorkflow: z.boolean(),
+        deliverDocument: z.boolean(),
+        suppressHandoff: z.boolean(),
+      }),
+    })
+    .optional(),
   enabled: z.boolean(),
   lastRunAt: z.string().min(1).optional(),
   lastSkippedAt: z.string().min(1).optional(),
@@ -102,6 +121,7 @@ export class JsonScheduleStore implements ScheduleStore {
       const task: ScheduleTask = {
         accessMode: "headless",
         ...result.data,
+        interaction: interactionPolicyOf(result.data),
       };
       tasks.push(task);
     }

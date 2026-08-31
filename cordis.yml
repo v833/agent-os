@@ -48,6 +48,8 @@ plugins:
   - name: commands/new
   - name: commands/resume
   - name: commands/compact
+  # /doc：显式开启文档交付能力，普通任务不会自动生成云文档。
+  - name: commands/doc
   - name: commands/status
   - name: commands/team
   - name: commands/cd

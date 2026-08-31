@@ -19,6 +19,14 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "compact",
     instructions: "保留接口约定，省略测试日志",
   });
+  assert.deepEqual(parseCommand("/doc 整理本周发布说明"), {
+    name: "doc",
+    prompt: "整理本周发布说明",
+  });
+  assert.deepEqual(parseCommand("@Agent OS /doc  汇总历史消息"), {
+    name: "doc",
+    prompt: "汇总历史消息",
+  });
   assert.deepEqual(parseCommand("/metrics"), {
     name: "metrics",
     args: undefined,

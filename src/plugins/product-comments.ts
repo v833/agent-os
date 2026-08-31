@@ -12,6 +12,7 @@ import {
   buildBotPrompt,
   type BotConfig,
 } from "../core/bot-registry.js";
+import { teamInteractionPolicy } from "../core/interaction-policy.js";
 import type { Session } from "../core/session-manager.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
 import type { Bot as LarkBot, IncomingDocumentComment as LarkComment } from "../im/lark.js";
@@ -113,14 +114,16 @@ export class ProductCommentsService extends Service {
         session.cliId,
         session.accessMode ?? "headless",
       );
+      const interaction = teamInteractionPolicy();
       const teamContext = this.ctx.root.bail("task/prompt-context", config, {
-        isDirect: false,
+        interaction,
       });
       const prompt = await buildBotPrompt(
         config,
         documentCommentPrompt(flow, comment),
         teamContext ?? "",
         this.ctx.config.defaultProductDeliveryMode,
+        { interaction },
       );
       try {
         const result = await this.ctx.cli.run({

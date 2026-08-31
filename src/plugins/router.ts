@@ -10,6 +10,7 @@ import {
 } from "../core/command-parser.js";
 import { ensureWorkspaceDirectory } from "../core/workspace.js";
 import { topicTaskId } from "../core/topic-task.js";
+import { resolveInteractionPolicy } from "../core/interaction-policy.js";
 import {
   extractResourceKeys,
   leadingMentionName,
@@ -152,7 +153,15 @@ async function handleMessage(
   const resolved = resolveMentions(message.text, message.mentions);
   let senderRuntime: BotRuntime | undefined;
   let collaboration: CollaborationMessage | undefined;
+  const messageInteraction = resolveInteractionPolicy(message);
   if (fromBot) {
+    if (!messageInteraction.capabilities.acceptBotMessages) {
+      // 私聊只接受真人指令；即使存在旧交接单，也不能在 p2p 中恢复 bot 间协作。
+      console.log(
+        `[路由] 私聊忽略 bot 消息 sender=${message.senderOpenId} target=${botConfig.id}`,
+      );
+      return;
+    }
     const dispatchId = message.text.match(/任务编号：([a-f0-9]{12})/)?.[1];
     const pending =
       message.messageType === "post" &&
@@ -182,6 +191,11 @@ async function handleMessage(
   const hasThread = Boolean(message.threadId || message.rootId);
   const taskId = topicTaskId(message);
   let command = parseCommand(resolved);
+  const parsedInteraction = resolveInteractionPolicy(message, {
+    documentRequested: command?.name === "doc",
+  });
+  const startsDocumentTask =
+    command?.name === "doc" && Boolean(command.prompt);
   const cliRequest = parseCliRequest(
     resolved,
     leadingMentionName(message.text, message.mentions),
@@ -212,7 +226,14 @@ async function handleMessage(
   );
   let { session } = resolvedSession;
   const { isNew } = resolvedSession;
-  if (command && isNew && session.status === "creating") {
+  if (
+    command &&
+    isNew &&
+    session.status === "creating" &&
+    !startsDocumentTask
+  ) {
+    // 普通控制命令不启动任务，可以直接进入 idle；/doc 必须保留 creating，
+    // 直到 tasks 原子切换为 active，避免准备提示词期间第二条消息并发启动。
     session = await ctx.sessions.manager.transition(session.id, "idle");
   }
   const cliAdapter = ctx.cli.get(session.cliId, session.accessMode ?? "headless");
@@ -251,6 +272,7 @@ async function handleMessage(
       bot,
       botConfig,
       message,
+      taskId,
       session,
       isNew,
       hasThread,
@@ -258,6 +280,7 @@ async function handleMessage(
       cliRequest,
       command,
       cliAdapter,
+      interaction: parsedInteraction,
     };
     await handler(commandContext);
     return;
@@ -297,10 +320,12 @@ async function handleMessage(
       botConfig,
       message,
       taskId,
+      interaction: parsedInteraction,
       requestedPrompt,
       })
     : undefined;
   if (messageOutcome) requestedPrompt = messageOutcome.requestedPrompt;
+  const interaction = messageOutcome?.interaction ?? parsedInteraction;
   if (collaboration && session.workspaceDir !== collaboration.workspaceDir) {
     await ensureWorkspaceDirectory(collaboration.workspaceDir);
     session = await ctx.sessions.manager.setWorkspaceDir(
@@ -318,7 +343,7 @@ async function handleMessage(
     senderOpenId: message.senderOpenId,
     senderUnionId: message.senderUnionId,
     taskId,
-    isDirect: message.chatType === "p2p",
+    interaction,
     requestedPrompt,
     originalRequestedPrompt: messageOutcome?.originalRequestedPrompt,
     isCompacting: false,
@@ -326,7 +351,16 @@ async function handleMessage(
     senderRuntime,
     resources: extractResourceKeys(message.messageType, message.rawContent),
   };
-  ctx.tasks.startTask(startTaskInput);
+  const started = await ctx.tasks.startTask(startTaskInput);
+  if (!started) {
+    const latestStatus = ctx.sessions.manager.get(session.id)?.status;
+    const detail = latestStatus === "active"
+      ? "当前会话还在执行，请等任务结束后再追问。"
+      : latestStatus === "closed"
+        ? "这个话题的会话已经关闭，请新开一个话题继续。"
+        : "任务未能启动，请稍后重试。";
+    await bot.reply(message.messageId, detail, hasThread);
+  }
 }
 
 export const name = "router";

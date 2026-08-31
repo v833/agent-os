@@ -3,6 +3,7 @@
  * 在 cordis.yml 中移除本插件即可下线 /schedule 命令，不影响调度执行本身。
  */
 import type { Context } from "cordis";
+import { interactionPolicyOf } from "../../core/interaction-policy.js";
 import type { CommandHandler } from "../types.js";
 
 function formatTime(date: Date): string {
@@ -26,7 +27,9 @@ const handler: CommandHandler = async ({
   hasThread,
   command,
   botConfig,
+  interaction: inputInteraction,
 }) => {
+  const interaction = interactionPolicyOf({ interaction: inputInteraction });
   if (command.name !== "schedule") return;
 
   if (command.action === "add") {
@@ -43,6 +46,7 @@ const handler: CommandHandler = async ({
         accessMode: session.accessMode ?? "headless",
         workspaceDir: session.workspaceDir,
         ownerOpenId: message.senderOpenId,
+        interaction,
       });
       const next = ctx.schedule.nextRunAt(task.id);
       await bot.reply(

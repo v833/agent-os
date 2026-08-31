@@ -27,6 +27,7 @@ import {
   reverseTaskId,
   stateForEvent,
 } from "../core/bitable-board.js";
+import { teamInteractionPolicy } from "../core/interaction-policy.js";
 import type {
   ProductSpecApprovedPayload,
   QAResultPayload,
@@ -1236,7 +1237,7 @@ export class BitableBoardService extends Service {
       replyToMessageId: messageId,
       senderOpenId: trigger.owner || "bitable",
       taskId,
-      isDirect: false,
+      interaction: teamInteractionPolicy(),
       requestedPrompt: trigger.title,
       isCompacting: false,
       resources: [],

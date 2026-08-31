@@ -9,7 +9,7 @@
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
 - **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）、`ctx.orchestration`（多话题并行编排）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
 - **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，失败时广播 `task/failed`——collaboration 监听成功事件决定是否自动交接，orchestration 监听两类事件更新子任务状态；orchestration 再广播 `orchestration/update` / `orchestration/evicted`，可选插件 `orchestration/live-panel` 据此挂起并节流刷新实时面板卡片（移除该插件即回退为仅汇总文本），可选插件 `orchestration/actions` 认领面板「重试」按钮回调并重新派发失败子任务（移除即无重试按钮）。协作与编排都是可选插件，移除后任务编排不受影响。
-- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
+- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/doc`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
 
 默认 `cordis.yml` 内容：
 
@@ -30,6 +30,7 @@ plugins:
   - name: commands/new
   - name: commands/resume
   - name: commands/compact
+  - name: commands/doc
   - name: commands/status
   - name: commands/cd
   - name: commands/close
@@ -112,6 +113,8 @@ Copy-Item config/bots.example.json config/bots.json
 ```
 
 `appIdEnv` 和 `appSecretEnv` 指向 `.env` 中的真实凭证变量。停用 bot 时设置 `enabled: false`，它不会读取凭证或建立长连接；全部停用或配置字段错误时程序会在启动阶段退出。修改 `.env` 或 `config/*.json` 会触发 `pnpm start` 自动重启。群里 @哪台 bot，就由哪台 bot 接手，程序无需再次判断目标应用。
+
+私聊 bot 时，任务默认进入 direct 模式：忽略该 bot 的团队角色、团队 Skill 和产品方案流程，不接受或派发其他 bot 的协作消息，直接回答当前用户。需要生成可查阅的飞书云文档时使用 `/doc <任务>` 显式开启文档交付；群聊和已有话题继续保持 team 模式及原有协作行为。
 
 个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与开发 bot 的自动代码审查链。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
 
@@ -593,6 +596,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/new`：清空当前话题绑定的 CLI 会话；旧会话仍由引擎保留
 - `/resume`：读取当前工作目录中的 Claude/Codex 原生会话并用卡片选择恢复
 - `/compact [要求]`：在当前 CLI 会话内调用引擎原生上下文整理；Claude 支持附加要求，Codex 使用默认策略
+- `/doc <任务>`：显式请求生成飞书云文档；普通任务不会自动触发文档交付
 - `/cd`：查看当前工作目录
 - `/cd <目录>`：切换当前话题的工作目录
 - `/help`：列出会话控制和引擎选择命令

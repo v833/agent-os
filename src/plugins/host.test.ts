@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { Context, Service } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
+import { createInteractionPolicy } from "../core/interaction-policy.js";
 import { MAX_RUNS } from "../core/orchestration.js";
 import { MAX_PROCESSED_TURNS } from "./collaboration.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
@@ -34,6 +35,7 @@ import * as clarificationPlugin from "./clarification.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as dispatchTaskPlugin from "./dispatch-task.js";
 import * as commandsPlugin from "./commands.js";
+import * as docCommand from "./commands/doc.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
@@ -237,6 +239,12 @@ function createFakeBot(
     mentions: [] as string[],
     sentToChat: [] as { chatId: string; target: BotIdentity; text: string }[],
     updates: [] as Record<string, unknown>[],
+    downloads: [] as {
+      messageId: string;
+      key: string;
+      type: "image" | "file";
+      fileName?: string;
+    }[],
     documentCommentReplies: [] as string[],
     documentCommentReactions: [] as { active: boolean }[],
   };
@@ -294,7 +302,16 @@ function createFakeBot(
       }
       calls.updates.push(card);
     },
-    downloadResource: async () => join(process.cwd(), "data", "downloads", "x"),
+    downloadResource: async (
+      messageId: string,
+      key: string,
+      type: "image" | "file",
+      _saveDir: string,
+      fileName?: string,
+    ) => {
+      calls.downloads.push({ messageId, key, type, fileName });
+      return join(process.cwd(), "data", "downloads", "x");
+    },
     replyToDocumentComment: async (_comment: unknown, text: string) => {
       calls.documentCommentReplies.push(text);
     },
@@ -310,7 +327,8 @@ function incomingMessage(overrides: Partial<IncomingMessage>): IncomingMessage {
   return {
     messageId: "m1",
     chatId: "chat1",
-    chatType: "p2p",
+    // 集成测试默认覆盖群聊/团队模式；私聊行为由用例显式传入 chatType=p2p。
+    chatType: "group",
     messageType: "text",
     text,
     rawContent: JSON.stringify({ text }),
@@ -505,6 +523,7 @@ async function createHost(
     root.plugin(applicationToolsPlugin),
     root.plugin(cardsPlugin),
     root.plugin(commandsPlugin),
+    root.plugin(docCommand),
     root.plugin(statusCommand),
     root.plugin(teamCommand),
     root.plugin(collaborationPlugin),
@@ -622,7 +641,7 @@ test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错
 
   // 团队内的成员应拿到团队上下文，作为 tasks 的提示词 provider。
   const known = host.root.bail("task/prompt-context", baseBotConfig, {
-    isDirect: false,
+    interaction: createInteractionPolicy("team"),
   });
   assert.ok(
     known?.includes("你所在的 Agent 团队"),
@@ -631,7 +650,7 @@ test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错
 
   // 用户私聊指挥单个成员时不应注入团队上下文，成员直接按指令干活。
   const direct = host.root.bail("task/prompt-context", baseBotConfig, {
-    isDirect: true,
+    interaction: createInteractionPolicy("direct"),
   });
   assert.equal(direct, undefined, "私聊应跳过团队上下文");
 
@@ -639,7 +658,7 @@ test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错
   const unknown = host.root.bail("task/prompt-context", {
     ...baseBotConfig,
     id: "ghost",
-  }, { isDirect: false });
+  }, { interaction: createInteractionPolicy("team") });
   assert.equal(unknown, undefined);
 });
 
@@ -686,12 +705,477 @@ test("私聊成员不注入团队上下文，直接按指令干活", async () =>
     prompt.includes("你是用户的直接执行助手"),
     "私聊任务应把团队型角色切换为直接执行者",
   );
+  assert.doesNotMatch(prompt, /除非用户明确要求协作/);
+  assert.match(prompt, /如需协作，请让用户在群聊或话题中发起任务/);
 
   // 完成任务让 tasks 收尾清理定时器，避免测试进程挂住。
   host.cli.finish({ answer: "重构完成", sessionId: "sess-1" });
   await waitFor(() =>
     host.calls.mentions.some((text) => text.includes("任务已完成")),
   );
+});
+
+test("私聊普通任务忽略 bot 业务提示词和产品文档流程", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+    role: "产品经理",
+    systemPrompt: "必须先写产品方案并提交审批。",
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      text: "帮我直接整理这段需求",
+      chatType: "p2p",
+      senderOpenId: "ou_direct",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  const prompt = host.cli.captured!.prompt;
+  assert.ok(prompt.includes("你是用户的直接执行助手"));
+  assert.ok(!prompt.includes("产品经理"));
+  assert.ok(!prompt.includes("必须先写产品方案并提交审批"));
+  assert.ok(!prompt.includes("产品方案交付规则"));
+  assert.ok(!prompt.includes("lark-cli 身份规则"));
+  assert.ok(!prompt.includes("<project-skill"));
+  assert.match(prompt, /未通过 \/doc 显式请求时，不要创建、编辑或上传飞书云文档/);
+
+  host.cli.finish({ answer: "已整理", sessionId: "sess-direct-plain" });
+  await waitFor(() => host.calls.mentions.some((text) => text.includes("任务已完成")));
+  assert.equal(host.cli.captures.length, 1, "私聊普通任务不应触发产品方案纠正轮");
+  assert.equal(
+    host.calls.cards.some((card) => cardSummaryContains(card, "产品文档")),
+    false,
+    "私聊普通任务不应生成产品方案卡片",
+  );
+});
+
+test("/doc 缺少任务参数时回复用法并把新会话置为 idle", async () => {
+  const host = await createHost();
+  const botConfig = host.root.config.bot("testbot")!;
+  const message = incomingMessage({ text: "/doc" });
+
+  await host.root.parallel("bot/message", message, host.bot, botConfig);
+
+  assert.equal(host.cli.captures.length, 0);
+  assert.ok(host.calls.replies.some((text) => text.includes("用法：/doc <任务>")));
+  const resolved = await host.root.sessions.manager.resolve(
+    message,
+    botConfig.defaultCliId,
+    botConfig.id,
+    botConfig.workspaceDir,
+    botConfig.accessMode,
+  );
+  assert.equal(resolved.isNew, false);
+  assert.equal(resolved.session.status, "idle");
+});
+
+test("私聊 /doc 显式开启文档交付，但不触发团队或产品审批", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+    role: "产品经理",
+    systemPrompt: "必须先写产品方案并提交审批。",
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  let resultPayload: TaskResultPayload | undefined;
+  host.root.on("task/result", (payload) => {
+    resultPayload = payload;
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      text: "/doc 汇总本周发布说明",
+      chatType: "p2p",
+      messageType: "post",
+      rawContent: JSON.stringify({
+        content: [[
+          { tag: "text", text: "/doc 汇总本周发布说明" },
+          { tag: "img", image_key: "img_doc_release" },
+        ]],
+      }),
+      senderOpenId: "ou_doc",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  const prompt = host.cli.captured!.prompt;
+  assert.ok(prompt.includes("用户通过 /doc 显式请求文档交付"));
+  assert.ok(prompt.includes("<project-skill name=\"lark-doc\""));
+  assert.ok(!prompt.includes("产品方案交付规则"));
+  assert.ok(!prompt.includes("必须先写产品方案并提交审批"));
+  assert.deepEqual(host.calls.downloads, [{
+    messageId: "m1",
+    key: "img_doc_release",
+    type: "image",
+    fileName: undefined,
+  }]);
+
+  host.cli.finish({
+    answer: "已生成文档：https://example.feishu.cn/docx/DirectDoc123",
+    sessionId: "sess-direct-doc",
+  });
+  await waitFor(() => host.calls.mentions.some((text) => text.includes("任务已完成")));
+  assert.equal(resultPayload?.interaction?.documentRequested, true);
+});
+
+test("私聊 /doc 澄清恢复后仍保留文档交付语义", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["grill-me", "lark-doc"],
+    role: "产品经理",
+    systemPrompt: "必须先写产品方案并提交审批。",
+  };
+  const host = await createHost([productConfig]);
+  await host.root.plugin(productSpecPlugin);
+  await waitForAllActive(host.root);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      text: "/doc 形成一份发布说明",
+      chatType: "p2p",
+      senderOpenId: "ou_doc_clarify",
+    }),
+    host.bot,
+    productConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  host.cli.finish({
+    answer: "需要确认格式。",
+    sessionId: "sess-direct-doc-clarify",
+    toolCalls: [{
+      toolUseId: "tool-doc-clarify",
+      toolName: "request_clarification",
+      input: {
+        title: "确认发布说明格式",
+        questions: [{
+          id: "format",
+          prompt: "采用哪种格式？",
+          options: [
+            { id: "brief", label: "简版" },
+            { id: "full", label: "完整版" },
+          ],
+        }],
+      },
+    }],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "确认发布说明格式")),
+  );
+  const waitingCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "采用哪种格式"),
+  )!;
+  const response = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_doc_clarify",
+      messageId: "card-1",
+      value: clarificationValueOf(waitingCard, "full"),
+    },
+    host.bot,
+    productConfig,
+  );
+  assert.equal(response?.toast?.content, "答案已收到。");
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /<project-skill name="lark-doc"/);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /用户通过 \/doc 显式请求文档交付/);
+  assert.doesNotMatch(host.cli.captures[1]?.prompt ?? "", /产品方案交付规则/);
+  host.cli.finish({
+    answer: "已生成文档：https://example.feishu.cn/docx/ClarifiedDoc123",
+    sessionId: "sess-direct-doc-clarify",
+  });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+});
+
+test("/doc 澄清后直接发送文字会使旧卡失效并保留文档策略", async () => {
+  const productConfig: BotConfig = {
+    ...baseBotConfig,
+    skills: ["lark-doc"],
+  };
+  const host = await createHost([productConfig]);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const original = incomingMessage({
+    messageId: "m-doc-root",
+    text: "/doc 形成一份发布说明",
+    chatType: "p2p",
+    senderOpenId: "ou_doc_text",
+  });
+
+  await host.root.parallel("bot/message", original, host.bot, runtimeConfig);
+  await waitFor(() => host.cli.captures.length === 1);
+  host.cli.finish({
+    answer: "需要确认发布范围。",
+    sessionId: "sess-doc-text",
+    toolCalls: [{
+      toolUseId: "tool-doc-text",
+      toolName: "request_clarification",
+      input: {
+        title: "确认发布范围",
+        questions: [{
+          id: "scope",
+          prompt: "包含哪些版本？",
+          options: [
+            { id: "current", label: "仅当前版本" },
+            { id: "all", label: "全部版本" },
+          ],
+        }],
+      },
+    }],
+  });
+  await waitFor(() =>
+    host.calls.updates.some((card) => cardSummaryContains(card, "确认发布范围")),
+  );
+  const oldCard = host.calls.updates.find((card) =>
+    cardSummaryContains(card, "包含哪些版本"),
+  )!;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-doc-follow-up",
+      rootId: "m-doc-root",
+      text: "只需要当前版本，并附上升级步骤",
+      chatType: "p2p",
+      senderOpenId: "ou_doc_text",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.equal(host.cli.captures[1]?.sessionId, "sess-doc-text");
+  assert.match(host.cli.captures[1]?.prompt ?? "", /只需要当前版本，并附上升级步骤/);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /<project-skill name="lark-doc"/);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /用户通过 \/doc 显式请求文档交付/);
+  assert.ok(host.calls.updates.some((card) => cardSummaryContains(card, "已更新")));
+
+  const expired = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_doc_text",
+      messageId: "card-1",
+      value: clarificationValueOf(oldCard, "current"),
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(expired?.toast?.content, "这组澄清问题已经失效。");
+  host.cli.finish({
+    answer: "已生成文档：https://example.feishu.cn/docx/DocText123",
+    sessionId: "sess-doc-text",
+  });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+});
+
+test("首轮 /doc 准备期间收到第二条 /doc 时只启动一轮", async (t) => {
+  const host = await createHost();
+  const botConfig = host.root.config.bot("testbot")!;
+  const manager = host.root.sessions.manager;
+  const originalTransition = manager.transition.bind(manager);
+  let activeTransitionAttempts = 0;
+  let notifyActiveTransition!: () => void;
+  let releaseActiveTransition!: () => void;
+  const activeTransitionReached = new Promise<void>((resolve) => {
+    notifyActiveTransition = resolve;
+  });
+  const activeTransitionGate = new Promise<void>((resolve) => {
+    releaseActiveTransition = resolve;
+  });
+  t.after(() => {
+    releaseActiveTransition();
+    manager.transition = originalTransition;
+  });
+  // 卡住新会话的 active 认领，验证 creating 状态下第二条 /doc 仍会被拒绝。
+  manager.transition = (async (sessionId, nextStatus) => {
+    if (nextStatus === "active") {
+      activeTransitionAttempts += 1;
+      notifyActiveTransition();
+      await activeTransitionGate;
+    }
+    return originalTransition(sessionId, nextStatus);
+  }) as typeof manager.transition;
+
+  const firstDelivery = host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-doc-creating",
+      text: "/doc 生成第一份说明",
+    }),
+    host.bot,
+    botConfig,
+  );
+  await activeTransitionReached;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-doc-during-creating",
+      rootId: "m-doc-creating",
+      text: "/doc 生成第二份说明",
+    }),
+    host.bot,
+    botConfig,
+  );
+
+  assert.equal(host.cli.captures.length, 0);
+  assert.equal(activeTransitionAttempts, 1);
+  assert.ok(
+    host.calls.replies.some((text) =>
+      text.includes("当前会话正在准备，请稍后再使用 /doc")),
+  );
+  releaseActiveTransition();
+  await firstDelivery;
+  await waitFor(() => host.cli.captures.length === 1);
+  assert.match(host.cli.captures[0]?.prompt ?? "", /生成第一份说明/);
+  assert.doesNotMatch(host.cli.captures[0]?.prompt ?? "", /生成第二份说明/);
+  host.cli.finish({ answer: "文档已生成。", sessionId: "sess-doc-creating" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+});
+
+test("idle 会话准备任务时第二条消息被拒绝且只启动一轮", async (t) => {
+  const host = await createHost();
+  const botConfig = host.root.config.bot("testbot")!;
+  const manager = host.root.sessions.manager;
+  const rootMessage = incomingMessage({
+    messageId: "m-idle-race-root",
+    text: "建立空闲会话",
+  });
+  const resolved = await manager.resolve(
+    rootMessage,
+    botConfig.defaultCliId,
+    botConfig.id,
+    botConfig.workspaceDir,
+    botConfig.accessMode,
+  );
+  await manager.transition(resolved.session.id, "idle");
+
+  const originalSetRetryPrompt = manager.setRetryPrompt.bind(manager);
+  let firstAttempt = true;
+  let notifyPreparing!: () => void;
+  let releasePreparing!: () => void;
+  const preparingReached = new Promise<void>((resolve) => {
+    notifyPreparing = resolve;
+  });
+  const preparingGate = new Promise<void>((resolve) => {
+    releasePreparing = resolve;
+  });
+  t.after(() => {
+    releasePreparing();
+    manager.setRetryPrompt = originalSetRetryPrompt;
+  });
+  manager.setRetryPrompt = (async (sessionId, retryPrompt) => {
+    if (firstAttempt) {
+      firstAttempt = false;
+      notifyPreparing();
+      await preparingGate;
+    }
+    return originalSetRetryPrompt(sessionId, retryPrompt);
+  }) as typeof manager.setRetryPrompt;
+
+  const firstDelivery = host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-idle-race-first",
+      rootId: rootMessage.messageId,
+      text: "执行第一条任务",
+    }),
+    host.bot,
+    botConfig,
+  );
+  await preparingReached;
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-idle-race-second",
+      rootId: rootMessage.messageId,
+      text: "执行第二条任务",
+    }),
+    host.bot,
+    botConfig,
+  );
+  await waitFor(() =>
+    host.calls.replies.some((text) => text.includes("当前会话还在执行")) ||
+    host.cli.captures.length > 0,
+  );
+
+  assert.equal(manager.get(resolved.session.id)?.status, "active");
+  assert.equal(host.cli.captures.length, 0);
+  assert.ok(
+    host.calls.replies.some((text) => text.includes("当前会话还在执行")),
+  );
+
+  releasePreparing();
+  await firstDelivery;
+  await waitFor(() => host.cli.captures.length === 1);
+  assert.match(host.cli.captures[0]?.prompt ?? "", /执行第一条任务/);
+  assert.doesNotMatch(host.cli.captures[0]?.prompt ?? "", /执行第二条任务/);
+  host.cli.finish({ answer: "第一条任务完成。", sessionId: "sess-idle-race" });
+  await waitFor(() =>
+    host.calls.mentions.some((text) => text.includes("任务已完成")),
+  );
+});
+
+test("私聊结果即使配置 reviewBy 也不触发 QA bot 交接", async () => {
+  const reviewerConfig: BotConfig = { ...baseBotConfig, id: "reviewer" };
+  const developerConfig: BotConfig = {
+    ...baseBotConfig,
+    reviewBy: "reviewer",
+  };
+  const host = await createHost([developerConfig, reviewerConfig]);
+  host.lark.runtimes.set("reviewer", {
+    config: reviewerConfig,
+    bot: host.bot,
+    identity: { openId: "reviewer_open", name: "reviewer" },
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "私聊直接完成", chatType: "p2p" }),
+    host.bot,
+    developerConfig,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  host.cli.finish({ answer: "已完成", sessionId: "sess-direct-review" });
+  await waitFor(() => host.calls.mentions.some((text) => text.includes("任务已完成")));
+  assert.equal(
+    host.calls.cards.some((card) => cardSummaryContains(card, "QA 审查")),
+    false,
+  );
+  assert.equal(
+    host.calls.mentions.some((text) => text.includes("新的协作任务")),
+    false,
+  );
+});
+
+test("私聊 /orchestrate 不启动团队编排", async () => {
+  const host = await createHost();
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "/orchestrate 拆分任务", chatType: "p2p" }),
+    host.bot,
+    baseBotConfig,
+  );
+  assert.ok(host.calls.replies.some((text) => text.includes("不会与其他 bot 互动")));
+  assert.equal(host.cli.captures.length, 0);
 });
 
 test("/team 按成员 accessMode 查找 ACP 执行引擎", async () => {
@@ -763,6 +1247,63 @@ test("任务卡片响应缺少 message_id 时 startTask 返回失败并回收会
   assert.equal(host.root.sessions.manager.get(resolved.session.id)?.status, "idle");
 });
 
+test("任务准备失败时释放运行实例并把会话恢复为 idle", async () => {
+  const host = await createHost();
+  const botConfig = host.root.config.bot("testbot")!;
+  const manager = host.root.sessions.manager;
+  const resolved = await manager.resolve(
+    incomingMessage({ text: "准备阶段失败" }),
+    botConfig.defaultCliId,
+    botConfig.id,
+    botConfig.workspaceDir,
+    botConfig.accessMode,
+  );
+  manager.setRetryPrompt = async () => {
+    throw new Error("模拟：保存重试指令失败");
+  };
+
+  const started = await host.root.tasks.startTask({
+    bot: host.bot,
+    botConfig,
+    session: resolved.session,
+    hasThread: false,
+    replyToMessageId: "message-preparation-failed",
+    senderOpenId: "ou_owner",
+    taskId: "preparation-failed",
+    requestedPrompt: "准备阶段失败",
+    isCompacting: false,
+    resources: [],
+  });
+
+  assert.equal(started, false);
+  assert.equal(host.root.tasks.activeRuns.size, 0);
+  assert.equal(manager.get(resolved.session.id)?.status, "idle");
+  assert.equal(host.calls.cards.length, 0);
+  assert.equal(host.cli.captures.length, 0);
+});
+
+test("普通消息启动失败时向用户返回明确提示", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    { emptyReplyCard: true },
+  );
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "执行但无法创建任务卡片" }),
+    host.bot,
+    baseBotConfig,
+  );
+
+  assert.ok(
+    host.calls.replies.some((text) => text.includes("任务未能启动，请稍后重试")),
+  );
+});
+
 test("普通任务走完卡片、执行与结果通知的生命周期", async () => {
   const host = await createHost();
   let startedTraceId: string | undefined;
@@ -773,7 +1314,7 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   host.root.on("task/result", (payload) => {
     resultPayload = payload;
   });
-  // 群聊消息保留团队上下文（isDirect=false）。
+  // 群聊消息保留团队上下文（interaction.mode=team）。
   const message = incomingMessage({
     text: "写一个 hello world",
     chatType: "group",
@@ -2268,6 +2809,99 @@ test("dispatch_task 只允许 Team Leader 派发，并保留真人发起人与�
     }),
     /dispatch_task 参数非法/,
   );
+});
+
+test("私聊 dispatch_task 被忽略，不向其他 bot 投递", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const productInput: BotConfig = { ...baseBotConfig, id: "product" };
+  const host = await createHost([leaderInput, productInput]);
+  const leader = host.root.config.bot("leader")!;
+  await host.root.plugin(dispatchTaskPlugin);
+  await waitForAllActive(host.root);
+
+  const payload = {
+    bot: host.bot,
+    botConfig: leader,
+    session: { ...fakeSession(), botId: leader.id, workspaceDir: leader.workspaceDir },
+    requestedPrompt: "私聊任务",
+    answer: "不应派发",
+    replyToMessageId: "direct-dispatch-message",
+    hasThread: false,
+    taskId: "direct-dispatch-task",
+    interaction: createInteractionPolicy("direct"),
+    result: {
+      answer: "不应派发",
+      toolCalls: [{
+        toolUseId: "dispatch-direct",
+        toolName: "dispatch_task",
+        input: {
+          targetBotId: "product",
+          objective: "不应发送",
+          instruction: "私聊禁止跨 bot 互动。",
+        },
+      }],
+    },
+    runId: "run-direct-dispatch",
+    senderOpenId: "ou_direct",
+    cardMessageId: "card-direct-dispatch",
+  } satisfies TaskToolCallsPayload;
+
+  const outcome = await host.root.serial("task/tool-calls", payload);
+  assert.equal(outcome, undefined);
+  assert.equal(host.calls.sentToChat.length, 0);
+  assert.equal(host.calls.mentions.length, 0);
+});
+
+test("私聊即使命中旧交接单也忽略 bot 消息", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const productInput: BotConfig = { ...baseBotConfig, id: "product" };
+  const host = await createHost([leaderInput, productInput]);
+  const leader = host.root.config.bot("leader")!;
+  const product = host.root.config.bot("product")!;
+  host.lark.runtimes.set("leader", {
+    config: leader,
+    bot: host.bot,
+    identity: { openId: "leader_open", name: "leader" },
+  });
+  host.lark.runtimes.set("product", {
+    config: product,
+    bot: host.bot,
+    identity: { openId: "product_open", name: "product" },
+  });
+
+  await host.root.collaboration.sendDispatch({
+    senderConfig: leader,
+    senderBot: host.bot,
+    replyToMessageId: "dispatch-root",
+    targetBotId: "product",
+    taskId: "p2p-collaboration",
+    ownerOpenId: "ou_owner",
+    reportToBotId: "leader",
+    objective: "不应在私聊恢复",
+    instruction: "私聊禁止跨 bot 互动。",
+    expectedOutput: "无",
+    round: 1,
+    maxRounds: 2,
+    workspaceDir: leader.workspaceDir,
+  });
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      chatType: "p2p",
+      senderType: "app",
+      senderOpenId: "leader_open",
+      text: `新的协作任务（任务编号：${dispatchId}）`,
+      mentions: [{ key: "@_user_1", name: "product", openId: "product_open" }],
+    }),
+    host.bot,
+    product,
+  );
+  assert.equal(host.cli.captures.length, 0);
 });
 
 test("普通成员结果固定交回 reportToBotId，编排者收口后通知真人", async () => {

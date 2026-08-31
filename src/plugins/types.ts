@@ -9,6 +9,7 @@ import type { Context } from "cordis";
 import type { BotConfig } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
+import type { InteractionPolicy } from "../core/interaction-policy.js";
 import type { OrchestrationRun } from "../core/orchestration.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
 import type { QAResult } from "../core/qa-result.js";
@@ -105,11 +106,13 @@ declare module "cordis" {
     /**
      * 任务提示词上下文 provider。没有 team 插件时返回 undefined；
      * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
-     * options.isDirect 为 true（用户私聊指挥单个成员）时 team 不注入团队上下文。
+     * interaction.mode 为 direct（用户私聊指挥单个成员）时 team 不注入团队上下文。
      */
     "task/prompt-context"(
       botConfig: BotConfig,
-      options: { isDirect: boolean },
+      options: {
+        interaction?: InteractionPolicy;
+      },
     ): string | undefined;
     /** 一轮 CLI 成功结束后，应用工具插件可优先认领结果并替换普通成功收尾。 */
     "task/tool-calls"(
@@ -166,6 +169,8 @@ export interface CommandContext {
   bot: Bot;
   botConfig: BotConfig;
   message: IncomingMessage;
+  /** 同一飞书话题的稳定任务编号，供会启动任务的命令沿用。 */
+  taskId: string;
   session: Session;
   isNew: boolean;
   hasThread: boolean;
@@ -175,6 +180,8 @@ export interface CommandContext {
   command: SlashCommand;
   /** 当前会话选中的执行引擎适配器。 */
   cliAdapter: CliAdapter;
+  /** 路由入口解析的一次性交互策略。 */
+  interaction?: InteractionPolicy;
 }
 
 /** 命令插件需要实现的处理函数签名。 */
@@ -191,8 +198,8 @@ export interface StartTaskInput {
   senderUnionId?: string;
   /** 同一飞书话题的稳定任务编号；旧的定时/协作入口可以不提供。 */
   taskId?: string;
-  /** 私聊（p2p）标记：用户直接指挥单个成员时不注入团队上下文，缺省按群聊处理。 */
-  isDirect?: boolean;
+  /** 路由入口解析的一次性交互策略；缺省按 team 模式。 */
+  interaction?: InteractionPolicy;
   requestedPrompt: string;
   /** 应用工具恢复轮次使用；CLI 收到 requestedPrompt，最终结果仍关联最初任务。 */
   originalRequestedPrompt?: string;
@@ -211,6 +218,8 @@ export interface TaskMessagePayload {
   botConfig: BotConfig;
   message: IncomingMessage;
   taskId: string;
+  /** 当前入站消息的交互策略；澄清插件可用它判断是否需要沿用旧策略。 */
+  interaction?: InteractionPolicy;
   requestedPrompt: string;
 }
 
@@ -218,6 +227,8 @@ export interface TaskMessagePayload {
 export interface TaskMessageOutcome {
   requestedPrompt: string;
   originalRequestedPrompt?: string;
+  /** 澄清流程等可选插件可保留原任务的交互策略。 */
+  interaction?: InteractionPolicy;
 }
 
 /** 产品方案确认事件只携带公共契约，不让 product-spec 依赖具体协作实现。 */
@@ -249,8 +260,6 @@ export interface TaskToolCallsPayload extends TaskResultPayload {
   runId: string;
   senderOpenId: string;
   senderUnionId?: string;
-  /** 私聊标记透传；澄清恢复任务需要保持原消息的团队上下文策略。 */
-  isDirect?: boolean;
   /** 当前运行卡片的 message_id，供流程卡片严格绑定回调来源。 */
   cardMessageId: string;
 }
@@ -279,6 +288,8 @@ export interface TaskStartedPayload {
   botConfig: BotConfig;
   session: Session;
   taskId?: string;
+  /** 本轮交互策略；后台观察者可缺省。 */
+  interaction?: InteractionPolicy;
   traceId: string;
   startedAt: number;
   /** 本轮任务指令（原始请求），供看板等观察者展示标题；兼容旧广播可缺省。 */
@@ -302,6 +313,8 @@ export interface TaskResultPayload {
   senderRuntime?: BotRuntime;
   taskId?: string;
   suppressHandoff?: boolean;
+  /** 本轮交互策略；旧事件缺省按 team 模式。 */
+  interaction?: InteractionPolicy;
   /** 任务发起人 open_id；auth 等插件用它校验后续卡片动作的权限。 */
   senderOpenId?: string;
   /** 任务发起人 union_id；跨 bot 产品确认时优先用它识别同一真人。 */

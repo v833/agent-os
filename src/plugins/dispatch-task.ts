@@ -4,6 +4,7 @@
  */
 import type { Context } from "cordis";
 import { findDispatchTaskRequest } from "../core/collaboration.js";
+import { interactionPolicyOf } from "../core/interaction-policy.js";
 import { startLoopbackMcpHttpServer } from "../mcp/loopback-http-server.js";
 import { registerDispatchTaskTool } from "../mcp/dispatch-task-tools.js";
 import { dispatchTaskToolServer } from "./dispatch-task-tool.js";
@@ -18,6 +19,11 @@ export async function handleDispatchTask(
   ctx: Context,
   payload: TaskToolCallsPayload,
 ): Promise<TaskToolCallsOutcome | undefined> {
+  if (!interactionPolicyOf(payload).capabilities.collaborateWithBots) {
+    // 私聊只服务当前用户，拒绝把任何请求投递给其他 bot；继续走普通答案收尾。
+    console.warn("[团队派发] 私聊模式忽略 dispatch_task 调用");
+    return undefined;
+  }
   const request = findDispatchTaskRequest(payload.result.toolCalls);
   if (!request) return undefined;
   if (payload.botConfig.id !== ctx.team.leaderBotId) {

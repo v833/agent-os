@@ -13,6 +13,7 @@ import {
 import type { CardAction, CardActionResponse } from "../im/lark.js";
 import { clarificationToolServer } from "./clarification-tool.js";
 import { startClarificationHttpServer } from "../mcp/clarification-http-server.js";
+import { interactionPolicyOf } from "../core/interaction-policy.js";
 import type {
   TaskMessageOutcome,
   TaskMessagePayload,
@@ -53,6 +54,7 @@ export class ClarificationService extends Service {
     return {
       requestedPrompt: formatClarificationMessage(flow, payload.requestedPrompt),
       originalRequestedPrompt: flow.requestedPrompt,
+      interaction: interactionPolicyOf(flow),
     };
   }
 
@@ -61,6 +63,7 @@ export class ClarificationService extends Service {
   ): Promise<TaskToolCallsOutcome | undefined> {
     const request = findClarificationRequest(payload.result.toolCalls);
     if (!request) return undefined;
+    const interaction = interactionPolicyOf(payload);
     if (!(payload.result.sessionId ?? payload.session.cliSessionId)) {
       throw new Error("澄清工具已调用，但执行引擎没有返回可恢复的会话 ID");
     }
@@ -76,7 +79,7 @@ export class ClarificationService extends Service {
       requestedPrompt: payload.requestedPrompt,
       cardMessageId: payload.cardMessageId,
       replyInThread: payload.hasThread,
-      isDirect: payload.isDirect,
+      interaction,
       request,
       collaboration: payload.collaboration,
     });
@@ -177,8 +180,8 @@ export class ClarificationService extends Service {
 
     const session = this.ctx.sessions.manager.get(answered.flow.sessionId)!;
     const runtime = this.ctx.lark.bot(botId)!;
-    this.flows.delete(token);
-    this.ctx.tasks.startTask({
+    const interaction = interactionPolicyOf(answered.flow);
+    const started = await this.ctx.tasks.startTask({
       bot: runtime.bot,
       botConfig: runtime.config,
       session,
@@ -187,7 +190,7 @@ export class ClarificationService extends Service {
       senderOpenId: answered.flow.ownerOpenId,
       senderUnionId: answered.flow.ownerUnionId,
       taskId: answered.flow.taskId,
-      isDirect: answered.flow.isDirect,
+      interaction,
       requestedPrompt: formatClarificationAnswers(answered.flow),
       originalRequestedPrompt: answered.flow.requestedPrompt,
       isCompacting: false,
@@ -199,6 +202,20 @@ export class ClarificationService extends Service {
       // 仍广播 task/result 给编排汇总，但普通协作与 QA 自动交接到此为止。
       suppressHandoff: true,
     });
+    if (!started) {
+      const latestStatus = this.ctx.sessions.manager.get(session.id)?.status;
+      return {
+        toast: {
+          type: "warning",
+          content: latestStatus === "active"
+            ? "当前会话正在执行，请稍后在话题中补充文字继续。"
+            : latestStatus === "closed"
+              ? "当前话题的会话已经关闭。"
+              : "任务未能继续，请稍后在话题中补充文字重试。",
+        },
+      };
+    }
+    this.flows.delete(token);
     return {
       toast: { type: "success", content: "答案已收到。" },
       card: {
