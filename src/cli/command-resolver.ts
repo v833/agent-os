@@ -15,31 +15,58 @@ interface WindowsCliDefinition {
   windowsPackageEntryType: "node" | "executable";
 }
 
-const WINDOWS_CLI_DEFINITIONS: Record<string, WindowsCliDefinition> = {
-  codex: {
-    windowsPackageEntry: [
-      "node_modules",
-      "@openai",
-      "codex",
-      "bin",
-      "codex.js",
-    ],
-    windowsPackageEntryType: "node",
-  },
-  claude: {
-    windowsPackageEntry: [
-      "node_modules",
-      "@anthropic-ai",
-      "claude-code",
-      "bin",
-      "claude.exe",
-    ],
-    windowsPackageEntryType: "executable",
-  },
-  dim: {
-    windowsPackageEntry: ["node_modules", "dimcode", "bin", "dim.mjs"],
-    windowsPackageEntryType: "node",
-  },
+const WINDOWS_CLI_DEFINITIONS: Record<string, WindowsCliDefinition[]> = {
+  codex: [
+    {
+      windowsPackageEntry: [
+        "node_modules",
+        "@openai",
+        "codex",
+        "bin",
+        "codex.js",
+      ],
+      windowsPackageEntryType: "node",
+    },
+  ],
+  claude: [
+    {
+      windowsPackageEntry: [
+        "node_modules",
+        "@anthropic-ai",
+        "claude-code",
+        "bin",
+        "claude.exe",
+      ],
+      windowsPackageEntryType: "executable",
+    },
+    {
+      windowsPackageEntry: [
+        "node_modules",
+        "@anthropic-ai",
+        "claude-code",
+        "node_modules",
+        "@anthropic-ai",
+        "claude-code-win32-x64",
+        "claude.exe",
+      ],
+      windowsPackageEntryType: "executable",
+    },
+    {
+      windowsPackageEntry: [
+        "node_modules",
+        "@anthropic-ai",
+        "claude-code",
+        "cli-wrapper.cjs",
+      ],
+      windowsPackageEntryType: "node",
+    },
+  ],
+  dim: [
+    {
+      windowsPackageEntry: ["node_modules", "dimcode", "bin", "dim.mjs"],
+      windowsPackageEntryType: "node",
+    },
+  ],
 };
 
 function pathDirectories(): string[] {
@@ -61,15 +88,17 @@ export function resolveCliCommand(
   }
 
   const directories = pathDirectories();
-  const definition = WINDOWS_CLI_DEFINITIONS[command];
-  if (definition) {
-    for (const directory of directories) {
-      const packageEntry = join(directory, ...definition.windowsPackageEntry);
-      if (!existsSync(packageEntry)) continue;
-      if (definition.windowsPackageEntryType === "node") {
-        return { command: process.execPath, argsPrefix: [packageEntry] };
+  const definitions = WINDOWS_CLI_DEFINITIONS[command];
+  if (definitions) {
+    for (const definition of definitions) {
+      for (const directory of directories) {
+        const packageEntry = join(directory, ...definition.windowsPackageEntry);
+        if (!existsSync(packageEntry)) continue;
+        if (definition.windowsPackageEntryType === "node") {
+          return { command: process.execPath, argsPrefix: [packageEntry] };
+        }
+        return { command: packageEntry, argsPrefix: [] };
       }
-      return { command: packageEntry, argsPrefix: [] };
     }
   }
 
