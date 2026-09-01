@@ -68,6 +68,8 @@ export interface AcpTurnOptions {
   /** 可选执行时限；未传入时不自动超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
+  /** 当前轮工具上下文；只用于生成 MCP 动态参数，不改变常驻子进程环境。 */
+  env?: Record<string, string>;
 }
 
 /** 单个进行中 turn 的通知收集状态；daemon 按 sessionId 路由到此。 */
@@ -582,6 +584,7 @@ export class AcpDaemon {
   private acpMcpServers(
     applicationTools: readonly ApplicationToolServer[],
     allApplicationTools: readonly ApplicationToolServer[] = applicationTools,
+    turnEnv?: Record<string, string>,
   ): acp.McpServer[] {
     const supportedTransports = this.adapter.getAcpMcpTransports?.();
     const dropped = unsupportedAcpMcpServers(allApplicationTools, supportedTransports);
@@ -590,7 +593,10 @@ export class AcpDaemon {
         `[ACP] ${this.adapter.displayName} 不支持这些 MCP transport，已跳过: ${dropped.join(", ")}`,
       );
     }
-    return acpMcpServers(applicationTools, supportedTransports);
+    return acpMcpServers(applicationTools, supportedTransports, {
+      ...this.env,
+      ...turnEnv,
+    });
   }
 
   /** 将 agent 的 session/update 通知按 sessionId 路由到对应 turn 的收集器。 */
@@ -666,7 +672,7 @@ export class AcpDaemon {
 
   /** 在常驻进程上执行一轮 prompt：新建/恢复会话、收集通知、软取消与超时。 */
   async runTurn(options: AcpTurnOptions): Promise<CliRunResult> {
-    const { prompt, cwd, sessionId, signal, timeoutMs, onEvent } = options;
+    const { prompt, cwd, sessionId, signal, timeoutMs, onEvent, env } = options;
     if (signal?.aborted) {
       throw new Error(`${this.adapter.displayName} 执行已取消`);
     }
@@ -703,7 +709,11 @@ export class AcpDaemon {
             supportedTransports.includes(server.acp?.type ?? "stdio"),
           )
         : allApplicationTools;
-      const mcpServers = this.acpMcpServers(applicationTools, allApplicationTools);
+      const mcpServers = this.acpMcpServers(
+        applicationTools,
+        allApplicationTools,
+        env,
+      );
       const requestedResumeMethod = this.adapter.getAcpResumeMethod?.() ?? "auto";
       const resumeMethod =
         requestedResumeMethod === "auto"

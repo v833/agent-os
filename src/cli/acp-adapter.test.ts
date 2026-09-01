@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AcpAdapter } from "./acp-adapter.js";
-import { acpMcpServers } from "./app-tools.js";
+import { acpDaemonEnvironment, acpMcpServers } from "./app-tools.js";
 
 test("AcpAdapter 用配置构造启动参数与展示名", () => {
   const applicationTools = [
@@ -75,6 +75,34 @@ test("ACP MCP 同时支持 stdio 与 DimAgent 所需的 HTTP 描述", () => {
         headers: [],
       },
     ],
+  );
+});
+
+test("ACP daemon 环境剔除动态 HTTP 头变量并保留进程配置", () => {
+  const servers = [
+    {
+      id: "schedule",
+      command: "node",
+      args: ["server.js"],
+      tools: ["schedule_manage"],
+      acp: {
+        type: "http" as const,
+        url: "http://127.0.0.1:3101/mcp",
+        headersFromEnv: [
+          { name: "x-chat-id", env: "AGENT_OS_CHAT_ID" },
+          { name: "x-owner-id", env: "AGENT_OS_OWNER_OPEN_ID" },
+        ],
+      },
+    },
+  ];
+
+  assert.deepEqual(
+    acpDaemonEnvironment(servers, {
+      HTTP_PROXY: "http://127.0.0.1:7890",
+      AGENT_OS_CHAT_ID: "oc_current",
+      AGENT_OS_OWNER_OPEN_ID: "ou_current",
+    }),
+    { HTTP_PROXY: "http://127.0.0.1:7890" },
   );
 });
 

@@ -9,7 +9,7 @@
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
 - **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）、`ctx.orchestration`（多话题并行编排）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
 - **事件**：lark 插件发出 `bot/message` 与 `bot/card-action`，router 路由插件消费并派发；任务完成后 tasks 服务广播 `task/result`，失败时广播 `task/failed`——collaboration 监听成功事件决定是否自动交接，orchestration 监听两类事件更新子任务状态；orchestration 再广播 `orchestration/update` / `orchestration/evicted`，可选插件 `orchestration/live-panel` 据此挂起并节流刷新实时面板卡片（移除该插件即回退为仅汇总文本），可选插件 `orchestration/actions` 认领面板「重试」按钮回调并重新派发失败子任务（移除即无重试按钮）。协作与编排都是可选插件，移除后任务编排不受影响。
-- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/doc`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
+- **引擎与命令都是插件**：`src/plugins/engines/*.ts` 通过 `ctx.cli.register()` 登记 Codex/Claude/DimAgent；`src/plugins/commands/*.ts` 通过 `ctx.commands.register()` 登记 `/help`、`/new`、`/resume`、`/compact`、`/doc`、`/status`、`/team`、`/cd`、`/close`、`/schedule`、`/schedules`、`/orchestrate`、`/panel`。新增执行引擎或斜杠命令 = 新增一个插件。
 
 默认 `cordis.yml` 内容：
 
@@ -35,6 +35,7 @@ plugins:
   - name: commands/cd
   - name: commands/close
   - name: commands/schedule
+  - name: commands/schedules
   - name: collaboration
   - name: orchestration
     config:
@@ -601,9 +602,9 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 - `/cd <目录>`：切换当前话题的工作目录
 - `/help`：列出会话控制和引擎选择命令
 - `/close`：关闭当前话题会话
-- `/schedule add "每 30 分钟" <任务>`：创建周期定时任务
-- `/schedule list`：查看当前 bot 的定时任务
-- `/schedule remove <id>`：删除定时任务
+- `/schedule <自然语言需求>`：创建定时任务，例如 `/schedule 每天早上 9 点检查服务日志`
+- `/schedule pause|resume|delete|run <id>`：暂停 / 恢复 / 删除 / 立即执行定时任务
+- `/schedules`：查看当前聊天中由自己创建的定时任务
 - `/orchestrate <大任务>`：拆解成多个子任务并行派发给团队成员（默认 `topic` 模式：同群多话题并行派发，同一 bot 可跨话题承接多个子任务；`same-topic` 为兼容降级）
 - `/panel`：查看当前群聊、当前 bot 创建的编排运行进度（按 chatId + botId 隔离）
 - `/claude <任务>`：新话题使用 Claude Code
@@ -612,33 +613,29 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 
 ## 定时任务
 
-Agent OS 可以把飞书从“被动响应”升级为“主动指挥”：用 `/schedule` 创建周期任务，到点后由 daemon 自动触发一轮 CLI 执行，并把结果发回配置所在的飞书话题。定时任务复用现有 `tasks` 流水线（任务卡片、进度、停止、结果回传），不重造执行链路。
+Agent OS 可以把“开始”这件事也交给系统：用自然语言 `/schedule <需求>` 创建定时任务，到点后直接唤醒目标 bot 的 CLI 会话静默执行计划里的 `prompt`，结果由任务内容自己送回，不在群里推派发消息。
 
 ```text
-/schedule add "每 30 分钟" 读取 data/logs/error.log 并总结最新错误
-→ 已创建定时任务 #sched-001（每 30 分钟）
-  下次触发：14:30
-/schedule list
-→ #sched-001  每 30 分钟  读取 data/logs/error.log …  下次触发 14:30
-/schedule remove sched-001
-→ 已删除 #sched-001
+/schedule 每天 9 点检查服务日志
+→ CEO 助理调用 schedule_manage（action=add）创建，回执给出任务 id、规则与下次执行时间
+/schedules
+→ 当前聊天中由自己创建的计划卡片（id、执行成员、规则、状态、下次触发时间）
+/schedule pause <id>     # 暂停
+/schedule resume <id>    # 恢复
+/schedule delete <id>    # 删除
+/schedule run <id>       # 立即执行一次
 ```
 
-支持的周期语法（`schedule` 服务插件，`src/plugins/schedule.ts` + `src/plugins/commands/schedule.ts`）：
+核心机制（`schedule` 服务插件，`src/plugins/schedule.ts` + `src/core/scheduler.ts`）：
 
-- **cron 表达式**（5 段）：`0 9 * * *` 表示每天 9 点；由 `croner` 解析与调度。
-- **自然语言**：
-  - `每 N 分钟`（N 1-59）、`每 N 小时`（N 1-24）、`每 N 天`（N 1-30）
-  - `每小时`
-  - `每天`、`每天 9:00`、`每天早上9点`
-
-触发语义：
-
-- 到点时先主动发一条“⏰ 定时任务”锚点消息，任务卡片与结果作为它的回复出现在话题中；结果通过现有卡片与通知链路回传。
-- 定时任务复用配置话题的会话：目标话题正在执行（`active`）或已关闭（`closed`）时到点触发会跳过并记录 `lastSkippedAt`，不会并发启动。
-- 任务配置持久化到 `data/schedules.json`（原子写、Zod 校验、重启恢复），重启后自动重新注册定时器；时区跟随本机（可用 `cordis.yml` 的 `schedule.timezone` 覆盖）。
-- 任务卡片上的“停止任务”按钮按配置者的 `openId` 鉴权，配置者可以随时停止定时触发的执行。
-- 在 `cordis.yml` 中移除 `schedule` 或 `commands/schedule` 即可整体下线定时能力。
+- **三种调度规则**由 `ScheduleRuleSchema` 约束：一次性 `runAt`、固定间隔 `everyMs`（最低 1 分钟）、Cron `expression` + 时区（缺省 `Asia/Shanghai`）。
+- **计划与运行记录分离存储**：`data/schedules.json` 保存计划，`data/schedule-runs.json` 保存运行记录（同一 `scheduleId + scheduledFor` 只允许一条，防止重复触发；每计划最多保留 100 条历史）。
+- **统一管理工具 `schedule_manage`**：`list/add/addMany/update/remove/removeMany/removeAll/run/pause/resume/logs` 十一种 action，按当前 `chatId + creatorOpenId` 隔离；MCP 子进程经 loopback 内部 HTTP API（`POST /api/schedules/manage`，默认端口 3101）当场执行，回执是真实落盘结果。
+- **重启恢复**：启动时把中断的 `running` 记录标记失败，过期的一次性任务记 `skipped` 并完成，不会在重启后突然补跑。
+- **schedules.json 热更新**：直接编辑文件后 watcher 自动对内存做新增、更新、删除差异合并，无需重启。
+- **执行边界**：周期按计划时间保持固定节拍，上一轮未结束则本轮记 `skipped`；静默 CLI 单轮默认 30 分钟超时，可用 `<ENGINE>_TIMEOUT_MS` 或 `CLI_TIMEOUT_MS` 覆盖。
+- 管理 API 只监听 `127.0.0.1`；如有本机其他进程接入，建议设置 `SCHEDULE_API_TOKEN`。
+- 在 `cordis.yml` 中同时移除 `schedule`、`commands/schedule`、`commands/schedules` 即可整体下线定时能力。
 
 ## 多维表格任务看板（bitable-board）
 

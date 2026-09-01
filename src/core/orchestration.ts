@@ -95,7 +95,7 @@ export function parseSubTaskSpecs(answer: string): SubTaskSpec[] {
   return parsed.tasks.map((task) => ({ ...task, id: task.id.trim() }));
 }
 
-/** 编排运行 ID：run-001 递增生成，格式与 sched-001 保持一致。 */
+/** 编排运行 ID：run-001 递增生成。 */
 export function nextRunId(existing: Iterable<string>): string {
   let max = 0;
   for (const id of existing) {

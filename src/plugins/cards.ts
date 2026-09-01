@@ -5,6 +5,7 @@
 import { Service, type Context } from "cordis";
 import type { AuthFlow } from "../core/cli-auth.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
+import type { ScheduledTask } from "../core/schedule.js";
 import {
   answerContinuation,
   answerNeedsContinuation,
@@ -31,6 +32,7 @@ import {
   buildSessionNoticeCard,
   buildTaskCard,
   buildTeamCard,
+  buildScheduleListCard,
   splitLongText,
   ThrottledCardUpdater,
   type BoardConflictCardOptions,
@@ -118,6 +120,10 @@ export class CardsService extends Service {
 
   team(options: TeamCardOptions): CardJson {
     return buildTeamCard(options);
+  }
+
+  scheduleList(tasks: ScheduledTask[]): CardJson {
+    return buildScheduleListCard(tasks);
   }
 
   orchestrationPanel(options: OrchestrationPanelOptions): CardJson {

@@ -69,44 +69,35 @@ test("解析 /cd 的查询、带空格路径和机器人提及", () => {
   });
 });
 
-test("解析 /schedule 的 add / list / remove 与机器人提及", () => {
-  assert.deepEqual(parseCommand('/schedule add "每 30 分钟" 读取日志'), {
+test("解析 /schedule 自然语言与 /schedules 列表命令", () => {
+  assert.deepEqual(parseCommand("/schedule 每小时检查一次服务日志"), {
     name: "schedule",
-    action: "add",
-    schedule: "每 30 分钟",
-    prompt: "读取日志",
+    request: "每小时检查一次服务日志",
   });
-  assert.deepEqual(
-    parseCommand('@Agent OS /schedule add "0 9 * * *" 每日总结'),
-    {
-      name: "schedule",
-      action: "add",
-      schedule: "0 9 * * *",
-      prompt: "每日总结",
-    },
-  );
-  assert.deepEqual(parseCommand("/schedule list"), {
+  assert.deepEqual(parseCommand("@Agent OS /schedule 每天 9 点检查日志"), {
     name: "schedule",
-    action: "list",
+    request: "每天 9 点检查日志",
   });
-  assert.deepEqual(parseCommand("/schedule remove sched-001"), {
+  assert.deepEqual(parseCommand("/schedule"), {
     name: "schedule",
-    action: "remove",
-    id: "sched-001",
+    request: undefined,
   });
-  assert.deepEqual(parseCommand("/schedule remove #sched-001"), {
-    name: "schedule",
-    action: "remove",
-    id: "sched-001",
+  assert.deepEqual(parseCommand("/schedules"), { name: "schedules" });
+  assert.deepEqual(parseCommand("@Agent OS /schedules"), {
+    name: "schedules",
   });
 });
 
-test("/schedule 缺引号或参数不完整时不会被误识别", () => {
-  assert.equal(parseCommand("/schedule"), undefined);
-  assert.equal(parseCommand("/schedule add 每 30 分钟 读取日志"), undefined);
-  assert.equal(parseCommand('/schedule add "每 30 分钟"'), undefined);
-  assert.equal(parseCommand("/schedule remove"), undefined);
-  assert.equal(parseCommand("帮我 /schedule list"), undefined);
+test("/schedule 的管理动作保留为自然语言，交给命令插件拆分", () => {
+  assert.deepEqual(parseCommand("/schedule pause abc123"), {
+    name: "schedule",
+    request: "pause abc123",
+  });
+  assert.deepEqual(parseCommand("/schedule delete abc123"), {
+    name: "schedule",
+    request: "delete abc123",
+  });
+  assert.equal(parseCommand("帮我 /schedule 检查日志"), undefined);
 });
 
 test("解析 /orchestrate 与 /panel 编排命令", () => {

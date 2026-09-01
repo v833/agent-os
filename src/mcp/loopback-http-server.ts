@@ -15,7 +15,7 @@ export interface LoopbackMcpHttpServer {
 }
 
 export interface LoopbackMcpHttpServerOptions {
-  register(server: McpServer): void;
+  register(server: McpServer, request: IncomingMessage): void;
   label: string;
   port?: number;
 }
@@ -38,7 +38,7 @@ export async function startLoopbackMcpHttpServer(
     }
 
     const mcpServer = new McpServer({ name: "agent-os", version: "1.0.0" });
-    options.register(mcpServer);
+    options.register(mcpServer, request);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     });

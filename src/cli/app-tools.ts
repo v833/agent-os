@@ -16,26 +16,57 @@ export interface ApplicationToolServer {
     type: "http";
     url: string;
     headers?: readonly { name: string; value: string }[];
+    /** 把本轮 CLI 环境中的值映射成 HTTP MCP 请求头。 */
+    headersFromEnv?: readonly { name: string; env: string }[];
   };
 }
 
 export type ApplicationToolProvider = () => readonly ApplicationToolServer[];
 
+/**
+ * ACP HTTP MCP 的动态请求头属于单轮上下文，不应进入常驻进程环境或 daemon
+ * 缓存键；否则每个话题都会滞留一个独立 daemon，且子进程会看到首轮旧值。
+ */
+export function acpDaemonEnvironment(
+  servers: readonly ApplicationToolServer[],
+  env?: Record<string, string>,
+): Record<string, string> | undefined {
+  if (!env) return undefined;
+  const turnOnlyNames = new Set(
+    servers.flatMap((server) =>
+      (server.acp?.headersFromEnv ?? []).map((header) => header.env),
+    ),
+  );
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !turnOnlyNames.has(name)),
+  );
+}
+
 /** 将 Agent OS 的 stdio Server 描述转换成 ACP session/* 请求所需的结构。 */
 export function acpMcpServers(
   servers: readonly ApplicationToolServer[],
   supportedTransports?: readonly AcpMcpTransport[],
+  env: Record<string, string> = {},
 ): McpServer[] {
   const supported = supportedTransports ? new Set(supportedTransports) : undefined;
   return servers.flatMap((server) => {
     const transport: AcpMcpTransport = server.acp?.type ?? "stdio";
     if (supported && !supported.has(transport)) return [];
     if (server.acp) {
+      const dynamicHeaders = (server.acp.headersFromEnv ?? []).flatMap(
+        ({ name, env: envName }) => {
+          const value = env[envName];
+          return value ? [{ name, value }] : [];
+        },
+      );
       return [{
         type: "http",
         name: server.id,
         url: server.acp.url,
-        headers: (server.acp.headers ?? []).map((header) => ({ ...header })),
+        headers: [
+          ...(server.acp.headers ?? []).map((header) => ({ ...header })),
+          ...dynamicHeaders,
+        ],
       } as McpServer];
     }
     return [{

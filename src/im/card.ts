@@ -7,6 +7,7 @@ import type { AuthFlow } from "../core/cli-auth.js";
 import type { ClarificationFlow } from "../core/clarification.js";
 import { retryToken, type OrchestrationRun } from "../core/orchestration.js";
 import type { ProductSpecFlow } from "../core/product-spec.js";
+import { scheduleDescription, type ScheduledTask } from "../core/schedule.js";
 import type {
   TaskActivity,
   TaskProgressSnapshot,
@@ -1776,6 +1777,65 @@ export function splitLongText(text: string, maxLength = 4_000): string[] {
   }
   if (remaining) chunks.push(remaining);
   return chunks;
+}
+
+const SCHEDULE_STATUS_LABEL: Record<ScheduledTask["status"], string> = {
+  active: "运行中",
+  paused: "已暂停",
+  completed: "已完成",
+};
+
+function scheduleCardLine(task: ScheduledTask): string {
+  const rule = scheduleDescription(task.rule);
+  const next = task.nextRunAt ? ` · 下次 ${task.nextRunAt}` : "";
+  return [
+    `**${escapeFeishuMarkdown(task.id)}** → ${escapeFeishuMarkdown(task.targetBotId)}`,
+    `${rule} · ${SCHEDULE_STATUS_LABEL[task.status]}${next}`,
+    escapeFeishuMarkdown(task.prompt),
+  ].join("\n");
+}
+
+/** 定时任务列表卡片：/schedules 与 schedule_manage list 的展示出口。 */
+export function buildScheduleListCard(tasks: ScheduledTask[]): CardJson {
+  return {
+    schema: "2.0",
+    config: {
+      summary: { content: `定时任务：${tasks.length} 条` },
+    },
+    header: {
+      template: "blue",
+      title: { tag: "plain_text", content: "定时任务" },
+      subtitle: {
+        tag: "plain_text",
+        content: tasks.length
+          ? `当前共 ${tasks.length} 条计划`
+          : "当前没有定时任务",
+      },
+    },
+    body: {
+      direction: "vertical",
+      vertical_spacing: "12px",
+      elements: tasks.length
+        ? [
+            {
+              tag: "markdown",
+              content:
+                "到点后 Agent OS 会直接唤醒目标成员静默执行，不在群里推派发消息。",
+            },
+            { tag: "hr" },
+            ...tasks.map((task) => ({
+              tag: "markdown" as const,
+              content: scheduleCardLine(task),
+            })),
+          ]
+        : [
+            {
+              tag: "markdown",
+              content: "用 `/schedule <需求>` 创建一条定时任务，例如 `/schedule 每小时检查一次服务日志`。",
+            },
+          ],
+    },
+  };
 }
 
 type UpdateCard = (card: CardJson) => Promise<void>;

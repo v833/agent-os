@@ -1,148 +1,153 @@
 /**
- * 定时任务持久化层：负责 schedules.json 的校验、重启恢复与原子写入，
- * 让 schedule 服务无需关心具体文件格式和磁盘操作细节。
- * 参考 session-store 的模式：Zod 校验坏记录、临时文件 + rename 原子替换、写队列串行化。
+ * 定时任务计划持久化层：保存 schedules.json 中的计划本身，运行记录由
+ * schedule-run-store 分离存储。内存 Map 提供快照查询，写盘用临时文件 +
+ * rename 原子替换，坏记录在加载时被过滤，不阻断其余任务恢复。
  */
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
-import type { CliAccessMode, CliId } from "../cli/types.js";
 import {
-  interactionPolicyOf,
-  type InteractionPolicy,
-} from "./interaction-policy.js";
+  ScheduleRuleSchema,
+  createScheduledTask,
+  type CreateScheduledTask,
+  type ScheduledTask,
+} from "./schedule.js";
 
-/** 一条持久化的定时任务；触发所需的目标地址与引擎选择全部内联。 */
-export interface ScheduleTask {
-  /** 稳定标识，如 sched-001。 */
-  id: string;
-  /** 用户输入的原始周期文本。 */
-  schedule: string;
-  /** 解析后的 cron 表达式，由 croner 驱动。 */
-  expr: string;
-  /** 人类可读周期描述。 */
-  display: string;
-  /** 到点交给 CLI 执行的任务提示词。 */
-  prompt: string;
-  botId: string;
-  chatId: string;
-  /** 目标话题；空字符串表示非话题群聊（此时用 messageId 定位会话）。 */
-  threadId: string;
-  rootId: string;
-  /** 配置命令所在消息 ID：有话题时复用话题会话，无话题时作为会话定位锚点。 */
-  messageId: string;
-  cliId: CliId;
-  accessMode: CliAccessMode;
-  workspaceDir: string;
-  /** 配置者 openId：任务卡片停止按钮的鉴权发起人。 */
-  ownerOpenId: string;
-  /** 注册时解析出的交互策略；旧记录缺省按 team 模式恢复。 */
-  interaction?: InteractionPolicy;
-  enabled: boolean;
-  lastRunAt?: string;
-  /** 到点但因目标话题忙碌或关闭而跳过的时刻。 */
-  lastSkippedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** ScheduleService 依赖的最小存储协议，便于测试时替换为内存实现。 */
-export interface ScheduleStore {
-  load(): Promise<ScheduleTask[]>;
-  save(tasks: ScheduleTask[]): Promise<void>;
-}
-
-const ScheduleSchema = z.object({
+/** 计划记录的严格校验；watcher 也用它逐条校验 schedules.json。 */
+export const ScheduledTaskSchema = z.object({
   id: z.string().min(1),
-  schedule: z.string().min(1),
-  expr: z.string().min(1),
-  display: z.string().min(1),
-  prompt: z.string().min(1),
-  botId: z.string().min(1),
+  creatorOpenId: z.string().min(1),
   chatId: z.string().min(1),
-  threadId: z.string(),
-  rootId: z.string(),
-  messageId: z.string().min(1),
-  cliId: z.enum(["codex", "claude", "dimagent"]),
-  // 旧快照没有接入模式时按 headless 解释，与会话存储保持一致。
-  accessMode: z.enum(["headless", "acp"]).optional(),
-  workspaceDir: z.string().min(1),
-  ownerOpenId: z.string(),
-  interaction: z
-    .object({
-      mode: z.enum(["direct", "team"]),
-      documentRequested: z.boolean(),
-      capabilities: z.object({
-        acceptBotMessages: z.boolean(),
-        collaborateWithBots: z.boolean(),
-        runProductWorkflow: z.boolean(),
-        deliverDocument: z.boolean(),
-        suppressHandoff: z.boolean(),
-      }),
-    })
-    .optional(),
-  enabled: z.boolean(),
-  lastRunAt: z.string().min(1).optional(),
-  lastSkippedAt: z.string().min(1).optional(),
+  targetBotId: z.string().min(1),
+  prompt: z.string().min(1),
+  rule: ScheduleRuleSchema,
+  status: z.enum(["active", "paused", "completed"]),
+  nextRunAt: z.string().optional(),
+  lastRunAt: z.string().optional(),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
 });
 
-/** 使用 JSON 文件保存全部定时任务快照。 */
-export class JsonScheduleStore implements ScheduleStore {
-  // 多次变更可能同时触发保存，Promise 队列确保快照按调用顺序落盘。
-  private writeQueue: Promise<void> = Promise.resolve();
+/** 内存计划存储；JsonScheduleStore 在基类基础上补齐落盘。 */
+export class ScheduleStore {
+  private readonly tasks = new Map<string, ScheduledTask>();
 
-  constructor(private readonly filePath: string) {}
+  constructor(initialTasks: ScheduledTask[] = []) {
+    for (const task of initialTasks) this.tasks.set(task.id, task);
+  }
 
-  async load(): Promise<ScheduleTask[]> {
-    let content: string;
+  list(): ScheduledTask[] {
+    return [...this.tasks.values()].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
+  }
+
+  get(id: string): ScheduledTask | undefined {
+    return this.tasks.get(id);
+  }
+
+  create(options: CreateScheduledTask & { id?: string }): ScheduledTask {
+    const task = createScheduledTask(options);
+    if (this.tasks.has(task.id)) {
+      throw new Error(`定时任务 ID 已存在: ${task.id}`);
+    }
+    this.tasks.set(task.id, task);
+    return task;
+  }
+
+  update(id: string, patch: Partial<ScheduledTask>): ScheduledTask | undefined {
+    const current = this.tasks.get(id);
+    if (!current) return undefined;
+    const updated = ScheduledTaskSchema.parse({
+      ...current,
+      ...patch,
+      id: current.id,
+      updatedAt: new Date().toISOString(),
+    });
+    this.tasks.set(id, updated);
+    return updated;
+  }
+
+  delete(id: string): boolean {
+    return this.tasks.delete(id);
+  }
+
+  protected snapshot(): ScheduledTask[] {
+    return structuredClone([...this.tasks.values()]);
+  }
+
+  protected restore(tasks: ScheduledTask[]): void {
+    this.tasks.clear();
+    for (const task of tasks) this.tasks.set(task.id, task);
+  }
+}
+
+/** 落盘到 data/schedules.json 的计划存储；写失败时回滚内存。 */
+export class JsonScheduleStore extends ScheduleStore {
+  constructor(private readonly filePath: string) {
+    super(loadTasks(filePath));
+    // 启动即规范化：过滤掉坏记录后的结果立即落盘，文件格式始终一致。
+    this.persist();
+  }
+
+  override create(options: CreateScheduledTask & { id?: string }): ScheduledTask {
+    return this.mutate(() => super.create(options));
+  }
+
+  override update(
+    id: string,
+    patch: Partial<ScheduledTask>,
+  ): ScheduledTask | undefined {
+    return this.mutate(() => super.update(id, patch));
+  }
+
+  override delete(id: string): boolean {
+    return this.mutate(() => super.delete(id));
+  }
+
+  private mutate<T>(operation: () => T): T {
+    const previous = this.snapshot();
     try {
-      content = await readFile(this.filePath, "utf8");
+      const result = operation();
+      this.persist();
+      return result;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      this.restore(previous);
       throw error;
     }
-
-    const rows: unknown = JSON.parse(content);
-    if (!Array.isArray(rows)) {
-      throw new Error(`定时任务文件格式错误: ${this.filePath}`);
-    }
-
-    const tasks: ScheduleTask[] = [];
-    let needsCleanup = false;
-    for (const row of rows) {
-      const result = ScheduleSchema.safeParse(row);
-      if (!result.success) {
-        // 单条坏记录不应阻止其他任务恢复，清理后的快照会覆盖原文件。
-        needsCleanup = true;
-        continue;
-      }
-      const task: ScheduleTask = {
-        accessMode: "headless",
-        ...result.data,
-        interaction: interactionPolicyOf(result.data),
-      };
-      tasks.push(task);
-    }
-
-    if (needsCleanup) await this.save(tasks);
-    return tasks;
   }
 
-  save(tasks: ScheduleTask[]): Promise<void> {
-    // 在入队前固定快照，后续内存变化不会篡改本次待写内容。
-    const snapshot = JSON.stringify(tasks, null, 2);
-    const write = async () => {
-      await mkdir(dirname(this.filePath), { recursive: true });
-      const tempPath = `${this.filePath}.tmp`;
-      await writeFile(tempPath, `${snapshot}\n`, "utf8");
-      // 先完整写临时文件，再替换正式文件，避免异常退出留下半截 JSON。
-      await rename(tempPath, this.filePath);
-    };
-
-    // 前一次失败也不能打断后续保存，因此成功和失败分支都继续执行 write。
-    this.writeQueue = this.writeQueue.then(write, write);
-    return this.writeQueue;
+  private persist(): void {
+    mkdirSync(dirname(this.filePath), { recursive: true });
+    const temporaryPath = `${this.filePath}.tmp`;
+    writeFileSync(
+      temporaryPath,
+      `${JSON.stringify(this.snapshot(), null, 2)}\n`,
+      "utf8",
+    );
+    renameSync(temporaryPath, this.filePath);
   }
+}
+
+function loadTasks(filePath: string): ScheduledTask[] {
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const rows: unknown = JSON.parse(content);
+  if (!Array.isArray(rows)) {
+    throw new Error(`定时任务状态文件格式错误: ${filePath}`);
+  }
+  return rows.flatMap((row) => {
+    const result = ScheduledTaskSchema.safeParse(row);
+    return result.success ? [result.data] : [];
+  });
 }

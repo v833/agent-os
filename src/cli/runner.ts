@@ -33,6 +33,24 @@ export interface RunCliOptions {
   acpDaemon?: AcpDaemon;
 }
 
+/** 解析一轮 CLI 的可选执行时限；引擎专用变量优先于 CLI_TIMEOUT_MS。 */
+export function cliExecutionTimeoutMs(
+  cliId: string,
+  env: Record<string, string | undefined> = process.env,
+): number | undefined {
+  const engineKey = `${cliId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TIMEOUT_MS`;
+  const source = env[engineKey]?.trim() || env.CLI_TIMEOUT_MS?.trim();
+  if (!source) return undefined;
+  if (!/^\d+$/.test(source)) {
+    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
+  }
+  const timeoutMs = Number(source);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
+  }
+  return timeoutMs;
+}
+
 /** CLI 失败信息；若进程已返回会话 ID，调用方仍可持久化并续聊。 */
 export class CliRunError extends Error {
   constructor(

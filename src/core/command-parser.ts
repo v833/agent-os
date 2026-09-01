@@ -10,9 +10,8 @@ export type SlashCommand =
   | { name: "compact"; instructions?: string }
   | { name: "doc"; prompt?: string }
   | { name: "cd"; path?: string }
-  | { name: "schedule"; action: "add"; schedule: string; prompt: string }
-  | { name: "schedule"; action: "list" }
-  | { name: "schedule"; action: "remove"; id: string }
+  | { name: "schedules" }
+  | { name: "schedule"; request?: string }
   | { name: "orchestrate"; prompt?: string }
   | { name: "panel" }
   /** 发起 CLI 登录卡片；cliId 缺省表示当前会话的引擎。 */
@@ -32,11 +31,9 @@ const METRICS_RE = /^(?:@.+?\s+)?\/metrics(?:\s+([\s\S]+?))?\s*$/;
 const BOARD_RE = /^(?:@.+?\s+)?\/board(?:\s+([\s\S]+?))?\s*$/;
 /** 未显式注入注册表时的回退引擎集合（router 会传入真实注册表，保持两者同步）。 */
 const DEFAULT_CLI_IDS = ["codex", "claude", "dimagent", "agy"] as const;
-// /schedule add 的周期用双引号包裹，避免任务文本里出现斜杠时误切分。
-const SCHEDULE_ADD_RE =
-  /^(?:@.+?\s+)?\/schedule add\s+"([^"]+)"\s+([\s\S]+?)\s*$/;
-const SCHEDULE_REMOVE_RE = /^(?:@.+?\s+)?\/schedule remove\s+([^\s]+?)\s*$/;
-const SCHEDULE_LIST_RE = /^(?:@.+?\s+)?\/schedule\s+list\s*$/;
+// /schedule 后的自然语言不硬拆，整段交给模型用 schedule_manage 理解并创建。
+const SCHEDULE_RE = /^(?:@.+?\s+)?\/schedule(?:\s+([\s\S]+?))?\s*$/;
+const SCHEDULES_RE = /^(?:@.+?\s+)?\/schedules\s*$/;
 const ORCHESTRATE_RE =
   /^(?:@.+?\s+)?\/orchestrate(?:\s+([\s\S]+?))?\s*$/;
 const PANEL_RE = /^(?:@.+?\s+)?\/panel\s*$/;
@@ -76,27 +73,15 @@ export function parseCommand(text: string): SlashCommand | undefined {
     };
   }
 
-  const scheduleAddMatch = SCHEDULE_ADD_RE.exec(value);
-  if (scheduleAddMatch) {
+  const schedulesMatch = SCHEDULES_RE.exec(value);
+  if (schedulesMatch) return { name: "schedules" };
+
+  const scheduleMatch = SCHEDULE_RE.exec(value);
+  if (scheduleMatch) {
     return {
       name: "schedule",
-      action: "add",
-      schedule: scheduleAddMatch[1],
-      prompt: scheduleAddMatch[2].trim(),
+      request: scheduleMatch[1]?.trim() || undefined,
     };
-  }
-  const scheduleRemoveMatch = SCHEDULE_REMOVE_RE.exec(value);
-  if (scheduleRemoveMatch) {
-    // 兼容用户带 # 前缀的写法（如 #sched-001）。
-    return {
-      name: "schedule",
-      action: "remove",
-      id: scheduleRemoveMatch[1].replace(/^#/, ""),
-    };
-  }
-  const scheduleListMatch = SCHEDULE_LIST_RE.exec(value);
-  if (scheduleListMatch) {
-    return { name: "schedule", action: "list" };
   }
 
   const orchestrateMatch = ORCHESTRATE_RE.exec(value);

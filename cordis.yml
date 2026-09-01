@@ -55,6 +55,7 @@ plugins:
   - name: commands/cd
   - name: commands/close
   - name: commands/schedule
+  - name: commands/schedules
   # 多话题并行编排：/orchestrate 拆解派发 + /panel 进度总览。
   # 移除此条目即整体下线编排能力；命令与执行拆开为独立插件可分别调整。
   - name: commands/orchestrate
@@ -112,5 +113,11 @@ plugins:
   - name: product-spec
   # 云文档评论评审：@产品经理后恢复原产品会话并把修改说明回复到评论。
   - name: product-comments
+  # 定时任务：三种调度规则（once/interval/cron）+ 运行记录分离 + schedule_manage 工具 +
+  # loopback 管理 API（环境变量 SCHEDULE_API_PORT/TOKEN）+ schedules.json 热更新。
+  # 整体下线时同时移除 schedule、commands/schedule、commands/schedules 三个条目。
   - name: schedule
+    config:
+      # storePath: data/schedules.json      # 计划文件（缺省）
+      # runStorePath: data/schedule-runs.json # 运行记录文件（缺省）
   - name: router

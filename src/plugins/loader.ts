@@ -31,6 +31,7 @@ import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
 import * as resumeCommand from "./commands/resume.js";
 import * as scheduleCommand from "./commands/schedule.js";
+import * as schedulesCommand from "./commands/schedules.js";
 import * as statusCommand from "./commands/status.js";
 import * as teamCommand from "./commands/team.js";
 import * as claudeEngine from "./engines/claude.js";
@@ -83,6 +84,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/cd": cdCommand,
   "commands/close": closeCommand,
   "commands/schedule": scheduleCommand,
+  "commands/schedules": schedulesCommand,
   "commands/orchestrate": orchestrateCommand,
   "commands/panel": panelCommand,
   collaboration: collaborationPlugin,

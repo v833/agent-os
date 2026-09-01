@@ -68,7 +68,7 @@ declare module "cordis" {
     collaboration: CollaborationService;
     /** 任务编排：一轮 CLI 执行的启动、进度、取消与收尾。 */
     tasks: TasksService;
-    /** 定时任务：cron / 自然语言周期到点触发，复用 tasks 流水线。 */
+    /** 定时任务：三种规则到点直接唤醒目标 CLI 静默执行，schedule_manage 统一管理。 */
     schedule: ScheduleService;
     /** 多话题并行编排：拆解大任务、派发子任务并汇总结果（移除本插件即下线编排）。 */
     orchestration: OrchestrationService;
@@ -114,6 +114,10 @@ declare module "cordis" {
         interaction?: InteractionPolicy;
       },
     ): string | undefined;
+    /** 应用工具插件按本轮任务上下文补充 CLI 环境；没有 provider 时不注入。 */
+    "task/cli-environment"(
+      payload: TaskCliEnvironmentPayload,
+    ): Record<string, string> | undefined;
     /** 一轮 CLI 成功结束后，应用工具插件可优先认领结果并替换普通成功收尾。 */
     "task/tool-calls"(
       payload: TaskToolCallsPayload,
@@ -210,6 +214,13 @@ export interface StartTaskInput {
   resources: MessageResource[];
   /** 应用工具恢复任务可禁止普通协作与 QA 自动交接，但仍广播结果供编排汇总。 */
   suppressHandoff?: boolean;
+}
+
+/** 业务插件生成本轮应用工具环境时所需的最小公共上下文。 */
+export interface TaskCliEnvironmentPayload {
+  session: Session;
+  collaboration?: CollaborationMessage;
+  senderOpenId: string;
 }
 
 /** router 准备启动普通消息时交给可选业务插件的上下文。 */

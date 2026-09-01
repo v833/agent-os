@@ -51,7 +51,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/productSpec/productComments）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-context、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/schedule/productSpec/productComments）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-context、task/cli-environment、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
 - `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
@@ -63,6 +63,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/app/product-spec-submission.ts`：产品方案成功收尾前的运行时提交校验；缺失工具调用时沿用同一 CLI 会话最多纠正一次
 - `src/plugins/product-comments.ts`：产品评审评论插件——按云文档 token 找回产品会话，串行处理 @产品经理评论并回复修改摘要
 - `src/plugins/product-spec-tool.ts`：产品文档插件提供给 stdio/ACP MCP 注入的 Server 描述
+- `src/plugins/schedule.ts`：schedule 服务插件——装配计划与运行记录 Store、Scheduler、loopback 管理 API、文件 watcher 和 schedule_manage 工具，并静默执行到期计划
+- `src/plugins/schedule-tool.ts`：schedule_manage 的 stdio/ACP MCP Server 描述，通过声明式动态请求头传递每轮话题与创建人上下文
 - `src/plugins/lark.ts`：lark 平台服务——启动多台飞书 bot，把消息、卡片回调和云文档评论翻译成 bot/message、bot/card-action、bot/document-comment 事件
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
@@ -77,7 +79,9 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
 - `src/plugins/orchestration/actions.ts`：面板动作子插件（可选）——启动时置位重试能力，认领 retry_subtask 卡片动作并映射 toast；移除即无重试按钮
 - `src/plugins/engines/*.ts`：引擎插件（claude/codex/dimagent/agy/acp），通过 ctx.cli.register() 登记执行适配器；其中 `engines/acp` 是标准 ACP 接入——从 cordis.yml 的 engines 列表注册任意提供 ACP server 的 CLI
-- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/doc/status/team/cd/close/schedule），通过 ctx.commands.register() 登记
+- `src/plugins/commands/*.ts`：斜杠命令插件（help/new/resume/compact/doc/status/team/cd/close/schedule/schedules），通过 ctx.commands.register() 登记
+- `src/plugins/commands/schedule.ts`：/schedule 命令插件——自然语言需求交给当前 bot 调用 schedule_manage，pause/resume/delete/run 管理动作按调用者隔离后直接执行
+- `src/plugins/commands/schedules.ts`：/schedules 命令插件——列出当前聊天中由当前用户创建的计划并回复卡片
 - `src/plugins/loader.test.ts`：cordis.yml 装配、disabled 跳过与错误边界测试
 - `src/plugins/commands/team.ts`：/team 命令插件——经 ctx.team、ctx.lark、ctx.cli 与 ctx.cards 展示成员和真实长连接状态
 - `src/plugins/commands/metrics.ts`：/metrics 命令插件——展示系统吞吐、Token 消耗、耗时分布与成员指标
@@ -99,6 +103,13 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/collaboration.ts`：bot 间通用交接单、`dispatch_task` Schema/提取、目标领取鉴权和协作轮次键
 - `src/core/collaboration.test.ts`：派发 Schema、交接单一次性领取、目标鉴权和轮次键测试
 - `src/core/orchestration.ts`：编排数据契约——run/子任务结构（ownerOpenId/retryCount）、拆解解析、taskId 编解码、一次性重试令牌与运行表裁剪
+- `src/core/schedule.ts`：定时任务领域模型——三种规则、计划结构与 schedule_manage 十一种 action 的统一 Schema
+- `src/core/schedule-store.ts`：计划内存/JSON Store——严格校验、原子写盘与失败回滚
+- `src/core/schedule-run-store.ts`：运行记录内存/JSON Store——按 scheduleId+scheduledFor 幂等、状态流转、历史裁剪与原子写盘
+- `src/core/scheduler.ts`：调度器——计算绝对执行时间、长延时分段等待、固定节拍、重叠跳过、暂停恢复和重启自愈
+- `src/core/schedule-manage-service.ts`：schedule_manage 分发服务——按 chatId+creatorOpenId 鉴权并统一执行创建、管理和日志查询
+- `src/core/schedule-api.ts`：只监听 loopback 的定时任务 HTTP API——为 MCP 与本机工作台提供统一管理入口
+- `src/core/schedule-watcher.ts`：schedules.json watcher——把外部文件编辑按新增、更新、删除差异热同步到 Scheduler
 - `src/core/workspace.ts`：bot 与话题工作目录的相对路径解析和目录校验
 - `src/core/workspace.test.ts`：工作目录解析、空路径和目录类型边界测试
 - `src/core/workspace-revision.ts`：基于 HEAD、dirty diff 与未跟踪文件内容生成稳定工作树指纹
@@ -172,6 +183,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/mcp/dispatch-task-tools.ts`：stdio 与 HTTP MCP 复用的 `dispatch_task` 注册定义
 - `src/mcp/product-spec-server.ts`：产品文档 stdio MCP Server——向 headless CLI 提供 `request_spec_approval`
 - `src/mcp/product-spec-tools.ts`：stdio 与 HTTP MCP 复用的 `request_spec_approval` 注册定义
+- `src/mcp/schedule-server.ts`：向 headless CLI 暴露 schedule_manage 的 stdio MCP Server
+- `src/mcp/schedule-tools.ts`：stdio 与 HTTP MCP 复用的 schedule_manage 注册定义和内部 API 客户端
 - `src/im/lark.ts`：飞书收发、卡片动作回调、云文档评论订阅/回复、卡片更新、消息资源下载与结果提醒（sendResultNotification）
 - `src/im/lark.test.ts`：正文、卡片回调、响应头和扩展名测试
 - `src/im/message-parser.ts`：提及还原与富媒体资源提取

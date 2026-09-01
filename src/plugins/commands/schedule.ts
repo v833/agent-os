@@ -1,101 +1,156 @@
 /**
- * /schedule 命令插件：创建、查看与删除定时任务。
- * 在 cordis.yml 中移除本插件即可下线 /schedule 命令，不影响调度执行本身。
+ * /schedule 命令插件：用自然语言创建定时任务，或用 pause/resume/delete/run
+ * 直接管理已有计划。自然语言不硬拆，交给当前 bot 理解后调用 schedule_manage
+ * 创建；管理动作直接操作 Scheduler，不启动 CLI。
  */
 import type { Context } from "cordis";
 import { interactionPolicyOf } from "../../core/interaction-policy.js";
+import { extractResourceKeys } from "../../im/message-parser.js";
 import type { CommandHandler } from "../types.js";
 
-function formatTime(date: Date): string {
-  return new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function formatPrompt(prompt: string, maxLength = 24): string {
-  if (prompt.length <= maxLength) return prompt;
-  return `${prompt.slice(0, maxLength)}…`;
-}
+const PAUSE_RE = /^pause\s+([a-z0-9_-]+)$/i;
+const RESUME_RE = /^resume\s+([a-z0-9_-]+)$/i;
+const DELETE_RE = /^delete\s+([a-z0-9_-]+)$/i;
+const RUN_RE = /^run\s+([a-z0-9_-]+)$/i;
 
 const handler: CommandHandler = async ({
   ctx,
   bot,
+  botConfig,
   message,
+  taskId,
   session,
+  isNew,
   hasThread,
   command,
-  botConfig,
   interaction: inputInteraction,
 }) => {
-  const interaction = interactionPolicyOf({ interaction: inputInteraction });
   if (command.name !== "schedule") return;
+  const request = command.request;
+  const actor = {
+    chatId: message.chatId,
+    creatorOpenId: message.senderOpenId,
+  };
 
-  if (command.action === "add") {
-    try {
-      const task = await ctx.schedule.register({
-        schedule: command.schedule,
-        prompt: command.prompt,
-        botId: botConfig.id,
-        chatId: message.chatId,
-        threadId: message.threadId,
-        rootId: message.rootId,
-        messageId: message.messageId,
-        cliId: session.cliId,
-        accessMode: session.accessMode ?? "headless",
-        workspaceDir: session.workspaceDir,
-        ownerOpenId: message.senderOpenId,
-        interaction,
-      });
-      const next = ctx.schedule.nextRunAt(task.id);
-      await bot.reply(
-        message.messageId,
-        `已创建定时任务 #${task.id}（${task.display}）\n下次触发：${next ? formatTime(next) : "（待计算）"}`,
-        hasThread,
-      );
-    } catch (error) {
-      await bot.reply(
-        message.messageId,
-        `创建失败：${(error as Error).message}`,
-        hasThread,
-      );
-    }
+  if (!request) {
+    await bot.reply(
+      message.messageId,
+      "用法：/schedule <需求>，例如 `/schedule 每小时检查一次服务日志`。用 /schedules 查看全部计划。",
+      hasThread,
+    );
     return;
   }
 
-  if (command.action === "list") {
-    const tasks = ctx.schedule
-      .list()
-      .filter((task) => task.botId === botConfig.id);
-    if (!tasks.length) {
-      await bot.reply(
-        message.messageId,
-        "当前没有定时任务。用 `/schedule add \"每 30 分钟\" <任务>` 创建一个。",
-        hasThread,
-      );
-      return;
-    }
-    const lines = tasks.map((task) => {
-      const next = ctx.schedule.nextRunAt(task.id);
-      return `#${task.id}  ${task.display}  ${formatPrompt(task.prompt)}  下次触发 ${next ? formatTime(next) : "（已停用）"}`;
-    });
-    await bot.reply(message.messageId, lines.join("\n"), hasThread);
+  const pause = PAUSE_RE.exec(request);
+  if (pause) {
+    const outcome = await ctx.schedule.manage(
+      { action: "pause", id: pause[1] },
+      actor,
+    );
+    await bot.reply(
+      message.messageId,
+      outcome.notice,
+      hasThread,
+    );
+    return;
+  }
+  const resume = RESUME_RE.exec(request);
+  if (resume) {
+    const outcome = await ctx.schedule.manage(
+      { action: "resume", id: resume[1] },
+      actor,
+    );
+    await bot.reply(
+      message.messageId,
+      outcome.notice,
+      hasThread,
+    );
+    return;
+  }
+  const remove = DELETE_RE.exec(request);
+  if (remove) {
+    const outcome = await ctx.schedule.manage(
+      { action: "remove", id: remove[1] },
+      actor,
+    );
+    await bot.reply(
+      message.messageId,
+      outcome.notice,
+      hasThread,
+    );
+    return;
+  }
+  const run = RUN_RE.exec(request);
+  if (run) {
+    const outcome = await ctx.schedule.manage(
+      { action: "run", id: run[1] },
+      actor,
+    );
+    await bot.reply(
+      message.messageId,
+      outcome.notice,
+      hasThread,
+    );
     return;
   }
 
-  const removed = await ctx.schedule.remove(command.id);
-  await bot.reply(
-    message.messageId,
-    removed
-      ? `已删除 #${command.id}`
-      : `找不到定时任务 #${command.id}。用 \`/schedule list\` 查看现有任务。`,
+  // 自然语言创建：启动一轮任务，让当前 bot 理解需求并调用 schedule_manage。
+  const interaction = interactionPolicyOf({ interaction: inputInteraction });
+  if (!isNew && session.status === "creating") {
+    await bot.reply(
+      message.messageId,
+      "当前会话正在准备，请稍后再使用 /schedule。",
+      hasThread,
+    );
+    return;
+  }
+  if (session.status === "active") {
+    await bot.reply(
+      message.messageId,
+      "当前会话还在执行，请等任务结束后再使用 /schedule。",
+      hasThread,
+    );
+    return;
+  }
+  if (session.status === "closed") {
+    await bot.reply(message.messageId, "当前话题的会话已经关闭。", hasThread);
+    return;
+  }
+
+  const taskText = [
+    "用户想创建一个定时任务。",
+    `需求：${request}`,
+    "请使用 schedule_manage 工具，action=add 创建：targetBotId 选择团队中负责执行的成员，prompt 保留完整需求，rule 根据需求选择合适的调度规则（一次性、固定间隔或 Cron）。",
+  ].join("\n\n");
+
+  const started = await ctx.tasks.startTask({
+    bot,
+    botConfig,
+    session,
     hasThread,
-  );
+    replyToMessageId: message.messageId,
+    senderOpenId: message.senderOpenId,
+    senderUnionId: message.senderUnionId,
+    taskId,
+    interaction,
+    requestedPrompt: taskText,
+    isCompacting: false,
+    resources: extractResourceKeys(message.messageType, message.rawContent),
+  });
+  if (!started) {
+    const latestStatus = ctx.sessions.manager.get(session.id)?.status;
+    const detail =
+      latestStatus === "active"
+        ? "当前会话还在执行，请等任务结束后再使用 /schedule。"
+        : latestStatus === "closed"
+          ? "当前话题的会话已经关闭。"
+          : "定时任务未能启动，请稍后重试。";
+    await bot.reply(message.messageId, detail, hasThread);
+  }
 };
 
 export const name = "commands/schedule";
-export const inject = ["commands", "schedule"];
+export const inject = ["commands", "schedule", "tasks", "sessions"];
 
 export function apply(ctx: Context) {
   ctx.commands.register("schedule", handler);

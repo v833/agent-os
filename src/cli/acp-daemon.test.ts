@@ -22,6 +22,7 @@ const readline = require("node:readline");
 const lines = readline.createInterface({ input: process.stdin });
 let nextSession = 0;
 let mcpCount = 0;
+let mcpHeaders = [];
 let setupLog = [];
 let sessionCwd = "";
 const heldPrompts = new Map();
@@ -35,6 +36,7 @@ lines.on("line", (line) => {
   }
   if (message.method === "session/new") {
     mcpCount = Array.isArray(message.params && message.params.mcpServers) ? message.params.mcpServers.length : 0;
+    mcpHeaders = message.params && message.params.mcpServers && message.params.mcpServers[0] && message.params.mcpServers[0].headers || [];
     sessionCwd = message.params.cwd;
     send({ id: message.id, result: {
       sessionId: "acp-session-" + (++nextSession),
@@ -109,7 +111,7 @@ lines.on("line", (line) => {
   }
   send({
     method: "session/update",
-    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.AGENT_OS_TEST_PROXY || (cancelledSessions.has(sessionId) ? "cancel-seen" : (process.env.AGENT_OS_TEST_SETUP === "1" ? (setupLog.join("|") + "|cwd=" + sessionCwd) : (process.env.AGENT_OS_TEST_MCP === "1" ? ("mcp-" + mcpCount) : ("答-" + sessionId)))) } } }
+    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.AGENT_OS_TEST_PROXY || (cancelledSessions.has(sessionId) ? "cancel-seen" : (process.env.AGENT_OS_TEST_SETUP === "1" ? (setupLog.join("|") + "|cwd=" + sessionCwd) : (process.env.AGENT_OS_TEST_MCP_HEADERS === "1" ? JSON.stringify(mcpHeaders) : (process.env.AGENT_OS_TEST_MCP === "1" ? ("mcp-" + mcpCount) : ("答-" + sessionId))))) } } }
   });
   send({ id: message.id, result: { stopReason: "end_turn", usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } } });
 });
@@ -242,6 +244,57 @@ test("AcpDaemon 向 session/new 注入 MCP，并汇总应用工具调用", async
         toolName: "request_clarification",
         input: { questions: [] },
       },
+    ]);
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("AcpDaemon 每轮用当前 env 生成 HTTP MCP 动态请求头", async () => {
+  const adapter = new AcpScriptAdapter(() => [
+    {
+      id: "agent_os_schedule_manage",
+      command: process.execPath,
+      args: ["server.js"],
+      tools: ["schedule_manage"],
+      acp: {
+        type: "http",
+        url: "http://127.0.0.1:3101/mcp",
+        headersFromEnv: [
+          { name: "x-agent-os-chat-id", env: "AGENT_OS_CHAT_ID" },
+          { name: "x-agent-os-owner-open-id", env: "AGENT_OS_OWNER_OPEN_ID" },
+        ],
+      },
+    },
+  ]);
+  const daemon = new AcpDaemon(adapter, undefined, {
+    AGENT_OS_TEST_MCP_HEADERS: "1",
+  });
+  try {
+    const first = await daemon.runTurn({
+      prompt: "话题一",
+      cwd: process.cwd(),
+      env: {
+        AGENT_OS_CHAT_ID: "oc_first",
+        AGENT_OS_OWNER_OPEN_ID: "ou_first",
+      },
+    });
+    const second = await daemon.runTurn({
+      prompt: "话题二",
+      cwd: process.cwd(),
+      env: {
+        AGENT_OS_CHAT_ID: "oc_second",
+        AGENT_OS_OWNER_OPEN_ID: "ou_second",
+      },
+    });
+
+    assert.deepEqual(JSON.parse(first.answer), [
+      { name: "x-agent-os-chat-id", value: "oc_first" },
+      { name: "x-agent-os-owner-open-id", value: "ou_first" },
+    ]);
+    assert.deepEqual(JSON.parse(second.answer), [
+      { name: "x-agent-os-chat-id", value: "oc_second" },
+      { name: "x-agent-os-owner-open-id", value: "ou_second" },
     ]);
   } finally {
     await daemon.close();

@@ -9,7 +9,10 @@ import { Service, type Context } from "cordis";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { CliAdapter, CliEvent, CliRunStats } from "../cli/types.js";
-import { CliRunError } from "../cli/runner.js";
+import {
+  CliRunError,
+  cliExecutionTimeoutMs,
+} from "../cli/runner.js";
 import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
 import { interactionPolicyOf } from "../core/interaction-policy.js";
 import {
@@ -32,26 +35,7 @@ import type {
   TaskToolCallsPayload,
 } from "./types.js";
 
-/**
- * 解析一轮 CLI 的可选执行时限。按引擎变量优先，例如 claude 对应
- * CLAUDE_TIMEOUT_MS；未设置时再读取 CLI_TIMEOUT_MS，全部留空则不设时限。
- */
-export function cliExecutionTimeoutMs(
-  cliId: string,
-  env: Record<string, string | undefined> = process.env,
-): number | undefined {
-  const engineKey = `${cliId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_TIMEOUT_MS`;
-  const source = env[engineKey]?.trim() || env.CLI_TIMEOUT_MS?.trim();
-  if (!source) return undefined;
-  if (!/^\d+$/.test(source)) {
-    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
-  }
-  const timeoutMs = Number(source);
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new Error(`${engineKey}/CLI_TIMEOUT_MS 必须是正整数毫秒值`);
-  }
-  return timeoutMs;
-}
+export { cliExecutionTimeoutMs } from "../cli/runner.js";
 
 // Token、轮次和 CLI 耗时按执行轮累加；上下文占用与窗口大小是快照，只保留最新值。
 function accumulateCliStats(
@@ -412,7 +396,14 @@ export class TasksService extends Service {
     // bot 配置了网络代理（如 agy 访问云端服务）时，把标准代理变量注入 CLI 子进程并
     // 覆盖全局配置（bots.json 的 proxy 优先于 .env 的 HTTP_PROXY 等）；
     // 不配置则继承父进程环境，.env 的全局代理变量自然生效。
-    const cliEnv = botCliEnvironment(botConfig);
+    const cliEnv = {
+      ...(botCliEnvironment(botConfig) ?? {}),
+      ...(this.ctx.bail("task/cli-environment", {
+        session,
+        collaboration,
+        senderOpenId,
+      }) ?? {}),
+    };
     const handleCliEvent = (event: CliEvent) => {
       if (
         event.type === "result" &&

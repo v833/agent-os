@@ -5,6 +5,7 @@
  */
 import { Service, type Context } from "cordis";
 import { AcpDaemon } from "../cli/acp-daemon.js";
+import { acpDaemonEnvironment } from "../cli/app-tools.js";
 import { compactCliSession } from "../cli/native-compact.js";
 import { listNativeCliSessions } from "../cli/native-sessions.js";
 import {
@@ -51,15 +52,19 @@ export class CliService extends Service {
     adapter: CliAdapter,
     env: Record<string, string> | undefined,
   ): AcpDaemon {
+    const daemonEnv = acpDaemonEnvironment(
+      adapter.getApplicationTools?.() ?? [],
+      env,
+    );
     const envKey = JSON.stringify(
-      Object.entries(env ?? {}).sort(([left], [right]) =>
+      Object.entries(daemonEnv ?? {}).sort(([left], [right]) =>
         left.localeCompare(right),
       ),
     );
     const key = `${adapter.id}:${envKey}`;
     let daemon = this.acpDaemons.get(key);
     if (!daemon) {
-      daemon = new AcpDaemon(adapter, undefined, env);
+      daemon = new AcpDaemon(adapter, undefined, daemonEnv);
       this.acpDaemons.set(key, daemon);
     }
     return daemon;

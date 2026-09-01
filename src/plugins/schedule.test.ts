@@ -1,7 +1,7 @@
 /**
- * schedule 测试：覆盖周期解析（cron / 自然语言）、触发时间计算、
- * 到点触发、目标话题 busy/closed 跳过、删除与持久化重启恢复。
- * 用假 lark/tasks 服务 + 真实 SessionManager/JsonScheduleStore 组装最小宿主。
+ * schedule 测试：覆盖三种调度规则校验、Scheduler 的创建/暂停/恢复/删除、
+ * 幂等去重与并发跳过、持久化恢复、watcher 差异合并、schedule_manage 分发，
+ * 以及 /schedule /schedules 命令的路由端到端。
  */
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -9,20 +9,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Context, Service } from "cordis";
-import type { CliAccessMode, CliId } from "../cli/types.js";
-import type {
-  CliAdapter,
-  CliRunResult,
-  CliSessionSummary,
-} from "../cli/types.js";
+import type { CliAdapter, CliRunResult, CliSessionSummary } from "../cli/types.js";
 import type { RunCliOptions } from "../cli/runner.js";
 import type { BotConfig } from "../core/bot-registry.js";
-import { createInteractionPolicy } from "../core/interaction-policy.js";
-import { parseSchedule } from "../core/schedule-parser.js";
 import {
+  SCHEDULE_MANAGE_TOOL_NAME,
+  ScheduleManageRequestSchema,
+  ScheduleRuleSchema,
+  createScheduledTask,
+  scheduleDescription,
+  type ScheduledTask,
+} from "../core/schedule.js";
+import {
+  ScheduleStore,
   JsonScheduleStore,
-  type ScheduleTask,
 } from "../core/schedule-store.js";
+import {
+  ScheduleRunStore,
+  JsonScheduleRunStore,
+} from "../core/schedule-run-store.js";
+import {
+  Scheduler,
+  type ScheduledTaskDispatcher,
+} from "../core/scheduler.js";
+import { executeScheduleManageRequest } from "../core/schedule-manage-service.js";
+import { reconcileScheduleFile } from "../core/schedule-watcher.js";
 import { SessionManager } from "../core/session-manager.js";
 import { JsonSessionStore } from "../core/session-store.js";
 import type {
@@ -35,17 +46,602 @@ import * as collaborationPlugin from "./collaboration.js";
 import * as commandsPlugin from "./commands.js";
 import * as routerPlugin from "./router.js";
 import * as scheduleCommand from "./commands/schedule.js";
-import { waitForAllActive } from "./loader.js";
+import * as schedulesCommand from "./commands/schedules.js";
 import { SessionsService } from "./sessions.js";
 import { ScheduleService } from "./schedule.js";
 import type { BotRuntime, StartTaskInput } from "./types.js";
 
+// ---------- 规则校验 ----------
+
+test("ScheduleRuleSchema 校验三种规则", () => {
+  assert.deepEqual(
+    ScheduleRuleSchema.parse({ kind: "once", runAt: "2026-09-01T09:00:00.000Z" }),
+    { kind: "once", runAt: "2026-09-01T09:00:00.000Z" },
+  );
+  assert.deepEqual(
+    ScheduleRuleSchema.parse({ kind: "interval", everyMs: 3600_000 }),
+    { kind: "interval", everyMs: 3600_000 },
+  );
+  // cron 缺省时区补 Asia/Shanghai。
+  assert.deepEqual(
+    ScheduleRuleSchema.parse({ kind: "cron", expression: "0 9 * * *" }),
+    { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" },
+  );
+});
+
+test("ScheduleRuleSchema 拒绝非法输入", () => {
+  assert.throws(() => ScheduleRuleSchema.parse({ kind: "once" }), /runAt/);
+  assert.throws(
+    () => ScheduleRuleSchema.parse({ kind: "interval", everyMs: 30_000 }),
+    /everyMs/,
+  );
+  assert.throws(
+    () => ScheduleRuleSchema.parse({ kind: "cron", expression: "" }),
+    /expression/,
+  );
+  assert.throws(
+    () =>
+      ScheduleRuleSchema.parse({
+        kind: "cron",
+        expression: "61 * * * *",
+        timezone: "Asia/Shanghai",
+      }),
+    /Cron 表达式无效/,
+  );
+  assert.throws(
+    () =>
+      ScheduleRuleSchema.parse({
+        kind: "cron",
+        expression: "0 9 * * *",
+        timezone: "Mars/Olympus",
+      }),
+    /时区无效/,
+  );
+  assert.throws(() => ScheduleRuleSchema.parse({ kind: "unknown" }));
+});
+
+test("createScheduledTask 生成短 id 与 active 状态", () => {
+  const task = createScheduledTask({
+    creatorOpenId: "ou_x",
+    chatId: "oc_x",
+    targetBotId: "developer",
+    prompt: "检查日志",
+    rule: { kind: "interval", everyMs: 3600_000 },
+  });
+  assert.match(task.id, /^[a-z0-9]{12}$/);
+  assert.equal(task.status, "active");
+  assert.ok(task.createdAt);
+});
+
+test("scheduleDescription 把规则转成可读描述", () => {
+  assert.equal(
+    scheduleDescription({ kind: "interval", everyMs: 3600_000 }),
+    "每 1 小时",
+  );
+  assert.equal(
+    scheduleDescription({ kind: "interval", everyMs: 86400_000 }),
+    "每 1 天",
+  );
+  assert.equal(
+    scheduleDescription({ kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" }),
+    "Cron 0 9 * * *",
+  );
+  assert.match(
+    scheduleDescription({ kind: "once", runAt: "2026-09-01T09:00:00.000Z" }),
+    /一次性/,
+  );
+});
+
+// ---------- 调度器 ----------
+
+function fixedNow(iso = "2026-09-01T00:00:00.000Z") {
+  let current = Date.parse(iso);
+  return {
+    now: () => new Date(current),
+    advance(ms: number) {
+      current += ms;
+    },
+  };
+}
+
+function createFakeDispatcher() {
+  const calls: Array<{ task: ScheduledTask; scheduledFor: string }> = [];
+  let block = false;
+  const blockers = new Map<string, () => void>();
+  const dispatcher: ScheduledTaskDispatcher = async (task, scheduledFor) => {
+    calls.push({ task, scheduledFor });
+    if (block) {
+      await new Promise<void>((resolve) =>
+        blockers.set(`${task.id}:${scheduledFor}`, resolve),
+      );
+    }
+    return { sessionId: `sess-${task.id}` };
+  };
+  return {
+    calls,
+    dispatcher,
+    block() {
+      block = true;
+    },
+    release(taskId: string, scheduledFor: string) {
+      blockers.get(`${taskId}:${scheduledFor}`)?.();
+      blockers.delete(`${taskId}:${scheduledFor}`);
+    },
+  };
+}
+
+function captureTimeouts(t: test.TestContext) {
+  interface CapturedTimer {
+    callback: () => void;
+    delay: number;
+    active: boolean;
+    handle: NodeJS.Timeout;
+  }
+  const timers: CapturedTimer[] = [];
+  t.mock.method(
+    globalThis,
+    "setTimeout",
+    ((callback: () => void, delay = 0) => {
+      const handle = {
+        unref() {
+          return handle;
+        },
+      } as unknown as NodeJS.Timeout;
+      timers.push({ callback, delay, active: true, handle });
+      return handle;
+    }) as typeof setTimeout,
+  );
+  t.mock.method(
+    globalThis,
+    "clearTimeout",
+    ((handle: NodeJS.Timeout) => {
+      const timer = timers.find((candidate) => candidate.handle === handle);
+      if (timer) timer.active = false;
+    }) as typeof clearTimeout,
+  );
+  return {
+    active() {
+      return timers.filter((timer) => timer.active);
+    },
+    fireNext() {
+      const timer = timers.find((candidate) => candidate.active);
+      assert.ok(timer, "应存在待触发的定时器");
+      timer.active = false;
+      timer.callback();
+      return timer;
+    },
+  };
+}
+
+function intervalOptions(overrides: Partial<Parameters<Scheduler["create"]>[0]> = {}) {
+  return {
+    creatorOpenId: "ou_owner",
+    chatId: "oc_chat",
+    targetBotId: "developer",
+    prompt: "检查服务日志",
+    rule: { kind: "interval" as const, everyMs: 60_000 },
+    ...overrides,
+  };
+}
+
+test("Scheduler create/list/pause/resume", () => {
+  const clock = fixedNow();
+  const store = new ScheduleStore();
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: store,
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(intervalOptions());
+  assert.equal(scheduler.list().length, 1);
+  assert.equal(task.status, "active");
+
+  assert.equal(scheduler.pause(task.id)?.status, "paused");
+  assert.equal(scheduler.resume(task.id)?.status, "active");
+});
+
+test("Scheduler delete/removeMany/removeAll", () => {
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore: new ScheduleRunStore(),
+    dispatcher: async () => ({}),
+  });
+  const a = scheduler.create(intervalOptions());
+  const b = scheduler.create(intervalOptions());
+  assert.equal(scheduler.removeMany([a.id, b.id]), 2);
+  scheduler.create(intervalOptions());
+  assert.equal(scheduler.removeAll(), 1);
+  assert.equal(scheduler.list().length, 0);
+});
+
+test("30 天后的 once 任务分段等待，不会被当成 1ms 立即触发", (t) => {
+  const clock = fixedNow();
+  const timers = captureTimeouts(t);
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore: new ScheduleRunStore(),
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(
+    intervalOptions({
+      rule: { kind: "once", runAt: "2026-10-01T00:00:00.000Z" },
+    }),
+  );
+
+  assert.equal(
+    scheduler.list().find((candidate) => candidate.id === task.id)?.nextRunAt,
+    "2026-10-01T00:00:00.000Z",
+  );
+  assert.equal(timers.active()[0]?.delay, 2_147_483_647);
+  timers.fireNext();
+  assert.equal(fake.calls.length, 0);
+  assert.equal(timers.active()[0]?.delay, 2_147_483_647);
+  scheduler.stop();
+});
+
+test("周期任务按计划时间排下一轮，重叠轮次记为 skipped", async (t) => {
+  const clock = fixedNow();
+  const timers = captureTimeouts(t);
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  fake.block();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(intervalOptions());
+
+  clock.advance(60_000);
+  timers.fireNext();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(fake.calls[0]?.scheduledFor, "2026-09-01T00:01:00.000Z");
+  assert.equal(
+    scheduler.list()[0]?.nextRunAt,
+    "2026-09-01T00:02:00.000Z",
+  );
+
+  clock.advance(60_000);
+  timers.fireNext();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(fake.calls.length, 1);
+  assert.ok(runStore.list(task.id).some((run) => run.status === "skipped"));
+
+  fake.release(task.id, "2026-09-01T00:01:00.000Z");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.ok(runStore.list(task.id).some((run) => run.status === "succeeded"));
+  scheduler.stop();
+});
+
+test("runNow 立即执行一次并写入运行记录", async () => {
+  const clock = fixedNow();
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(intervalOptions());
+  const result = await scheduler.runNow(task.id);
+
+  assert.ok(result);
+  assert.equal(fake.calls.length, 1);
+  const runs = runStore.list(task.id);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.status, "succeeded");
+  assert.ok(runs[0]?.taskId);
+});
+
+test("trigger 幂等：同一 scheduledFor 只执行一次", async () => {
+  const clock = fixedNow();
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(
+    intervalOptions({ rule: { kind: "once", runAt: "2026-09-02T00:00:00.000Z" } }),
+  );
+  await scheduler.runNow(task.id);
+  await scheduler.runNow(task.id);
+  assert.equal(fake.calls.length, 1);
+});
+
+test("并发跳过：上一轮未跑完时本轮记 skipped 且不执行", async () => {
+  const clock = fixedNow();
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const task = scheduler.create(intervalOptions());
+  fake.block();
+  const first = scheduler.runNow(task.id);
+  clock.advance(1);
+  const second = scheduler.runNow(task.id);
+  // 释放第一轮，让两条 runNow 都能收尾。
+  fake.release(task.id, "2026-09-01T00:00:00.000Z");
+  await Promise.all([first, second]);
+
+  assert.equal(fake.calls.length, 1);
+  const runs = runStore.list(task.id);
+  assert.equal(runs.length, 2);
+  assert.ok(runs.some((run) => run.status === "succeeded"));
+  assert.ok(runs.some((run) => run.status === "skipped"));
+});
+
+test("once 任务执行后置为 completed", async () => {
+  const clock = fixedNow();
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore: new ScheduleRunStore(),
+    dispatcher: async () => ({}),
+    now: clock.now,
+  });
+  const task = scheduler.create(
+    intervalOptions({ rule: { kind: "once", runAt: "2026-09-02T00:00:00.000Z" } }),
+  );
+  await scheduler.runNow(task.id);
+  assert.equal(scheduler.list()[0]?.status, "completed");
+});
+
+test("start 恢复：running 记录标记 failed，过期 once 记 skipped 并 completed", async () => {
+  const clock = fixedNow();
+  const store = new ScheduleStore();
+  const runStore = new ScheduleRunStore();
+  const fake = createFakeDispatcher();
+  const scheduler = new Scheduler({
+    scheduleStore: store,
+    runStore,
+    dispatcher: fake.dispatcher,
+    now: clock.now,
+  });
+  const interval = scheduler.create(intervalOptions());
+  runStore.create(interval.id, "2026-08-31T12:00:00.000Z");
+  const expired = scheduler.create(
+    intervalOptions({ rule: { kind: "once", runAt: "2026-08-31T00:00:00.000Z" } }),
+  );
+
+  await scheduler.start();
+
+  const intervalRuns = runStore.list(interval.id);
+  assert.equal(intervalRuns[0]?.status, "failed");
+  assert.equal(store.get(expired.id)?.status, "completed");
+  const expiredRuns = runStore.list(expired.id);
+  assert.equal(expiredRuns[0]?.status, "skipped");
+});
+
+// ---------- 持久化 ----------
+
+test("JsonScheduleStore 持久化并过滤坏记录", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-store-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filePath = join(dir, "schedules.json");
+  const store = new JsonScheduleStore(filePath);
+  store.create(
+    intervalOptions({ rule: { kind: "cron", expression: "0 9 * * *", timezone: "Asia/Shanghai" } }),
+  );
+
+  const rows = JSON.parse(await readFile(filePath, "utf8"));
+  rows.push({ id: "", prompt: "" });
+  await writeFile(filePath, JSON.stringify(rows), "utf8");
+
+  const restored = new JsonScheduleStore(filePath);
+  assert.equal(restored.list().length, 1);
+  assert.equal((await readFile(filePath, "utf8")).endsWith("\n"), true);
+});
+
+test("非法 Cron 在写入前拒绝，内存与 schedules.json 均不变", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-invalid-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filePath = join(dir, "schedules.json");
+  const store = new JsonScheduleStore(filePath);
+  const invalidRule = {
+    kind: "cron",
+    expression: "61 * * * *",
+    timezone: "Asia/Shanghai",
+  } as ScheduledTask["rule"];
+
+  assert.throws(
+    () => store.create(intervalOptions({ rule: invalidRule })),
+    /Cron 表达式无效/,
+  );
+  assert.deepEqual(store.list(), []);
+  assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), []);
+
+  const task = store.create(intervalOptions());
+  const before = await readFile(filePath, "utf8");
+  assert.throws(() => store.update(task.id, { rule: invalidRule }));
+  assert.equal(store.get(task.id)?.rule.kind, "interval");
+  assert.equal(await readFile(filePath, "utf8"), before);
+});
+
+test("JsonScheduleRunStore 持久化运行记录", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-runs-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filePath = join(dir, "schedule-runs.json");
+  const store = new JsonScheduleRunStore(filePath);
+  const run = store.create("abc123", "2026-09-01T00:00:00.000Z");
+  assert.ok(run);
+  store.markSucceeded(run.id, "task-1");
+
+  const restored = new JsonScheduleRunStore(filePath);
+  const runs = restored.list("abc123");
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.status, "succeeded");
+  assert.equal(runs[0]?.taskId, "task-1");
+});
+
+// ---------- watcher ----------
+
+test("reconcileScheduleFile 做新增/更新/删除差异合并", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-watch-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const filePath = join(dir, "schedules.json");
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore: new ScheduleRunStore(),
+    dispatcher: async () => ({}),
+  });
+  const keep = scheduler.create(intervalOptions({ id: "keep" }));
+  scheduler.create(intervalOptions({ id: "gone" }));
+
+  const fileTasks = [
+    {
+      ...keep,
+      targetBotId: "reviewer",
+      updatedAt: new Date().toISOString(),
+    },
+  ];
+  await writeFile(filePath, JSON.stringify(fileTasks), "utf8");
+
+  const changes = reconcileScheduleFile(scheduler, filePath);
+  assert.deepEqual(changes, ["删除 gone", "更新 keep"]);
+  assert.equal(scheduler.list().length, 1);
+  assert.equal(scheduler.list()[0]?.targetBotId, "reviewer");
+});
+
+// ---------- schedule_manage 分发 ----------
+
+test("executeScheduleManageRequest 各 action 返回真实结果", async () => {
+  const clock = fixedNow();
+  const store = new ScheduleStore();
+  const runStore = new ScheduleRunStore();
+  const scheduler = new Scheduler({
+    scheduleStore: store,
+    runStore,
+    dispatcher: async () => ({}),
+    now: clock.now,
+  });
+  const context = {
+    scheduler,
+    runStore,
+    chatId: "oc_chat",
+    creatorOpenId: "ou_owner",
+    isTargetBotAllowed: () => true,
+  };
+
+  const emptyList = await executeScheduleManageRequest({ action: "list" }, context);
+  assert.equal(emptyList.notice, "当前没有定时任务。");
+
+  const added = await executeScheduleManageRequest(
+    { action: "add", targetBotId: "developer", prompt: "检查日志", rule: { kind: "interval", everyMs: 3600_000 } },
+    context,
+  );
+  assert.match(added.notice, /已创建/);
+  assert.match(added.notice, /下次 2026-09-01T01:00:00.000Z/);
+
+  const listed = await executeScheduleManageRequest({ action: "list" }, context);
+  assert.match(listed.notice, /当前共 1 个定时任务/);
+  assert.equal(listed.schedules?.length, 1);
+
+  const removed = await executeScheduleManageRequest(
+    { action: "remove", id: "missing" },
+    context,
+  );
+  assert.equal(removed.notice, "没有找到定时任务 missing。");
+});
+
+test("schedule_manage 按 chat 与创建人隔离，批量创建先校验全部目标成员", async () => {
+  const scheduler = new Scheduler({
+    scheduleStore: new ScheduleStore(),
+    runStore: new ScheduleRunStore(),
+    dispatcher: async () => ({}),
+  });
+  const own = scheduler.create(intervalOptions({ id: "own" }));
+  const otherOwner = scheduler.create(
+    intervalOptions({ id: "other-owner", creatorOpenId: "ou_other" }),
+  );
+  const otherChat = scheduler.create(
+    intervalOptions({ id: "other-chat", chatId: "oc_other" }),
+  );
+  const runStore = new ScheduleRunStore();
+  const context = {
+    scheduler,
+    runStore,
+    chatId: "oc_chat",
+    creatorOpenId: "ou_owner",
+    isTargetBotAllowed: (targetBotId: string) => targetBotId === "developer",
+  };
+
+  const listed = await executeScheduleManageRequest({ action: "list" }, context);
+  assert.deepEqual(listed.schedules?.map((task) => task.id), [own.id]);
+
+  const hidden = await executeScheduleManageRequest(
+    { action: "pause", id: otherOwner.id },
+    context,
+  );
+  assert.equal(hidden.notice, `没有找到定时任务 ${otherOwner.id}。`);
+  assert.equal(scheduler.list().find((task) => task.id === otherOwner.id)?.status, "active");
+
+  await assert.rejects(
+    executeScheduleManageRequest(
+      {
+        action: "addMany",
+        schedules: [
+          {
+            targetBotId: "developer",
+            prompt: "有效计划",
+            rule: { kind: "interval", everyMs: 60_000 },
+          },
+          {
+            targetBotId: "missing-bot",
+            prompt: "无效计划",
+            rule: { kind: "interval", everyMs: 60_000 },
+          },
+        ],
+      },
+      context,
+    ),
+    /目标成员未注册或未启用/,
+  );
+  assert.equal(scheduler.list().length, 3, "批量校验失败前不能创建部分计划");
+
+  await executeScheduleManageRequest(
+    { action: "removeAll", confirm: true },
+    context,
+  );
+  assert.deepEqual(
+    scheduler.list().map((task) => task.id).sort(),
+    [otherChat.id, otherOwner.id].sort(),
+  );
+});
+
+test("ScheduleManageRequestSchema 约束批量删除与 removeAll 的 confirm", () => {
+  assert.deepEqual(
+    ScheduleManageRequestSchema.parse({ action: "removeAll", confirm: true }),
+    { action: "removeAll", confirm: true },
+  );
+  assert.throws(
+    () => ScheduleManageRequestSchema.parse({ action: "removeAll" }),
+  );
+  assert.throws(
+    () => ScheduleManageRequestSchema.parse({ action: "addMany", schedules: [] }),
+  );
+  assert.equal(SCHEDULE_MANAGE_TOOL_NAME, "schedule_manage");
+});
+
+// ---------- 命令路由端到端 ----------
+
 function createFakeBot() {
-  const calls = { sends: [] as string[], replies: [] as string[] };
+  const calls = { sends: [] as string[], replies: [] as string[], cards: [] as unknown[] };
   const bot = {
     client: {},
-    getIdentity: async () =>
-      ({ openId: "bot_open", name: "TestBot" }) as BotIdentity,
+    getIdentity: async () => ({ openId: "bot_open", name: "TestBot" }) as BotIdentity,
     send: async (_chatId: string, text: string) => {
       calls.sends.push(text);
       return `send-${calls.sends.length}`;
@@ -54,7 +650,10 @@ function createFakeBot() {
       calls.replies.push(text);
       return `msg-${calls.replies.length}`;
     },
-    replyCard: async () => "card-1",
+    replyCard: async (_id: string, card: unknown) => {
+      calls.cards.push(card);
+      return "card-1";
+    },
     replyMention: async () => "mention-1",
     sendResultNotification: async () => undefined,
     updateCard: async () => undefined,
@@ -63,7 +662,6 @@ function createFakeBot() {
   return { bot, calls };
 }
 
-/** 假 lark 服务：运行时表由测试填充，替换真实飞书连接。 */
 class FakeLarkService extends Service {
   runtimes = new Map<string, BotRuntime>();
 
@@ -76,7 +674,6 @@ class FakeLarkService extends Service {
   }
 }
 
-/** 假 tasks 服务：只记录 startTask 调用，不真正执行 CLI。 */
 class FakeTasksService extends Service {
   started: StartTaskInput[] = [];
   startSucceeds = true;
@@ -90,331 +687,6 @@ class FakeTasksService extends Service {
     return this.startSucceeds;
   }
 }
-
-interface Host {
-  root: Context;
-  schedule: ScheduleService;
-  tasks: FakeTasksService;
-  bot: ReturnType<typeof createFakeBot>["bot"];
-  calls: ReturnType<typeof createFakeBot>["calls"];
-}
-
-/** 组装最小宿主：真实 ScheduleService + 假 lark/tasks + 真实会话模型。 */
-async function createHost(
-  t: test.TestContext,
-  sessionsDir = "",
-): Promise<Host> {
-  const root = new Context();
-  const fakeBot = createFakeBot();
-  const lark = new FakeLarkService(root);
-  const tasks = new FakeTasksService(root);
-  const dir =
-    sessionsDir || (await mkdtemp(join(tmpdir(), "agent-os-schedule-")));
-  const manager = await SessionManager.open({
-    store: new JsonSessionStore(join(dir, "sessions.json")),
-  });
-  const sessionsService = new SessionsService(root);
-  sessionsService.init(manager);
-  const schedule = new ScheduleService(root, "Etc/GMT-8");
-  await schedule.init(new JsonScheduleStore(join(dir, "schedules.json")));
-  // croner job 持有 unref 定时器，测试结束必须清理，否则临时目录无法删除。
-  t.after(async () => {
-    schedule.dispose();
-    if (!sessionsDir) await rm(dir, { recursive: true, force: true });
-  });
-
-  lark.runtimes.set("testbot", {
-    config: {
-      id: "testbot",
-      appId: "cli_test",
-      appSecret: "secret",
-      defaultCliId: "codex",
-      accessMode: "headless",
-      role: "",
-      skills: [],
-      systemPrompt: "",
-      workspaceDir: process.cwd(),
-      collaborationMaxRounds: 2,
-    },
-    bot: fakeBot.bot,
-    identity: { openId: "bot_open", name: "TestBot" },
-  });
-
-  return { root, schedule, tasks, bot: fakeBot.bot, calls: fakeBot.calls };
-}
-
-function registerOptions(
-  overrides: Partial<Parameters<ScheduleService["register"]>[0]> = {},
-) {
-  return {
-    schedule: "0 9 * * *",
-    prompt: "读取 data/logs/error.log 并总结最新错误",
-    botId: "testbot",
-    chatId: "oc_chat",
-    threadId: "omt_thread",
-    rootId: "",
-    messageId: "om_command",
-    cliId: "codex" as CliId,
-    accessMode: "headless" as CliAccessMode,
-    workspaceDir: process.cwd(),
-    ownerOpenId: "ou_owner",
-    ...overrides,
-  };
-}
-
-// ---------- 周期解析 ----------
-
-test("parseSchedule 接受 5 段 cron 并原样返回", () => {
-  const spec = parseSchedule("0 9 * * *");
-  assert.deepEqual(spec, { expr: "0 9 * * *", display: "0 9 * * *" });
-});
-
-test("parseSchedule 把自然语言周期转换为 cron 表达式", () => {
-  assert.deepEqual(parseSchedule("每 30 分钟"), {
-    expr: "*/30 * * * *",
-    display: "每 30 分钟",
-  });
-  assert.deepEqual(parseSchedule("每2小时"), {
-    expr: "0 */2 * * *",
-    display: "每 2 小时",
-  });
-  assert.deepEqual(parseSchedule("每 3 天"), {
-    expr: "0 0 */3 * *",
-    display: "每 3 天",
-  });
-  assert.deepEqual(parseSchedule("每小时"), {
-    expr: "0 * * * *",
-    display: "每小时",
-  });
-  assert.deepEqual(parseSchedule("每天 9:00"), {
-    expr: "0 9 * * *",
-    display: "每天 09:00",
-  });
-  assert.deepEqual(parseSchedule("每天早上9点"), {
-    expr: "0 9 * * *",
-    display: "每天 09:00",
-  });
-  assert.deepEqual(parseSchedule("每天"), {
-    expr: "0 0 * * *",
-    display: "每天 00:00",
-  });
-});
-
-test("parseSchedule 拒绝无效 cron 与无法识别的文本", () => {
-  assert.throws(() => parseSchedule("61 * * * *"), /cron 表达式无效/);
-  assert.throws(() => parseSchedule("每 0 分钟"), /1-59/);
-  assert.throws(() => parseSchedule("每 100 小时"), /1-24/);
-  assert.throws(() => parseSchedule("每 40 天"), /1-30/);
-  assert.throws(() => parseSchedule("每天 25 点"), /0-23/);
-  assert.throws(() => parseSchedule("乱七八糟"), /无法识别的周期/);
-  assert.throws(() => parseSchedule("   "), /周期不能为空/);
-});
-
-// ---------- 持久化 ----------
-
-test("schedules.json 不存在时按首次启动返回空列表", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-store-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const store = new JsonScheduleStore(join(dir, "data", "schedules.json"));
-  assert.deepEqual(await store.load(), []);
-});
-
-test("保存后可以完整恢复定时任务，坏记录被过滤", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-store-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const filePath = join(dir, "data", "schedules.json");
-  const store = new JsonScheduleStore(filePath);
-  const tasks: ScheduleTask[] = [
-    {
-      id: "sched-001",
-      schedule: "每 30 分钟",
-      expr: "*/30 * * * *",
-      display: "每 30 分钟",
-      prompt: "总结日志",
-      botId: "developer",
-      chatId: "oc_chat",
-      threadId: "omt_thread",
-      rootId: "",
-      messageId: "om_cmd",
-      cliId: "codex",
-      accessMode: "acp",
-      workspaceDir: process.cwd(),
-      ownerOpenId: "ou_owner",
-      enabled: true,
-      lastRunAt: "2026-08-14T02:00:00.000Z",
-      createdAt: "2026-08-14T00:00:00.000Z",
-      updatedAt: "2026-08-14T02:00:00.000Z",
-    },
-  ];
-
-  await store.save(tasks);
-
-  // 混入一条坏记录后加载，坏记录应被过滤并重写文件。
-  const rows = JSON.parse(await readFile(filePath, "utf8"));
-  rows.push({ id: "", schedule: "" });
-  await writeFile(filePath, JSON.stringify(rows), "utf8");
-
-  const restored = await store.load();
-  assert.equal(restored.length, 1);
-  assert.equal(restored[0]?.accessMode, "acp");
-  assert.equal(restored[0]?.lastRunAt, "2026-08-14T02:00:00.000Z");
-  assert.equal((await readFile(filePath, "utf8")).endsWith("\n"), true);
-});
-
-// ---------- 触发语义 ----------
-
-test("register 创建任务并持久化，nextRunAt 能给出下次触发时间", async (t) => {
-  const host = await createHost(t);
-  const task = await host.schedule.register(registerOptions());
-  assert.equal(task.id, "sched-001");
-  assert.equal(task.display, "0 9 * * *");
-  assert.ok(host.schedule.nextRunAt(task.id) instanceof Date);
-});
-
-test("重启后用新宿主从磁盘恢复任务并可继续触发", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-schedule-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
-  const first = await createHost(t, dir);
-  await first.schedule.register(registerOptions({ schedule: "每 30 分钟" }));
-  first.schedule.dispose();
-
-  // 新 root + 新服务实例模拟进程重启，磁盘中的任务应恢复并保持可触发。
-  const second = await createHost(t, dir);
-  const restored = second.schedule.list();
-  assert.equal(restored.length, 1);
-  assert.equal(restored[0]?.id, "sched-001");
-  assert.equal(restored[0]?.expr, "*/30 * * * *");
-  const outcome = await second.schedule.trigger("sched-001");
-  assert.deepEqual(outcome, { status: "started" });
-});
-
-test("trigger 到点执行：发锚点消息并交给 tasks.startTask", async (t) => {
-  const host = await createHost(t);
-  const task = await host.schedule.register(registerOptions());
-
-  const outcome = await host.schedule.trigger(task.id);
-
-  assert.deepEqual(outcome, { status: "started" });
-  assert.equal(host.calls.sends.length, 1);
-  assert.ok(host.calls.sends[0]?.includes("定时任务"));
-  assert.equal(host.tasks.started.length, 1);
-  const started = host.tasks.started[0]!;
-  assert.equal(started.replyToMessageId, "send-1");
-  assert.equal(started.requestedPrompt, task.prompt);
-  assert.equal(started.senderOpenId, "ou_owner");
-  assert.equal(started.session.threadId, "omt_thread");
-  assert.ok(host.schedule.get(task.id)?.lastRunAt);
-});
-
-test("tasks 拒绝启动时定时任务不记录为已运行", async (t) => {
-  const host = await createHost(t);
-  const task = await host.schedule.register(registerOptions());
-  host.tasks.startSucceeds = false;
-
-  const outcome = await host.schedule.trigger(task.id);
-
-  assert.deepEqual(outcome, { status: "error", reason: "任务未能进入执行链" });
-  assert.equal(host.tasks.started.length, 1);
-  assert.equal(host.schedule.get(task.id)?.lastRunAt, undefined);
-});
-
-test("私聊注册的定时任务触发时保持 direct 模式", async (t) => {
-  const host = await createHost(t);
-  const task = await host.schedule.register(
-    registerOptions({
-      chatId: "ou_direct",
-      threadId: "",
-      interaction: createInteractionPolicy("direct"),
-    }),
-  );
-
-  await host.schedule.trigger(task.id);
-
-  assert.equal(host.tasks.started[0]?.interaction?.mode, "direct");
-});
-
-test("目标话题 active 时到点触发会跳过并记录", async (t) => {
-  const host = await createHost(t);
-  const options = registerOptions();
-  const task = await host.schedule.register(options);
-
-  // 先用相同地址创建并占用会话，模拟用户任务正在执行。
-  const manager = host.root.sessions.manager;
-  const created = await manager.resolve(
-    {
-      messageId: options.messageId,
-      chatId: options.chatId,
-      threadId: options.threadId,
-      rootId: options.rootId,
-    },
-    options.cliId,
-    options.botId,
-  );
-  await manager.transition(created.session.id, "active");
-
-  const outcome = await host.schedule.trigger(task.id);
-
-  assert.deepEqual(outcome, { status: "skipped", reason: "busy" });
-  assert.equal(host.tasks.started.length, 0);
-  assert.ok(host.schedule.get(task.id)?.lastSkippedAt);
-});
-
-test("目标话题 closed 时到点触发会跳过", async (t) => {
-  const host = await createHost(t);
-  const options = registerOptions();
-  const task = await host.schedule.register(options);
-
-  const manager = host.root.sessions.manager;
-  const created = await manager.resolve(
-    {
-      messageId: options.messageId,
-      chatId: options.chatId,
-      threadId: options.threadId,
-      rootId: options.rootId,
-    },
-    options.cliId,
-    options.botId,
-  );
-  await manager.transition(created.session.id, "closed");
-
-  const outcome = await host.schedule.trigger(task.id);
-
-  assert.deepEqual(outcome, { status: "skipped", reason: "closed" });
-  assert.equal(host.tasks.started.length, 0);
-});
-
-test("remove 删除任务后不再触发", async (t) => {
-  const host = await createHost(t);
-  const task = await host.schedule.register(registerOptions());
-
-  assert.equal(await host.schedule.remove(task.id), true);
-  assert.equal(await host.schedule.remove("sched-999"), false);
-
-  const outcome = await host.schedule.trigger(task.id);
-  assert.deepEqual(outcome, { status: "error", reason: "任务不存在或已停用" });
-  assert.equal(host.tasks.started.length, 0);
-});
-
-test("trigger 对不存在的任务返回错误", async (t) => {
-  const host = await createHost(t);
-  const outcome = await host.schedule.trigger("sched-999");
-  assert.deepEqual(outcome, { status: "error", reason: "任务不存在或已停用" });
-});
-
-test("多个任务按顺序生成稳定递增 ID", async (t) => {
-  const host = await createHost(t);
-  const first = await host.schedule.register(
-    registerOptions({ schedule: "0 9 * * *" }),
-  );
-  const second = await host.schedule.register(
-    registerOptions({ schedule: "每 30 分钟" }),
-  );
-  assert.equal(first.id, "sched-001");
-  assert.equal(second.id, "sched-002");
-  assert.equal(host.schedule.list().length, 2);
-});
-
-// ---------- 命令路由端到端 ----------
 
 const baseBotConfig: BotConfig = {
   id: "testbot",
@@ -513,7 +785,7 @@ function incomingMessage(text: string): IncomingMessage {
   };
 }
 
-/** 用真实 router + 命令插件 + schedule 服务组装完整命令链路。 */
+/** 用真实 router + 命令插件 + 调度器组装完整命令链路。 */
 async function createRoutedHost(t: test.TestContext) {
   const root = new Context();
   const fakeBot = createFakeBot();
@@ -526,15 +798,21 @@ async function createRoutedHost(t: test.TestContext) {
     store: new JsonSessionStore(join(dir, "sessions.json")),
   });
   new SessionsService(root).init(manager);
-  root.plugin(cardsPlugin);
-  root.plugin(commandsPlugin);
-  root.plugin(collaborationPlugin);
-  const schedule = new ScheduleService(root, "Etc/GMT-8");
-  await schedule.init(new JsonScheduleStore(join(dir, "schedules.json")));
+  // 测试未 start() 上下文，root.plugin 只注册不启动；显式构造服务实例。
+  new cardsPlugin.CardsService(root);
+  new commandsPlugin.CommandsService(root);
+  new collaborationPlugin.CollaborationService(root);
+  const runStore = new JsonScheduleRunStore(join(dir, "schedule-runs.json"));
+  const scheduler = new Scheduler({
+    scheduleStore: new JsonScheduleStore(join(dir, "schedules.json")),
+    runStore,
+    dispatcher: async () => ({}),
+  });
+  new ScheduleService(root, scheduler, runStore);
   scheduleCommand.apply(root);
+  schedulesCommand.apply(root);
   routerPlugin.apply(root);
   t.after(async () => {
-    schedule.dispose();
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -544,62 +822,100 @@ async function createRoutedHost(t: test.TestContext) {
     identity: { openId: "bot_open", name: "TestBot" },
   });
 
-  return { root, schedule, tasks, bot: fakeBot.bot, calls: fakeBot.calls };
+  return { root, scheduler, tasks, bot: fakeBot.bot, calls: fakeBot.calls };
 }
 
-test("/schedule add 经 router 派发后创建任务并回复", async (t) => {
+test("/schedule 自然语言经 router 启动任务并引导 schedule_manage", async (t) => {
   const host = await createRoutedHost(t);
   await host.root.parallel(
     "bot/message",
-    incomingMessage('/schedule add "每 30 分钟" 读取 data/logs/error.log'),
+    incomingMessage("/schedule 每小时检查一次服务日志"),
     host.bot,
     baseBotConfig,
   );
 
-  assert.equal(host.schedule.list().length, 1);
-  const task = host.schedule.list()[0]!;
-  assert.equal(task.id, "sched-001");
-  assert.equal(task.expr, "*/30 * * * *");
-  assert.equal(task.prompt, "读取 data/logs/error.log");
-  assert.ok(
-    host.calls.sends.length === 0 && host.tasks.started.length === 0,
-    "命令阶段不应触发执行",
-  );
+  assert.equal(host.tasks.started.length, 1);
+  const requested = host.tasks.started[0]!.requestedPrompt;
+  assert.ok(requested.includes("每小时检查一次服务日志"));
+  assert.ok(requested.includes("schedule_manage"));
 });
 
-test("/schedule list 与 /schedule remove 经 router 派发正常", async (t) => {
+test("/schedules 经 router 回复列表卡片", async (t) => {
   const host = await createRoutedHost(t);
-  await host.schedule.register(registerOptions({ schedule: "每 30 分钟" }));
-  await host.schedule.register(
-    registerOptions({ schedule: "0 9 * * *", messageId: "om_cmd2" }),
-  );
-
+  host.scheduler.create({
+    creatorOpenId: "ou_owner",
+    chatId: "oc_chat",
+    targetBotId: "testbot",
+    prompt: "检查日志",
+    rule: { kind: "interval", everyMs: 3600_000 },
+  });
   await host.root.parallel(
     "bot/message",
-    incomingMessage("/schedule list"),
-    host.bot,
-    baseBotConfig,
-  );
-  await host.root.parallel(
-    "bot/message",
-    incomingMessage("/schedule remove sched-001"),
+    incomingMessage("/schedules"),
     host.bot,
     baseBotConfig,
   );
 
-  const remaining = host.schedule.list();
-  assert.equal(remaining.length, 1);
-  assert.equal(remaining[0]?.id, "sched-002");
+  assert.equal(host.calls.cards.length, 1);
+  assert.equal(host.tasks.started.length, 0);
 });
 
-test("/schedule add 使用非法周期时回复错误且不创建任务", async (t) => {
+test("/schedule pause 直接暂停计划", async (t) => {
   const host = await createRoutedHost(t);
+  const task = host.scheduler.create({
+    creatorOpenId: "ou_owner",
+    chatId: "oc_chat",
+    targetBotId: "testbot",
+    prompt: "检查日志",
+    rule: { kind: "interval", everyMs: 3600_000 },
+  });
   await host.root.parallel(
     "bot/message",
-    incomingMessage('/schedule add "乱七八糟" 读取日志'),
+    incomingMessage(`/schedule pause ${task.id}`),
     host.bot,
     baseBotConfig,
   );
 
-  assert.equal(host.schedule.list().length, 0);
+  assert.equal(host.scheduler.list()[0]?.status, "paused");
+  assert.equal(host.tasks.started.length, 0);
+});
+
+test("/schedule 不能管理其他创建人的计划", async (t) => {
+  const host = await createRoutedHost(t);
+  const task = host.scheduler.create({
+    creatorOpenId: "ou_other",
+    chatId: "oc_chat",
+    targetBotId: "testbot",
+    prompt: "检查日志",
+    rule: { kind: "interval", everyMs: 3600_000 },
+  });
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage(`/schedule pause ${task.id}`),
+    host.bot,
+    baseBotConfig,
+  );
+
+  assert.equal(host.scheduler.list()[0]?.status, "active");
+  assert.equal(host.calls.replies.at(-1), `没有找到定时任务 ${task.id}。`);
+});
+
+test("/schedule run 触发一次执行", async (t) => {
+  const host = await createRoutedHost(t);
+  const task = host.scheduler.create({
+    creatorOpenId: "ou_owner",
+    chatId: "oc_chat",
+    targetBotId: "testbot",
+    prompt: "检查日志",
+    rule: { kind: "interval", everyMs: 3600_000 },
+  });
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage(`/schedule run ${task.id}`),
+    host.bot,
+    baseBotConfig,
+  );
+
+  assert.equal(host.tasks.started.length, 0);
+  assert.ok(host.scheduler.list()[0]?.lastRunAt);
 });
