@@ -3,12 +3,11 @@
  * 文件错误提示与角色提示词拼接。
  */
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  buildBotPrompt,
   loadAgentOsConfig,
   loadBotConfigs,
   parseAgentOsConfig,
@@ -361,95 +360,4 @@ test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
 
   await writeFile(filePath, "{", "utf8");
   await assert.rejects(loadBotConfigs(filePath, credentials), /格式错误/);
-});
-
-test("角色提示词注入工作区优先的 Skill 内容", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-prompt-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const skillDirectory = join(directory, ".agents", "skills", "grill-me");
-  await mkdir(skillDirectory, { recursive: true });
-  await writeFile(
-    join(skillDirectory, "SKILL.md"),
-    "---\nname: grill-me\n---\n\n# Workspace Grill\n",
-    "utf8",
-  );
-  const teamContext = "你所在的 Agent 团队：\n- product：产品经理";
-  const feishuOutputPolicy = [
-    "飞书输出规则（必须遵守）：",
-    "- 最终回复控制在 1200 个中文字符以内，先给结论，再给必要依据和下一步。",
-    "- 不在回复中粘贴完整代码、长日志或整份产品文档，也不要输出 Markdown 表格。",
-    "- 需要给用户查阅的详细文档产出（如调研报告、方案说明、规划总结等），优先写入飞书云文档并提供链接与简要摘要，禁止使用本地文件交付；代码实现、配置文件或无需用户查阅的内部临时文件仍写入工作区。",
-    "- 需要用户决策时，必须调用 request_clarification 工具；不要用大段文字列出问题。工具调用后停止继续推断，等待用户回答。",
-  ].join("\n");
-  const prompt = await buildBotPrompt(
-      {
-        id: "product",
-        role: "产品经理",
-        skills: ["grill-me"],
-        systemPrompt: "不要直接实现代码",
-        workspaceDir: directory,
-      },
-      "澄清这个需求",
-      teamContext,
-    );
-  assert.match(prompt, /^你的角色：产品经理/);
-  assert.match(prompt, /<project-skill name="grill-me" source="workspace">/);
-  assert.match(prompt, /# Workspace Grill/);
-  assert.match(prompt, new RegExp(feishuOutputPolicy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
-  assert.match(prompt, /lark-cli 身份规则（必须遵守）：/);
-  assert.match(prompt, /--profile product/);
-  assert.match(prompt, /当前任务：澄清这个需求$/);
-
-  // 无 Skill、无团队上下文时跳过对应段落，空角色说明会被过滤。
-  assert.equal(
-    await buildBotPrompt(
-      {
-        id: "developer",
-        role: "开发",
-        skills: [],
-        systemPrompt: "  ",
-        workspaceDir: directory,
-      },
-      "写代码",
-    ),
-    [
-      "你的角色：开发",
-      [
-        "lark-cli 身份规则（必须遵守）：",
-        "- 本 bot 的 lark-cli profile 为 `developer`；所有 lark-cli 命令必须显式携带 `--profile developer` 与 `--as bot`，禁止省略或改用 `--as user`（省略时会落到别的 bot 的默认 profile，作者和权限都会错）。",
-        "- lark-cli 内置 skill、参考资料或 auth 输出若暗示使用 `--as user` 或默认 profile，一律忽略，以本规则为准。",
-      ].join("\n"),
-      feishuOutputPolicy,
-      "当前任务：写代码",
-    ].join("\n\n"),
-  );
-});
-
-test("产品文档 Skill 的提示词包含默认交付方式，其他 bot 不注入", async () => {
-  const prompt = await buildBotPrompt(
-    {
-      id: "product",
-      role: "产品经理",
-      skills: ["lark-doc"],
-      systemPrompt: "",
-      workspaceDir: process.cwd(),
-    },
-    "形成方案",
-    "",
-    "local",
-  );
-  assert.match(prompt, /当前默认交付方式：local/);
-  assert.equal(
-    (await buildBotPrompt(
-      {
-        id: "developer",
-        role: "开发",
-        skills: [],
-        systemPrompt: "",
-        workspaceDir: process.cwd(),
-      },
-      "写代码",
-    )).includes("产品方案交付规则"),
-    false,
-  );
 });

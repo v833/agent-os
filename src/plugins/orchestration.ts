@@ -107,22 +107,12 @@ export interface StartOrchestrationOptions {
  * 子任务独立新话题派发，只需子任务 ID 互不相同）。
  */
 function buildDecomposePrompt(
+  ctx: Context,
   members: string[],
   task: string,
   mode: DispatchMode,
 ): string {
-  const assignmentRule =
-    mode === "same-topic"
-      ? "每个子任务的 bot 字段必须从上述成员中选择；每个成员最多承接一个子任务（同一 bot 不能被分配给多个子任务）；"
-      : "每个子任务的 bot 字段必须从上述成员中选择；同一 bot 可以被分配给多个子任务，但每个子任务 id 必须互不相同；";
-  return [
-    "你是任务编排者。请把以下大任务拆解为可并行执行的子任务清单。",
-    `可派发的成员：${members.join("、")}`,
-    `${assignmentRule}子任务应互不依赖、可并行。`,
-    "只输出一个 JSON 对象，不要输出任何其他文字或代码块标记：",
-    '{"tasks":[{"id":"t1","prompt":"子任务描述","bot":"成员id"}]}',
-    `大任务：${task}`,
-  ].join("\n\n");
+  return ctx.prompts.render("orchestration.decompose", { members, task, mode });
 }
 
 /** 编排服务：维护有界运行表、派发子任务并监听任务事件汇总结果。 */
@@ -443,7 +433,7 @@ export class OrchestrationService extends Service {
     const members = this.ctx.config.bots.map((config) => config.id);
     const result = await this.ctx.cli.run({
       adapter,
-      prompt: buildDecomposePrompt(members, prompt, this.dispatchMode),
+      prompt: buildDecomposePrompt(this.ctx, members, prompt, this.dispatchMode),
       cwd: session.workspaceDir,
       // 拆解是编排 bot 的一次独立规划，不复用用户会话上下文，避免污染后续任务。
       timeoutMs: DECOMPOSE_TIMEOUT_MS,
@@ -638,7 +628,7 @@ export class OrchestrationService extends Service {
 }
 
 export const name = "orchestration";
-export const inject = ["lark", "cli", "config", "collaboration"];
+export const inject = ["lark", "cli", "config", "prompts", "collaboration"];
 
 export interface Config {
   /** 子任务派发方式：topic=独立新话题派发（默认），same-topic=当前话题回复派发（P0 降级）。 */

@@ -8,7 +8,7 @@ import { Service, type Context } from "cordis";
 import type { IncomingHttpHeaders } from "node:http";
 import { resolve } from "node:path";
 import { cliExecutionTimeoutMs } from "../cli/runner.js";
-import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
+import { botCliEnvironment } from "../core/bot-registry.js";
 import { interactionPolicyOf } from "../core/interaction-policy.js";
 import { Scheduler, type ScheduledTaskDispatcher } from "../core/scheduler.js";
 import { JsonScheduleRunStore } from "../core/schedule-run-store.js";
@@ -50,7 +50,7 @@ export class ScheduleService extends Service {
 }
 
 export const name = "schedule";
-export const inject = ["config", "cli", "applicationTools"];
+export const inject = ["config", "prompts", "cli", "applicationTools"];
 
 export interface Config {
   /** schedules.json 路径；缺省时使用 data/schedules.json。 */
@@ -91,15 +91,11 @@ export async function apply(ctx: Context, config: Config = {}) {
       botConfig.accessMode ?? "headless",
     );
     const interaction = interactionPolicyOf({});
-    const teamContext =
-      ctx.root.bail("task/prompt-context", botConfig, { interaction }) ?? "";
-    const prompt = await buildBotPrompt(
-      botConfig,
-      `${task.prompt}\n\n（定时任务触发，计划时间：${scheduledFor}）`,
-      teamContext,
-      ctx.config.defaultProductDeliveryMode,
-      { interaction },
-    );
+    const rawTaskPrompt = `${task.prompt}\n\n（定时任务触发，计划时间：${scheduledFor}）`;
+    const prompt = await ctx.prompts.composeTaskPrompt(botConfig, rawTaskPrompt, {
+      interaction,
+      defaultProductDeliveryMode: ctx.config.defaultProductDeliveryMode,
+    });
     const env = {
       ...(botCliEnvironment(botConfig) ?? {}),
       AGENT_OS_CHAT_ID: task.chatId,

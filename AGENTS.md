@@ -51,10 +51,12 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/schedule/productSpec/productComments）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-context、task/cli-environment、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/schedule/productSpec/productComments/prompts）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-compose、task/cli-environment、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
-- `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-context 扩展任务提示词
+- `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-compose 向提示词流水线贡献团队上下文片段
+- `src/plugins/prompts.ts`：prompts 提示词服务插件——集中模板定义、分层覆盖（prompts/ 与 .agents/prompts/）与任务级流水线组装
+- `src/plugins/prompts.test.ts`：提示词服务插件集成测试
 - `src/plugins/sessions.ts`：sessions 服务——把 SessionManager 与 JsonSessionStore 挂到 ctx.sessions
 - `src/plugins/application-tools.ts`：应用工具注册服务——插件声明 stdio MCP Server 及可选 ACP HTTP 入口，执行引擎只消费通用描述
 - `src/plugins/clarification.ts`：澄清插件——启动 loopback HTTP MCP、认领结构化工具调用、展示逐题飞书表单、处理同话题补充并恢复 CLI 会话（流程仅存内存，重启后旧卡失效）
@@ -94,8 +96,11 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 ### 核心与执行引擎（纯函数模块，供服务插件复用）
 
-- `src/core/bot-registry.ts`：多 bot 注册表读取、校验、凭证解析与角色提示词
+- `src/core/bot-registry.ts`：多 bot 注册表读取、校验与凭证解析
 - `src/core/bot-registry.test.ts`：注册表字段、启用过滤、凭证和错误边界测试
+- `src/core/prompt-policies.ts`：提示词策略文案、交互模式下的 Skill 选择与项目 Skill 片段组装
+- `src/core/prompts.ts`：提示词领域模型——模板定义、参数校验、{{var}} 插值、Markdown 模板解析、分层覆盖与流水线片段排序合并
+- `src/core/prompts.test.ts`：提示词核心领域模型测试
 - `src/core/project-skills.ts`：工作区覆盖与 Agent OS 内置 Skill 的查找、读取和提示词复用
 - `src/core/project-skills.test.ts`：Skill 覆盖优先级、内置回退和真实缺失测试
 - `src/core/team-registry.ts`：团队成员注册表、团队上下文与项目 Skill 检查

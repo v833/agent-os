@@ -13,8 +13,14 @@ import {
   CliRunError,
   cliExecutionTimeoutMs,
 } from "../cli/runner.js";
-import { botCliEnvironment, buildBotPrompt } from "../core/bot-registry.js";
-import { interactionPolicyOf } from "../core/interaction-policy.js";
+import {
+  botCliEnvironment,
+  type BotConfig,
+} from "../core/bot-registry.js";
+import {
+  interactionPolicyOf,
+  type InteractionPolicy,
+} from "../core/interaction-policy.js";
 import {
   isRetryRequest,
   resolveRetryPrompt,
@@ -174,20 +180,13 @@ export class TasksService extends Service {
 
     // 503 等错误可能发生在 CLI 返回会话 ID 之前；先保存实际任务，明确重试时才能重放。
     // 先用未包装的原始指令识别“继续执行”，避免角色前缀破坏重试判断。
-    let teamContext: string | undefined;
     let prompt = "";
     try {
-      teamContext = this.ctx.root.bail(
-        "task/prompt-context",
-        botConfig,
-        { interaction },
-      );
-      prompt = await buildBotPrompt(
+      prompt = await this.buildTaskPrompt(
         botConfig,
         resolveRetryPrompt(session, requestedPrompt),
-        teamContext ?? "",
-        this.ctx.config.defaultProductDeliveryMode,
-        { interaction },
+        interaction,
+        session,
       );
       // “继续执行”只消费原始待重试指令，不能把它覆盖成恢复失败后的短语。
       if (
@@ -505,12 +504,11 @@ export class TasksService extends Service {
       const correctionSession =
         this.ctx.sessions.manager.get(session.id) ?? session;
       // 纠正轮沿用本轮私聊/群聊语义（角色与团队上下文策略一致）。
-      const prompt = await buildBotPrompt(
+      const prompt = await this.buildTaskPrompt(
         botConfig,
         correctionPrompt,
-        teamContext ?? "",
-        this.ctx.config.defaultProductDeliveryMode,
-        { interaction },
+        interaction,
+        correctionSession,
       );
       beginCliExecution();
       const corrected = await this.runCliTask(
@@ -885,10 +883,23 @@ export class TasksService extends Service {
       onEvent,
     });
   }
+
+  private async buildTaskPrompt(
+    botConfig: BotConfig,
+    promptText: string,
+    interaction: InteractionPolicy,
+    session: Session,
+  ): Promise<string> {
+    return await this.ctx.prompts.composeTaskPrompt(botConfig, promptText, {
+      interaction,
+      session,
+      defaultProductDeliveryMode: this.ctx.config.defaultProductDeliveryMode,
+    });
+  }
 }
 
 export const name = "tasks";
-export const inject = ["config", "sessions", "cli", "cards"];
+export const inject = ["config", "prompts", "sessions", "cli", "cards"];
 
 export function apply(ctx: Context) {
   // 环境变量属于启动配置；先按实际启用的引擎校验，避免任务进入 active 后才发现格式错误。

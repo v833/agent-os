@@ -5,6 +5,8 @@ plugins:
   - name: config
     config:
       botsPath: config/bots.json
+  # 提示词管理：集中模板定义、分层覆盖（prompts/ 与 .agents/prompts/）与流水线组装
+  - name: prompts
   - name: team
   - name: sessions
   - name: cli

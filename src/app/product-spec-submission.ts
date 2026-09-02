@@ -18,6 +18,8 @@ export interface ProductSpecSubmissionOptions {
   result: CliRunResult;
   /** 没有有效提交时，沿用同一 CLI 会话执行一次纠正。 */
   runCorrection: (prompt: string) => Promise<CliRunResult>;
+  /** 纠正提示词（默认使用 PRODUCT_SPEC_SUBMISSION_CORRECTION_PROMPT）。 */
+  correctionPrompt?: string;
 }
 
 /**
@@ -31,9 +33,9 @@ export async function ensureProductSpecSubmission(
     return options.result;
   }
 
-  const corrected = await options.runCorrection(
-    PRODUCT_SPEC_SUBMISSION_CORRECTION_PROMPT,
-  );
+  const prompt =
+    options.correctionPrompt ?? PRODUCT_SPEC_SUBMISSION_CORRECTION_PROMPT;
+  const corrected = await options.runCorrection(prompt);
   if (!findProductSpecRequest(corrected.toolCalls)) {
     throw new Error(
       "产品方案完成后未调用 request_spec_approval，已纠正一次仍未提交。",

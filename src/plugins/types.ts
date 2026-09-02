@@ -6,7 +6,7 @@
  */
 import type { Context } from "cordis";
 
-import type { BotConfig } from "../core/bot-registry.js";
+import type { BotConfig, ProductDeliveryMode } from "../core/bot-registry.js";
 import type { CollaborationMessage } from "../core/collaboration.js";
 import type { CliRequest, SlashCommand } from "../core/command-parser.js";
 import type { InteractionPolicy } from "../core/interaction-policy.js";
@@ -45,11 +45,15 @@ import type { ProductSpecService } from "./product-spec.js";
 import type { ProductCommentsService } from "./product-comments.js";
 import type { ObservabilityService } from "./observability.js";
 import type { BitableBoardService } from "./bitable-board.js";
+import type { PromptsService, PromptComposeCollector } from "./prompts.js";
+import type { PromptFragment } from "../core/prompts.js";
 
 declare module "cordis" {
   interface Context {
     /** 机器人注册表：加载 config/bots.json 并解析环境变量凭证。 */
     config: ConfigService;
+    /** 提示词管理服务：模板注册、分层覆盖与任务流水线组装。 */
+    prompts: PromptsService;
     /** 团队注册表与团队上下文扩展；移除 team 插件即可下线团队能力。 */
     team: TeamService;
     /** 会话模型：把飞书话题映射为稳定会话，约束生命周期。 */
@@ -104,16 +108,23 @@ declare module "cordis" {
       botConfig: BotConfig,
     ): void | Promise<void>;
     /**
-     * 任务提示词上下文 provider。没有 team 插件时返回 undefined；
-     * team 插件可在插件边界内返回成员名册，不让 tasks 依赖具体团队实现。
-     * interaction.mode 为 direct（用户私聊指挥单个成员）时 team 不注入团队上下文。
+     * 任务提示词流水线组装事件：各插件监听此事件并通过 collector.add(...) 并发贡献 PromptFragment。
+     *
+     * 设计说明（偏离原始返回值设计的理由）：
+     * Cordis 事件机制中 `ctx.parallel` 返回 `Promise<void>`，无法聚合多个插件的返回值；
+     * 若使用 `ctx.serial` / `ctx.bail` 只能获取第一个非 undefined 返回值，无法多插件协同。
+     * 因此采用 Collector 模式：prompts 服务传入收集器容器，所有插件并发注入片段，最终由流水线进行 priority 排序合并。
      */
-    "task/prompt-context"(
+    "task/prompt-compose"(
+      collector: PromptComposeCollector,
       botConfig: BotConfig,
+      taskPrompt: string,
       options: {
         interaction?: InteractionPolicy;
+        session?: Session;
+        defaultProductDeliveryMode?: ProductDeliveryMode;
       },
-    ): string | undefined;
+    ): void | Promise<void>;
     /** 应用工具插件按本轮任务上下文补充 CLI 环境；没有 provider 时不注入。 */
     "task/cli-environment"(
       payload: TaskCliEnvironmentPayload,

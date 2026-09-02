@@ -105,9 +105,11 @@ export class ProductSpecService extends Service {
       return undefined;
     }
     if (!managesProductSpec(payload.botConfig.skills)) return undefined;
+    const correctionPrompt = this.ctx.prompts.render("product.spec-correction");
     const result = await ensureProductSpecSubmission({
       result: payload.result,
       runCorrection: payload.runCorrection,
+      correctionPrompt,
     });
     return result === payload.result ? undefined : { result };
   }
@@ -178,7 +180,7 @@ export class ProductSpecService extends Service {
 }
 
 export const name = "product-spec";
-export const inject = ["applicationTools", "cards"];
+export const inject = ["applicationTools", "prompts", "cards"];
 
 export interface Config {
   /** 产品方案 Flow JSON 路径；默认保存在 data 目录，支持按装配环境覆盖。 */

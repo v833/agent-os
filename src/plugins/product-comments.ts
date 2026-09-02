@@ -9,7 +9,6 @@ import { CliRunError } from "../cli/runner.js";
 import type { CliRunResult } from "../cli/types.js";
 import {
   botCliEnvironment,
-  buildBotPrompt,
   type BotConfig,
 } from "../core/bot-registry.js";
 import { teamInteractionPolicy } from "../core/interaction-policy.js";
@@ -115,16 +114,12 @@ export class ProductCommentsService extends Service {
         session.accessMode ?? "headless",
       );
       const interaction = teamInteractionPolicy();
-      const teamContext = this.ctx.root.bail("task/prompt-context", config, {
+      const rawPrompt = documentCommentPrompt(this.ctx, flow, comment);
+      const prompt = await this.ctx.prompts.composeTaskPrompt(config, rawPrompt, {
         interaction,
+        session,
+        defaultProductDeliveryMode: this.ctx.config.defaultProductDeliveryMode,
       });
-      const prompt = await buildBotPrompt(
-        config,
-        documentCommentPrompt(flow, comment),
-        teamContext ?? "",
-        this.ctx.config.defaultProductDeliveryMode,
-        { interaction },
-      );
       try {
         const result = await this.ctx.cli.run({
           adapter,
@@ -201,11 +196,21 @@ export class ProductCommentsService extends Service {
 }
 
 function documentCommentPrompt(
+  ctx: Context,
   flow: ProductSpecFlow,
   comment: LarkComment,
 ): string {
   if (flow.request.deliveryMode !== "lark-doc") {
     throw new Error("本地产品方案不能处理飞书文档评论");
+  }
+  const promptsService = ctx.root.prompts;
+  if (promptsService) {
+    return promptsService.render("product.comment-followup", {
+      documentUrl: flow.request.documentUrl ?? "",
+      fileType: comment.fileType,
+      commentId: comment.commentId,
+      replyId: comment.replyId,
+    });
   }
   return [
     "用户在待确认的飞书产品方案中通过评论明确提及了你。",
@@ -221,7 +226,7 @@ function documentCommentPrompt(
 }
 
 export const name = "product-comments";
-export const inject = ["config", "sessions", "cli", "lark", "tasks", "productSpec"];
+export const inject = ["config", "prompts", "sessions", "cli", "lark", "tasks", "productSpec"];
 
 export function apply(ctx: Context) {
   const service = new ProductCommentsService(ctx);

@@ -41,6 +41,7 @@ import * as orchestrationActions from "./orchestration/actions.js";
 import * as orchestrationLivePanel from "./orchestration/live-panel.js";
 import * as productSpecPlugin from "./product-spec.js";
 import * as productCommentsPlugin from "./product-comments.js";
+import * as promptsPlugin from "./prompts.js";
 import * as qaGatePlugin from "./qa-gate.js";
 import * as orchestrateCommand from "./commands/orchestrate.js";
 import * as panelCommand from "./commands/panel.js";
@@ -516,6 +517,7 @@ async function createHost(
 
   await Promise.all([
     root.plugin(configPlugin, { bots: configuredBots }),
+    root.plugin(promptsPlugin),
     root.plugin(teamPlugin),
     root.plugin(cliPlugin),
     root.plugin(larkPlugin),
@@ -636,30 +638,32 @@ test("bot/message 把 /team 经 ctx.cards 服务出口生成团队卡片", async
   assert.ok(card.includes("FakeCodex"), "展示默认执行引擎");
 });
 
-test("task/prompt-context：团队外 bot 降级返回 undefined 而不是抛错", async () => {
+test("task/prompt-compose：团队外 bot 降级不注入团队上下文而不是抛错", async () => {
   const host = await createHost();
 
-  // 团队内的成员应拿到团队上下文，作为 tasks 的提示词 provider。
-  const known = host.root.bail("task/prompt-context", baseBotConfig, {
-    interaction: createInteractionPolicy("team"),
-  });
-  assert.ok(
-    known?.includes("你所在的 Agent 团队"),
-    "团队成员应返回团队上下文",
+  // 团队内的成员应拿到团队上下文片段，作为 tasks 的提示词来源。
+  const known = await host.root.prompts.composeTaskPrompt(
+    baseBotConfig,
+    "执行任务",
+    { interaction: createInteractionPolicy("team") },
   );
+  assert.ok(known.includes("你所在的 Agent 团队"), "团队成员应注入团队上下文");
 
   // 用户私聊指挥单个成员时不应注入团队上下文，成员直接按指令干活。
-  const direct = host.root.bail("task/prompt-context", baseBotConfig, {
-    interaction: createInteractionPolicy("direct"),
-  });
-  assert.equal(direct, undefined, "私聊应跳过团队上下文");
+  const direct = await host.root.prompts.composeTaskPrompt(
+    baseBotConfig,
+    "执行任务",
+    { interaction: createInteractionPolicy("direct") },
+  );
+  assert.doesNotMatch(direct, /你所在的 Agent 团队/, "私聊应跳过团队上下文");
 
-  // 不在团队名册中的 bot 必须返回 undefined，不能让 contextFor 的异常打断任务启动。
-  const unknown = host.root.bail("task/prompt-context", {
-    ...baseBotConfig,
-    id: "ghost",
-  }, { interaction: createInteractionPolicy("team") });
-  assert.equal(unknown, undefined);
+  // 不在团队名册中的 bot 必须安静降级，不能让 contextFor 的异常打断任务启动。
+  const unknown = await host.root.prompts.composeTaskPrompt(
+    { ...baseBotConfig, id: "ghost" },
+    "执行任务",
+    { interaction: createInteractionPolicy("team") },
+  );
+  assert.doesNotMatch(unknown, /你所在的 Agent 团队/, "团队外 bot 应跳过团队上下文");
 });
 
 test("CLI 超时仅在显式配置时启用，并支持按引擎覆盖", () => {
