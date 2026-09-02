@@ -29,7 +29,7 @@ export function dispatchTaskToolServer(acpUrl?: string): ApplicationToolServer {
       }
     : { command: process.execPath, args: [server] };
   return {
-    id: "agent_os_dispatch_task",
+    id: "threadpilot_dispatch_task",
     command: invocation.command,
     args: invocation.args,
     tools: [DISPATCH_TASK_TOOL_NAME],

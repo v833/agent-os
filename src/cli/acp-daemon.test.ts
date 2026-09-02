@@ -31,7 +31,7 @@ const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", 
 lines.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") {
-    send({ id: message.id, result: { protocolVersion: 1, agentInfo: { name: "fake", version: process.env.AGENT_OS_TEST_VERSION || "0.3.16" }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } } } });
+    send({ id: message.id, result: { protocolVersion: 1, agentInfo: { name: "fake", version: process.env.THREADPILOT_TEST_VERSION || "0.3.16" }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } } } });
     return;
   }
   if (message.method === "session/new") {
@@ -50,8 +50,8 @@ lines.on("line", (line) => {
     return;
   }
   if (message.method === "session/set_config_option") {
-    if (process.env.AGENT_OS_TEST_CONFIG_FAIL === "1" && !process.env.AGENT_OS_TEST_CONFIG_RELEASED) {
-      process.env.AGENT_OS_TEST_CONFIG_RELEASED = "1";
+    if (process.env.THREADPILOT_TEST_CONFIG_FAIL === "1" && !process.env.THREADPILOT_TEST_CONFIG_RELEASED) {
+      process.env.THREADPILOT_TEST_CONFIG_RELEASED = "1";
       send({ id: message.id, error: { code: -32603, message: "set config failed" } });
       return;
     }
@@ -73,8 +73,8 @@ lines.on("line", (line) => {
     return;
   }
   if (message.method === "session/load") {
-    if (process.env.AGENT_OS_TEST_LOAD_HELD === "1" && !process.env.AGENT_OS_TEST_LOAD_RELEASED) {
-      process.env.AGENT_OS_TEST_LOAD_RELEASED = "1";
+    if (process.env.THREADPILOT_TEST_LOAD_HELD === "1" && !process.env.THREADPILOT_TEST_LOAD_RELEASED) {
+      process.env.THREADPILOT_TEST_LOAD_RELEASED = "1";
       send({ id: message.id, error: { code: -32603, message: "Internal error", data: { details: "Session held by another process" } } });
     } else {
       send({ id: message.id, result: {} });
@@ -94,24 +94,24 @@ lines.on("line", (line) => {
   if (message.method === "session/close") {
     setupLog.push("close");
     const respond = () => send({ id: message.id, result: {} });
-    const delayMs = Number(process.env.AGENT_OS_TEST_CLOSE_DELAY_MS || "0");
+    const delayMs = Number(process.env.THREADPILOT_TEST_CLOSE_DELAY_MS || "0");
     if (delayMs > 0) setTimeout(respond, delayMs);
     else respond();
     return;
   }
   if (message.method !== "session/prompt") return;
   const sessionId = message.params.sessionId;
-  if (process.env.AGENT_OS_TEST_HOLD_PROMPT === "1" && !cancelledSessions.has(sessionId)) {
+  if (process.env.THREADPILOT_TEST_HOLD_PROMPT === "1" && !cancelledSessions.has(sessionId)) {
     heldPrompts.set(sessionId, message.id);
     return;
   }
-  if (process.env.AGENT_OS_TEST_MCP === "1") {
-    send({ method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "mcp-call", title: process.env.AGENT_OS_TEST_MCP_TITLE === "1" ? "agent_os_clarification__request_clarification" : "澄清", ...(process.env.AGENT_OS_TEST_MCP_TITLE === "1" ? {} : { name: "request_clarification" }), status: "in_progress", rawInput: { questions: [] } } } });
+  if (process.env.THREADPILOT_TEST_MCP === "1") {
+    send({ method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "mcp-call", title: process.env.THREADPILOT_TEST_MCP_TITLE === "1" ? "threadpilot_clarification__request_clarification" : "澄清", ...(process.env.THREADPILOT_TEST_MCP_TITLE === "1" ? {} : { name: "request_clarification" }), status: "in_progress", rawInput: { questions: [] } } } });
     send({ method: "session/update", params: { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "mcp-call", status: "completed" } } });
   }
   send({
     method: "session/update",
-    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.AGENT_OS_TEST_PROXY || (cancelledSessions.has(sessionId) ? "cancel-seen" : (process.env.AGENT_OS_TEST_SETUP === "1" ? (setupLog.join("|") + "|cwd=" + sessionCwd) : (process.env.AGENT_OS_TEST_MCP_HEADERS === "1" ? JSON.stringify(mcpHeaders) : (process.env.AGENT_OS_TEST_MCP === "1" ? ("mcp-" + mcpCount) : ("答-" + sessionId))))) } } }
+    params: { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: process.env.THREADPILOT_TEST_PROXY || (cancelledSessions.has(sessionId) ? "cancel-seen" : (process.env.THREADPILOT_TEST_SETUP === "1" ? (setupLog.join("|") + "|cwd=" + sessionCwd) : (process.env.THREADPILOT_TEST_MCP_HEADERS === "1" ? JSON.stringify(mcpHeaders) : (process.env.THREADPILOT_TEST_MCP === "1" ? ("mcp-" + mcpCount) : ("答-" + sessionId))))) } } }
   });
   send({ id: message.id, result: { stopReason: "end_turn", usage: { totalTokens: 10, inputTokens: 5, outputTokens: 5 } } });
 });
@@ -171,7 +171,7 @@ class AcpScriptAdapter implements CliAdapter {
 /** 命令不存在的适配器，用于验证启动失败路径不会泄漏未处理的子进程错误。 */
 class MissingCommandAdapter implements CliAdapter {
   readonly id = "dimagent" as const;
-  readonly command = "dim-agent-os-no-such-command";
+  readonly command = "dim-threadpilot-no-such-command";
   readonly displayName = "测试缺失命令";
   readonly accessMode = "acp" as const;
 
@@ -215,7 +215,7 @@ test("AcpDaemon 常驻复用：多轮任务共享同一子进程", async () => {
 
 test("AcpDaemon 把 Bot 级环境注入常驻子进程", async () => {
   const daemon = new AcpDaemon(new AcpScriptAdapter(), undefined, {
-    AGENT_OS_TEST_PROXY: "proxy-marker",
+    THREADPILOT_TEST_PROXY: "proxy-marker",
   });
   try {
     const result = await daemon.runTurn({ prompt: "检查环境", cwd: process.cwd() });
@@ -228,13 +228,13 @@ test("AcpDaemon 把 Bot 级环境注入常驻子进程", async () => {
 test("AcpDaemon 向 session/new 注入 MCP，并汇总应用工具调用", async () => {
   const adapter = new AcpScriptAdapter(() => [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
     },
   ]);
-  const daemon = new AcpDaemon(adapter, undefined, { AGENT_OS_TEST_MCP: "1" });
+  const daemon = new AcpDaemon(adapter, undefined, { THREADPILOT_TEST_MCP: "1" });
   try {
     const result = await daemon.runTurn({ prompt: "调用澄清", cwd: process.cwd() });
     assert.equal(result.answer, "mcp-1");
@@ -253,7 +253,7 @@ test("AcpDaemon 向 session/new 注入 MCP，并汇总应用工具调用", async
 test("AcpDaemon 每轮用当前 env 生成 HTTP MCP 动态请求头", async () => {
   const adapter = new AcpScriptAdapter(() => [
     {
-      id: "agent_os_schedule_manage",
+      id: "threadpilot_schedule_manage",
       command: process.execPath,
       args: ["server.js"],
       tools: ["schedule_manage"],
@@ -261,40 +261,40 @@ test("AcpDaemon 每轮用当前 env 生成 HTTP MCP 动态请求头", async () =
         type: "http",
         url: "http://127.0.0.1:3101/mcp",
         headersFromEnv: [
-          { name: "x-agent-os-chat-id", env: "AGENT_OS_CHAT_ID" },
-          { name: "x-agent-os-owner-open-id", env: "AGENT_OS_OWNER_OPEN_ID" },
+          { name: "x-threadpilot-chat-id", env: "THREADPILOT_CHAT_ID" },
+          { name: "x-threadpilot-owner-open-id", env: "THREADPILOT_OWNER_OPEN_ID" },
         ],
       },
     },
   ]);
   const daemon = new AcpDaemon(adapter, undefined, {
-    AGENT_OS_TEST_MCP_HEADERS: "1",
+    THREADPILOT_TEST_MCP_HEADERS: "1",
   });
   try {
     const first = await daemon.runTurn({
       prompt: "话题一",
       cwd: process.cwd(),
       env: {
-        AGENT_OS_CHAT_ID: "oc_first",
-        AGENT_OS_OWNER_OPEN_ID: "ou_first",
+        THREADPILOT_CHAT_ID: "oc_first",
+        THREADPILOT_OWNER_OPEN_ID: "ou_first",
       },
     });
     const second = await daemon.runTurn({
       prompt: "话题二",
       cwd: process.cwd(),
       env: {
-        AGENT_OS_CHAT_ID: "oc_second",
-        AGENT_OS_OWNER_OPEN_ID: "ou_second",
+        THREADPILOT_CHAT_ID: "oc_second",
+        THREADPILOT_OWNER_OPEN_ID: "ou_second",
       },
     });
 
     assert.deepEqual(JSON.parse(first.answer), [
-      { name: "x-agent-os-chat-id", value: "oc_first" },
-      { name: "x-agent-os-owner-open-id", value: "ou_first" },
+      { name: "x-threadpilot-chat-id", value: "oc_first" },
+      { name: "x-threadpilot-owner-open-id", value: "ou_first" },
     ]);
     assert.deepEqual(JSON.parse(second.answer), [
-      { name: "x-agent-os-chat-id", value: "oc_second" },
-      { name: "x-agent-os-owner-open-id", value: "ou_second" },
+      { name: "x-threadpilot-chat-id", value: "oc_second" },
+      { name: "x-threadpilot-owner-open-id", value: "ou_second" },
     ]);
   } finally {
     await daemon.close();
@@ -304,15 +304,15 @@ test("AcpDaemon 每轮用当前 env 生成 HTTP MCP 动态请求头", async () =
 test("AcpDaemon 兼容 DimAgent 把 MCP 工具名放在 tool_call.title", async () => {
   const adapter = new AcpScriptAdapter(() => [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
     },
   ]);
   const daemon = new AcpDaemon(adapter, undefined, {
-    AGENT_OS_TEST_MCP: "1",
-    AGENT_OS_TEST_MCP_TITLE: "1",
+    THREADPILOT_TEST_MCP: "1",
+    THREADPILOT_TEST_MCP_TITLE: "1",
   });
   try {
     const result = await daemon.runTurn({ prompt: "调用澄清", cwd: process.cwd() });
@@ -337,7 +337,7 @@ test("AcpDaemon 按 session/new 目录顺序提升权限、模式并覆盖模型
     },
   );
   const daemon = new AcpDaemon(adapter, undefined, {
-    AGENT_OS_TEST_SETUP: "1",
+    THREADPILOT_TEST_SETUP: "1",
   });
   try {
     const result = await daemon.runTurn({ prompt: "检查配置", cwd: "." });
@@ -354,7 +354,7 @@ test("AcpDaemon 会清理配置失败的半配置 session", async () => {
   const daemon = new AcpDaemon(
     new AcpScriptAdapter(() => [], { configOptions: { permission: "full-access" } }),
     undefined,
-    { AGENT_OS_TEST_CONFIG_FAIL: "1", AGENT_OS_TEST_SETUP: "1" },
+    { THREADPILOT_TEST_CONFIG_FAIL: "1", THREADPILOT_TEST_SETUP: "1" },
   );
   try {
     const events: CliEvent[] = [];
@@ -378,7 +378,7 @@ test("AcpDaemon 按适配器声明使用 session/load，并对占用锁有限重
   const daemon = new AcpDaemon(
     new AcpScriptAdapter(() => [], undefined, "load"),
     undefined,
-    { AGENT_OS_TEST_LOAD_HELD: "1" },
+    { THREADPILOT_TEST_LOAD_HELD: "1" },
   );
   try {
     const first = await daemon.runTurn({ prompt: "首轮", cwd: process.cwd() });
@@ -398,7 +398,7 @@ test("AcpDaemon 按 ACP transport 能力过滤不支持的 stdio MCP", async () 
     new AcpScriptAdapter(
       () => [
         {
-          id: "agent_os_clarification",
+          id: "threadpilot_clarification",
           command: process.execPath,
           args: ["server.js"],
           tools: ["request_clarification"],
@@ -410,7 +410,7 @@ test("AcpDaemon 按 ACP transport 能力过滤不支持的 stdio MCP", async () 
       ["http", "sse"],
     ),
     undefined,
-    { AGENT_OS_TEST_MCP: "1" },
+    { THREADPILOT_TEST_MCP: "1" },
   );
   try {
     const result = await daemon.runTurn({ prompt: "调用澄清", cwd: process.cwd() });
@@ -425,7 +425,7 @@ test("AcpDaemon 拒绝低于适配器最低要求的 ACP 版本", async () => {
   const daemon = new AcpDaemon(
     new AcpScriptAdapter(() => [], undefined, undefined, "0.3.10"),
     undefined,
-    { AGENT_OS_TEST_VERSION: "0.3.9" },
+    { THREADPILOT_TEST_VERSION: "0.3.9" },
   );
   try {
     await assert.rejects(
@@ -473,7 +473,7 @@ test("AcpDaemon 空闲回收等待 session/close 时不会复用待关闭连接"
   const daemon = new AcpDaemon(
     new AcpScriptAdapter(),
     1,
-    { AGENT_OS_TEST_CLOSE_DELAY_MS: "150" },
+    { THREADPILOT_TEST_CLOSE_DELAY_MS: "150" },
   );
   try {
     await daemon.runTurn({ prompt: "首轮", cwd: process.cwd() });
@@ -520,7 +520,7 @@ test("AcpDaemon prompt 超时会发送 session/cancel，远端 turn 可继续复
   const daemon = new AcpDaemon(
     new AcpScriptAdapter(),
     undefined,
-    { AGENT_OS_TEST_HOLD_PROMPT: "1" },
+    { THREADPILOT_TEST_HOLD_PROMPT: "1" },
   );
   try {
     await assert.rejects(

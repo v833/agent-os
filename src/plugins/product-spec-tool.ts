@@ -29,7 +29,7 @@ export function productSpecToolServer(acpUrl?: string): ApplicationToolServer {
       }
     : { command: process.execPath, args: [server] };
   return {
-    id: "agent_os_product_spec",
+    id: "threadpilot_product_spec",
     command: invocation.command,
     args: invocation.args,
     tools: [PRODUCT_SPEC_TOOL_NAME],

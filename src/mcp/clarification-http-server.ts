@@ -13,11 +13,11 @@ const DEFAULT_PORT = 0;
 export type ClarificationHttpServer = LoopbackMcpHttpServer;
 
 function configuredPort(): number {
-  const raw = process.env.AGENT_OS_MCP_HTTP_PORT?.trim();
+  const raw = process.env.THREADPILOT_MCP_HTTP_PORT?.trim();
   if (!raw) return DEFAULT_PORT;
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
-    throw new Error(`AGENT_OS_MCP_HTTP_PORT 必须是 0 到 65535 的整数: ${raw}`);
+    throw new Error(`THREADPILOT_MCP_HTTP_PORT 必须是 0 到 65535 的整数: ${raw}`);
   }
   return port;
 }

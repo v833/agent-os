@@ -26,7 +26,7 @@ function session(overrides: Partial<Session> = {}): Session {
 }
 
 async function temporaryStore(t: test.TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-sessions-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-sessions-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = join(directory, "data", "sessions.json");
   return { directory, filePath, store: new JsonSessionStore(filePath) };

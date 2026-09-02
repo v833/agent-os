@@ -29,7 +29,7 @@ export function scheduleManageToolServer(acpUrl?: string): ApplicationToolServer
       }
     : { command: process.execPath, args: [server] };
   return {
-    id: "agent_os_schedule_manage",
+    id: "threadpilot_schedule_manage",
     command: invocation.command,
     args: invocation.args,
     tools: [SCHEDULE_MANAGE_TOOL_NAME],
@@ -39,10 +39,10 @@ export function scheduleManageToolServer(acpUrl?: string): ApplicationToolServer
             type: "http" as const,
             url: acpUrl,
             headersFromEnv: [
-              { name: "x-agent-os-chat-id", env: "AGENT_OS_CHAT_ID" },
+              { name: "x-threadpilot-chat-id", env: "THREADPILOT_CHAT_ID" },
               {
-                name: "x-agent-os-owner-open-id",
-                env: "AGENT_OS_OWNER_OPEN_ID",
+                name: "x-threadpilot-owner-open-id",
+                env: "THREADPILOT_OWNER_OPEN_ID",
               },
             ],
           },

@@ -484,7 +484,7 @@ async function createHost(
   const fakeBot = createFakeBot(connectionState, botFailOptions);
   let cli!: FakeCliService;
   let lark!: FakeLarkService;
-  const sessionsDir = await mkdtemp(join(tmpdir(), "agent-os-host-"));
+  const sessionsDir = await mkdtemp(join(tmpdir(), "threadpilot-host-"));
   tempDirs.push(sessionsDir);
   // 编排安全边界要求不同 bot 使用不同工作目录；测试宿主为每个成员创建隔离目录，
   // 需要验证冲突的用例可在挂载后显式构造同路径配置。
@@ -1694,7 +1694,7 @@ test("协作产品方案继承真人 owner，确认后自动交回 Team Leader",
       identity: { openId: `${config.id}_open`, name: config.id },
     });
   }
-  const storeDir = await mkdtemp(join(tmpdir(), "agent-os-team-product-"));
+  const storeDir = await mkdtemp(join(tmpdir(), "threadpilot-team-product-"));
   tempDirs.push(storeDir);
   await host.root.plugin(productSpecPlugin, {
     storePath: join(storeDir, "flows.json"),
@@ -1848,7 +1848,7 @@ test("直接产品任务确认后按用户选择交给 Team Leader 或仅记录"
       identity: { openId: `${config.id}_open`, name: config.id },
     });
   }
-  const storeDir = await mkdtemp(join(tmpdir(), "agent-os-direct-product-"));
+  const storeDir = await mkdtemp(join(tmpdir(), "threadpilot-direct-product-"));
   tempDirs.push(storeDir);
   await host.root.plugin(productSpecPlugin, {
     storePath: join(storeDir, "flows.json"),
@@ -2212,7 +2212,7 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
     skills: ["grill-me", "lark-doc", "lark-drive"],
   };
   const host = await createHost([productConfig]);
-  const flowDir = await mkdtemp(join(tmpdir(), "agent-os-comment-flow-"));
+  const flowDir = await mkdtemp(join(tmpdir(), "threadpilot-comment-flow-"));
   tempDirs.push(flowDir);
   await host.root.plugin(productSpecPlugin, {
     storePath: join(flowDir, "product-spec-flows.json"),

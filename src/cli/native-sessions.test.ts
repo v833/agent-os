@@ -12,8 +12,8 @@ import { DimagentAdapter } from "./dimagent-adapter.js";
 import { listNativeCliSessions } from "./native-sessions.js";
 
 test("读取 Claude 当前项目会话并过滤其他 cwd", async () => {
-  const root = await mkdtemp(join(tmpdir(), "agent-os-native-sessions-"));
-  const cwd = "C:\\projects\\agent-os";
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-native-sessions-"));
+  const cwd = "C:\\projects\\threadpilot";
   const projectDir = join(root, "projects", cwd.replace(/[^A-Za-z0-9]/g, "-"));
   const previousConfig = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = root;
@@ -60,7 +60,7 @@ test("读取 Claude 当前项目会话并过滤其他 cwd", async () => {
 
 test("Claude 项目目录不存在时返回空列表", async () => {
   const previousConfig = process.env.CLAUDE_CONFIG_DIR;
-  const root = await mkdtemp(join(tmpdir(), "agent-os-native-sessions-empty-"));
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-native-sessions-empty-"));
   process.env.CLAUDE_CONFIG_DIR = join(root, "missing");
   try {
     const sessions = await listNativeCliSessions({

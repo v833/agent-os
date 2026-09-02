@@ -26,7 +26,7 @@ test("空路径会被拒绝", () => {
 });
 
 test("目录校验区分不存在路径、普通文件和真实目录", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-workspace-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-workspace-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = join(directory, "file.txt");
   const childDirectory = join(directory, "project");

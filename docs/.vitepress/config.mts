@@ -20,7 +20,7 @@ export default defineConfig({
       {
         text: '新手指南',
         items: [
-          { text: '产品简介与价值', link: '/guide/what-is-agent-os' },
+          { text: '产品简介与价值', link: '/guide/what-is-threadpilot' },
           { text: '5 分钟快速上手', link: '/guide/getting-started' }
         ]
       },

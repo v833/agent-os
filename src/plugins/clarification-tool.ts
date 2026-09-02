@@ -29,7 +29,7 @@ export function clarificationToolServer(acpUrl?: string): ApplicationToolServer 
       }
     : { command: process.execPath, args: [server] };
   return {
-    id: "agent_os_clarification",
+    id: "threadpilot_clarification",
     command: invocation.command,
     args: invocation.args,
     tools: [CLARIFICATION_TOOL_NAME],

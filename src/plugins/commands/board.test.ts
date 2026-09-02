@@ -71,7 +71,7 @@ function setupTestEnvironment(options: {
   const bitableBoard = new BitableBoardService(root, {
     sync: true,
     pull: false,
-    storagePath: options.storagePath ?? join(tmpdir(), `agent-os-board-command-${randomUUID()}.json`),
+    storagePath: options.storagePath ?? join(tmpdir(), `threadpilot-board-command-${randomUUID()}.json`),
   });
 
   const replies: string[] = [];
@@ -753,7 +753,7 @@ test("未挂载时旧错误卡重试允许重新初始化", async () => {
 
 test("建表成功但挂载失败时错误卡附带已创建的 App Token 且无重试按钮", async () => {
   // storagePath 指向已存在的目录：saveBoardStorage 的 rename 会失败，模拟挂载失败。
-  const dir = mkdtempSync(join(tmpdir(), "agent-os-board-storage-"));
+  const dir = mkdtempSync(join(tmpdir(), "threadpilot-board-storage-"));
   try {
     const { handler, botConfig, session, message, botInstance, root, updatedCards, bitableBoard } =
       setupTestEnvironment({ storagePath: dir });

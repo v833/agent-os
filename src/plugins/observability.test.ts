@@ -205,7 +205,7 @@ test("observability 插件在 Cordis 中挂载并响应 task/result 和 task/fai
 });
 
 test("observability 插件支持 exportToFile 异步写入 JSONL 文件", async () => {
-  const tmpLogPath = join(tmpdir(), `agent-os-trace-test-${Date.now()}.jsonl`);
+  const tmpLogPath = join(tmpdir(), `threadpilot-trace-test-${Date.now()}.jsonl`);
 
   const ctx = new Context();
   new ObservabilityService(ctx, {

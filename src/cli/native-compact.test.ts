@@ -85,11 +85,11 @@ test("原生 compact 把 Bot 级环境注入子进程", async () => {
   await assert.rejects(
     compactCliSession({
       adapter: fakeClaudeAdapter(
-        `process.stderr.write(process.env.AGENT_OS_TEST_PROXY || "missing"); process.exit(1);`,
+        `process.stderr.write(process.env.THREADPILOT_TEST_PROXY || "missing"); process.exit(1);`,
       ),
       sessionId: "claude-session",
       cwd: process.cwd(),
-      env: { AGENT_OS_TEST_PROXY: "proxy-marker" },
+      env: { THREADPILOT_TEST_PROXY: "proxy-marker" },
     }),
     /proxy-marker/,
   );

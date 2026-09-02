@@ -14,7 +14,7 @@ import { workspaceRevision } from "./workspace-revision.js";
 const execFileAsync = promisify(execFile);
 
 test("工作区 revision 覆盖 HEAD、已跟踪改动和未跟踪文件", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-revision-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-revision-"));
   try {
     await execFileAsync("git", ["init", directory]);
     await execFileAsync("git", ["-C", directory, "config", "user.email", "test@example.com"]);

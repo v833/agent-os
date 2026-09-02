@@ -70,7 +70,7 @@ test("contextFor 生成成员名单、Skill 提示与当前身份约束", () => 
 });
 
 test("findMissingSkills 仅报告所有查找位置都缺失的项目 Skill", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-team-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-team-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const missingSkill = `missing-${basename(directory)}`;
 
@@ -105,7 +105,7 @@ test("findMissingSkills 仅报告所有查找位置都缺失的项目 Skill", as
 });
 
 test("product workspace 在仓库外时使用 ThreadPilot 内置 Skill", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-product-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-product-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const registry = new TeamRegistry("product", [
     member("product", {

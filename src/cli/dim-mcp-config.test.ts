@@ -13,14 +13,14 @@ import {
 } from "./dim-mcp-config.js";
 
 const server = {
-  id: "agent_os_clarification",
+  id: "threadpilot_clarification",
   command: process.execPath,
   args: ["server.js"],
   tools: ["request_clarification"],
 } as const;
 
 test("DimAgent MCP 配置保留已有 Server，并可幂等更新 ThreadPilot Server", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "agent-os-dim-mcp-"));
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-dim-mcp-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "v2", "mcp.json");
   await mkdir(join(root, "v2"), { recursive: true });
@@ -29,7 +29,7 @@ test("DimAgent MCP 配置保留已有 Server，并可幂等更新 ThreadPilot Se
     JSON.stringify({
       mcpServers: {
         existing: { command: "existing", args: [] },
-        agent_os_clarification: { command: "old", args: ["old.js"] },
+        threadpilot_clarification: { command: "old", args: ["old.js"] },
       },
       metadata: "preserved",
     }),
@@ -45,14 +45,14 @@ test("DimAgent MCP 配置保留已有 Server，并可幂等更新 ThreadPilot Se
   };
   assert.equal(parsed.metadata, "preserved");
   assert.deepEqual(parsed.mcpServers.existing, { command: "existing", args: [] });
-  assert.deepEqual(parsed.mcpServers.agent_os_clarification, {
+  assert.deepEqual(parsed.mcpServers.threadpilot_clarification, {
     command: process.execPath,
     args: ["server.js"],
   });
 });
 
 test("DimAgent MCP 配置拒绝损坏的 JSON 和非对象 mcpServers", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "agent-os-dim-mcp-invalid-"));
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-dim-mcp-invalid-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "mcp.json");
   await writeFile(configPath, "{", "utf8");
@@ -69,7 +69,7 @@ test("DimAgent MCP 配置拒绝损坏的 JSON 和非对象 mcpServers", async (t
 });
 
 test("没有应用工具时不创建 DimAgent MCP 配置", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "agent-os-dim-mcp-empty-"));
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-dim-mcp-empty-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "mcp.json");
   await ensureDimagentMcpConfig([], configPath);
@@ -77,7 +77,7 @@ test("没有应用工具时不创建 DimAgent MCP 配置", async (t) => {
 });
 
 test("DimAgent headless 使用当前项目的 .mcp.json", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "agent-os-dim-project-mcp-"));
+  const root = await mkdtemp(join(tmpdir(), "threadpilot-dim-project-mcp-"));
   t.after(() => rm(root, { recursive: true, force: true }));
 
   assert.equal(dimagentMcpConfigPath(root), join(root, ".mcp.json"));
@@ -86,7 +86,7 @@ test("DimAgent headless 使用当前项目的 .mcp.json", async (t) => {
   const parsed = JSON.parse(await readFile(join(root, ".mcp.json"), "utf8")) as {
     mcpServers: Record<string, { command: string; args: string[] }>;
   };
-  assert.deepEqual(parsed.mcpServers.agent_os_clarification, {
+  assert.deepEqual(parsed.mcpServers.threadpilot_clarification, {
     command: process.execPath,
     args: ["server.js"],
   });

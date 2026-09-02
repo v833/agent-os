@@ -343,7 +343,7 @@ test("role 必填，skills 去重并校验名称", () => {
 });
 
 test("从文件加载配置并报告缺失文件和 JSON 错误", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-bots-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-bots-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const filePath = join(directory, "bots.json");
   await writeFile(filePath, JSON.stringify(registry()), "utf8");

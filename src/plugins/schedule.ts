@@ -98,8 +98,8 @@ export async function apply(ctx: Context, config: Config = {}) {
     });
     const env = {
       ...(botCliEnvironment(botConfig) ?? {}),
-      AGENT_OS_CHAT_ID: task.chatId,
-      AGENT_OS_OWNER_OPEN_ID: task.creatorOpenId,
+      THREADPILOT_CHAT_ID: task.chatId,
+      THREADPILOT_OWNER_OPEN_ID: task.creatorOpenId,
     };
     console.log(
       `[定时] 触发 ${task.id} → ${task.targetBotId} engine=${adapter.id}（${scheduledFor}）`,
@@ -133,8 +133,8 @@ export async function apply(ctx: Context, config: Config = {}) {
 
   const service = new ScheduleService(ctx, scheduler, runStore);
   ctx.on("task/cli-environment", ({ session, collaboration, senderOpenId }) => ({
-    AGENT_OS_CHAT_ID: session.chatId,
-    AGENT_OS_OWNER_OPEN_ID: collaboration?.ownerOpenId ?? senderOpenId,
+    THREADPILOT_CHAT_ID: session.chatId,
+    THREADPILOT_OWNER_OPEN_ID: collaboration?.ownerOpenId ?? senderOpenId,
   }));
 
   const closeApi = startScheduleApi({
@@ -154,10 +154,10 @@ export async function apply(ctx: Context, config: Config = {}) {
   const httpServer = await startLoopbackMcpHttpServer({
     register: (server, request) =>
       registerScheduleManageTool(server, {
-        chatId: headerValue(request.headers, "x-agent-os-chat-id"),
+        chatId: headerValue(request.headers, "x-threadpilot-chat-id"),
         creatorOpenId: headerValue(
           request.headers,
-          "x-agent-os-owner-open-id",
+          "x-threadpilot-owner-open-id",
         ),
       }),
     label: "定时任务",

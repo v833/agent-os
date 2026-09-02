@@ -156,7 +156,7 @@ test("只接受同一 feature 下的标准 Spec 与 Tickets 路径", () => {
 });
 
 test("只在 Spec 与至少一个 Markdown Ticket 真实落盘后通过", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "agent-os-product-spec-"));
+  const workspace = await mkdtemp(join(tmpdir(), "threadpilot-product-spec-"));
   try {
     const featureDir = join(workspace, ".scratch", "user-detail");
     const ticketsDir = join(featureDir, "issues");
@@ -185,7 +185,7 @@ test("只在 Spec 与至少一个 Markdown Ticket 真实落盘后通过", async 
 });
 
 test("产品文档内容指纹会区分 Spec 或 Ticket 的修改", async () => {
-  const workspace = await mkdtemp(join(tmpdir(), "agent-os-product-revision-"));
+  const workspace = await mkdtemp(join(tmpdir(), "threadpilot-product-revision-"));
   try {
     const featureDir = join(workspace, ".scratch", "revision");
     const ticketsDir = join(featureDir, "issues");
@@ -249,7 +249,7 @@ test("产品方案 Flow 会替换旧待确认状态，并且确认只写入一�
 });
 
 test("云文档 Flow 持久化后可按 Docx token 找回原产品会话", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-product-flow-store-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-product-flow-store-"));
   const filePath = join(directory, "flows.json");
   try {
     const store = new JsonProductSpecFlowStore(filePath);

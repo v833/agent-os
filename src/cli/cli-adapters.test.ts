@@ -238,7 +238,7 @@ test("Claude Code 解析工具结果、最终统计和结果错误", () => {
     adapter.parseEvents(
       JSON.stringify({
         type: "result",
-        result: "项目名是 agent-os",
+        result: "项目名是 threadpilot",
         session_id: "claude-session",
         duration_ms: 1_500,
         num_turns: 2,
@@ -257,7 +257,7 @@ test("Claude Code 解析工具结果、最终统计和结果错误", () => {
     [
       {
         type: "result",
-        answer: "项目名是 agent-os",
+        answer: "项目名是 threadpilot",
         sessionId: "claude-session",
         stats: {
           durationMs: 1_500,
@@ -398,10 +398,10 @@ test("Codex 解析会话、四类工具、上下文、统计和最终回答", ()
     adapter.parseEvents(
       JSON.stringify({
         type: "item.completed",
-        item: { type: "agent_message", text: "项目名是 agent-os" },
+        item: { type: "agent_message", text: "项目名是 threadpilot" },
       }),
     ),
-    [{ type: "result", answer: "项目名是 agent-os" }],
+    [{ type: "result", answer: "项目名是 threadpilot" }],
   );
   assert.deepEqual(
     adapter.parseEvents(
@@ -471,7 +471,7 @@ test("Codex 标记命令失败并解析协议错误", () => {
 test("Claude Code 把已注册应用工具调用翻译成统一的 tool_call 事件", () => {
   const adapter = new ClaudeAdapter(() => [
     {
-      id: "agent_os",
+      id: "threadpilot",
       command: "test",
       args: [],
       tools: ["request_clarification"],
@@ -487,7 +487,7 @@ test("Claude Code 把已注册应用工具调用翻译成统一的 tool_call 事
             {
               type: "tool_use",
               id: "tool-clarify",
-              name: "mcp__agent_os__request_clarification",
+              name: "mcp__threadpilot__request_clarification",
               input: {
                 title: "确认优先级功能范围",
                 questions: [
@@ -511,8 +511,8 @@ test("Claude Code 把已注册应用工具调用翻译成统一的 tool_call 事
       {
         type: "tool_start",
         toolUseId: "tool-clarify",
-        toolName: "mcp__agent_os__request_clarification",
-        label: "调用 mcp__agent_os__request_clarification",
+        toolName: "mcp__threadpilot__request_clarification",
+        label: "调用 mcp__threadpilot__request_clarification",
       },
       {
         type: "tool_call",
@@ -540,7 +540,7 @@ test("Claude Code 把已注册应用工具调用翻译成统一的 tool_call 事
 test("Codex 把已注册应用工具调用翻译成统一的 tool_call 事件", () => {
   const adapter = new CodexAdapter(() => [
     {
-      id: "agent_os",
+      id: "threadpilot",
       command: "test",
       args: [],
       tools: ["request_clarification"],
@@ -554,7 +554,7 @@ test("Codex 把已注册应用工具调用翻译成统一的 tool_call 事件", 
         item: {
           id: "item-clarify",
           type: "mcp_tool_call",
-          server: "agent_os",
+          server: "threadpilot",
           tool: "request_clarification",
           arguments: {
             title: "确认优先级功能范围",
@@ -579,7 +579,7 @@ test("Codex 把已注册应用工具调用翻译成统一的 tool_call 事件", 
         toolUseId: "item-clarify",
         toolName: "MCP",
         label: "调用外部工具",
-        detail: "agent_os.request_clarification",
+        detail: "threadpilot.request_clarification",
       },
       {
         type: "tool_call",

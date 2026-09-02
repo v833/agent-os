@@ -29,7 +29,7 @@ function yamlPath(path: string): string {
 async function withTempDir(
   fn: (dir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-loader-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-loader-"));
   try {
     await fn(dir);
   } finally {

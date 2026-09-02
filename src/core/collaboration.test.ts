@@ -25,7 +25,7 @@ function message(overrides: Partial<CollaborationMessage> = {}): CollaborationMe
     expectedOutput: "给出审查结论",
     round: 1,
     maxRounds: 2,
-    workspaceDir: "C:\\projects\\agent-os",
+    workspaceDir: "C:\\projects\\threadpilot",
     ...overrides,
   };
 }

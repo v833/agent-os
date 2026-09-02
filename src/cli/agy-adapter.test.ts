@@ -129,7 +129,7 @@ test("AgyAdapter 用 state=ACTIVE/DONE 配对工具调用", () => {
 test("AgyAdapter 识别工作区 MCP 的应用工具调用", () => {
   const adapter = new AgyAdapter(() => [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
@@ -145,7 +145,7 @@ test("AgyAdapter 识别工作区 MCP 的应用工具调用", () => {
           step_index: 4,
           state: "ACTIVE",
           step_type: "tool",
-          tool_name: "mcp__agent_os_clarification__request_clarification",
+          tool_name: "mcp__threadpilot_clarification__request_clarification",
           tool_info: {
             parameters: {
               title: "需求澄清",
@@ -159,8 +159,8 @@ test("AgyAdapter 识别工作区 MCP 的应用工具调用", () => {
       {
         type: "tool_start",
         toolUseId: "step-4",
-        toolName: "mcp__agent_os_clarification__request_clarification",
-        label: "调用 mcp__agent_os_clarification__request_clarification",
+        toolName: "mcp__threadpilot_clarification__request_clarification",
+        label: "调用 mcp__threadpilot_clarification__request_clarification",
       },
       {
         type: "tool_call",
@@ -175,7 +175,7 @@ test("AgyAdapter 识别工作区 MCP 的应用工具调用", () => {
 test("AgyAdapter 兼容 tool_name 与 tool_info.name 分开提供 MCP 工具名", () => {
   const adapter = new AgyAdapter(() => [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
@@ -190,7 +190,7 @@ test("AgyAdapter 兼容 tool_name 与 tool_info.name 分开提供 MCP 工具名"
         step_type: "tool",
         tool_name: "MCP",
         tool_info: {
-          name: "agent_os_clarification/request_clarification",
+          name: "threadpilot_clarification/request_clarification",
           parameters: { title: "澄清" },
         },
       },
@@ -205,7 +205,7 @@ test("AgyAdapter 兼容 tool_name 与 tool_info.name 分开提供 MCP 工具名"
 test("AgyAdapter 解析 call_mcp_tool 惰性转发的工具调用并提取内层参数", () => {
   const adapter = new AgyAdapter(() => [
     {
-      id: "agent_os_dispatch_task",
+      id: "threadpilot_dispatch_task",
       command: process.execPath,
       args: ["server.js"],
       tools: ["dispatch_task"],
@@ -222,7 +222,7 @@ test("AgyAdapter 解析 call_mcp_tool 惰性转发的工具调用并提取内层
         tool_info: {
           name: "call_mcp_tool",
           parameters: {
-            ServerName: "agent_os_dispatch_task",
+            ServerName: "threadpilot_dispatch_task",
             ToolName: "dispatch_task",
             Arguments: JSON.stringify({
               targetBotId: "product",

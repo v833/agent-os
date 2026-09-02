@@ -9,14 +9,14 @@ import test from "node:test";
 import { ensureAgyMcpConfig } from "./agy-mcp-config.js";
 
 const server = {
-  id: "agent_os_clarification",
+  id: "threadpilot_clarification",
   command: process.execPath,
   args: ["server.js"],
   tools: ["request_clarification"],
 } as const;
 
 test("agy MCP 配置合并工作区已有 Server，并可幂等更新 ThreadPilot Server", async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), "agent-os-agy-mcp-"));
+  const cwd = await mkdtemp(join(tmpdir(), "threadpilot-agy-mcp-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const configPath = join(cwd, ".agents", "mcp_config.json");
   await mkdir(join(cwd, ".agents"), { recursive: true });
@@ -25,7 +25,7 @@ test("agy MCP 配置合并工作区已有 Server，并可幂等更新 ThreadPilo
     JSON.stringify({
       mcpServers: {
         existing: { command: "existing", args: [] },
-        agent_os_clarification: { command: "old", args: ["old.js"] },
+        threadpilot_clarification: { command: "old", args: ["old.js"] },
       },
       metadata: "preserved",
     }),
@@ -41,14 +41,14 @@ test("agy MCP 配置合并工作区已有 Server，并可幂等更新 ThreadPilo
   };
   assert.equal(parsed.metadata, "preserved");
   assert.deepEqual(parsed.mcpServers.existing, { command: "existing", args: [] });
-  assert.deepEqual(parsed.mcpServers.agent_os_clarification, {
+  assert.deepEqual(parsed.mcpServers.threadpilot_clarification, {
     command: process.execPath,
     args: ["server.js"],
   });
 });
 
 test("agy MCP 配置拒绝损坏的 JSON 和非对象 mcpServers", async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), "agent-os-agy-mcp-invalid-"));
+  const cwd = await mkdtemp(join(tmpdir(), "threadpilot-agy-mcp-invalid-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const configPath = join(cwd, ".agents", "mcp_config.json");
   await mkdir(join(cwd, ".agents"), { recursive: true });
@@ -67,7 +67,7 @@ test("agy MCP 配置拒绝损坏的 JSON 和非对象 mcpServers", async (t) => 
 });
 
 test("没有应用工具时不创建 agy 工作区配置", async (t) => {
-  const cwd = await mkdtemp(join(tmpdir(), "agent-os-agy-mcp-empty-"));
+  const cwd = await mkdtemp(join(tmpdir(), "threadpilot-agy-mcp-empty-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   await ensureAgyMcpConfig(cwd, []);
   await assert.rejects(

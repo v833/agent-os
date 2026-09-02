@@ -132,7 +132,7 @@ test("DimAgent 翻译工具调用与上下文事件", () => {
 test("DimAgent 识别已注册 MCP 工具并翻译为统一 tool_call", () => {
   const adapter = new DimagentAdapter(() => [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
@@ -150,7 +150,7 @@ test("DimAgent 识别已注册 MCP 工具并翻译为统一 tool_call", () => {
         sessionId: sid,
         payload: {
           toolCallId: "call-mcp",
-          toolName: "agent_os_clarification__request_clarification",
+          toolName: "threadpilot_clarification__request_clarification",
           toolInput: { questions: [] },
         },
       }),
@@ -159,8 +159,8 @@ test("DimAgent 识别已注册 MCP 工具并翻译为统一 tool_call", () => {
       {
         type: "tool_start",
         toolUseId: "call-mcp",
-        toolName: "agent_os_clarification__request_clarification",
-        label: "调用 agent_os_clarification__request_clarification",
+        toolName: "threadpilot_clarification__request_clarification",
+        label: "调用 threadpilot_clarification__request_clarification",
         detail: JSON.stringify({ questions: [] }),
       },
       {

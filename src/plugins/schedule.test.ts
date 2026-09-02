@@ -428,7 +428,7 @@ test("start 恢复：running 记录标记 failed，过期 once 记 skipped 并 c
 // ---------- 持久化 ----------
 
 test("JsonScheduleStore 持久化并过滤坏记录", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-store-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-sched-store-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filePath = join(dir, "schedules.json");
   const store = new JsonScheduleStore(filePath);
@@ -446,7 +446,7 @@ test("JsonScheduleStore 持久化并过滤坏记录", async (t) => {
 });
 
 test("非法 Cron 在写入前拒绝，内存与 schedules.json 均不变", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-invalid-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-sched-invalid-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filePath = join(dir, "schedules.json");
   const store = new JsonScheduleStore(filePath);
@@ -471,7 +471,7 @@ test("非法 Cron 在写入前拒绝，内存与 schedules.json 均不变", asyn
 });
 
 test("JsonScheduleRunStore 持久化运行记录", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-runs-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-sched-runs-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filePath = join(dir, "schedule-runs.json");
   const store = new JsonScheduleRunStore(filePath);
@@ -489,7 +489,7 @@ test("JsonScheduleRunStore 持久化运行记录", async (t) => {
 // ---------- watcher ----------
 
 test("reconcileScheduleFile 做新增/更新/删除差异合并", async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-sched-watch-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-sched-watch-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const filePath = join(dir, "schedules.json");
   const scheduler = new Scheduler({
@@ -793,7 +793,7 @@ async function createRoutedHost(t: test.TestContext) {
   new FakeCliService(root);
   const lark = new FakeLarkService(root);
   const tasks = new FakeTasksService(root);
-  const dir = await mkdtemp(join(tmpdir(), "agent-os-schedule-"));
+  const dir = await mkdtemp(join(tmpdir(), "threadpilot-schedule-"));
   const manager = await SessionManager.open({
     store: new JsonSessionStore(join(dir, "sessions.json")),
   });

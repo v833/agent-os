@@ -22,15 +22,15 @@ async function callScheduleManage(
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
 }> {
-  const chatId = context.chatId ?? process.env.AGENT_OS_CHAT_ID;
+  const chatId = context.chatId ?? process.env.THREADPILOT_CHAT_ID;
   const creatorOpenId =
-    context.creatorOpenId ?? process.env.AGENT_OS_OWNER_OPEN_ID;
+    context.creatorOpenId ?? process.env.THREADPILOT_OWNER_OPEN_ID;
   if (!chatId || !creatorOpenId) {
     return {
       content: [
         {
           type: "text",
-          text: "缺少 AGENT_OS_CHAT_ID / AGENT_OS_OWNER_OPEN_ID，MCP 子进程没有拿到当前会话上下文。",
+          text: "缺少 THREADPILOT_CHAT_ID / THREADPILOT_OWNER_OPEN_ID，MCP 子进程没有拿到当前会话上下文。",
         },
       ],
       isError: true,

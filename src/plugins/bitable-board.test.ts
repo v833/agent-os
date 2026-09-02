@@ -1202,7 +1202,7 @@ test("重挂载时清理旧任务的 pending、snapshot 与统计去重状态", 
 });
 
 test("本地持久化失败时热挂载不切换当前看板", async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "agent-os-board-storage-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "threadpilot-board-storage-"));
   try {
     const { service } = setup({ storagePath: tempDir });
     await service.init();
@@ -1391,7 +1391,7 @@ test("看板表失效时标记 degraded、暂停轮询并向配置的群聊发�
 });
 
 test("冷启动从持久化配置恢复 botId/fallbackChatId 并沿用时间", async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "agent-os-board-recovery-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "threadpilot-board-recovery-"));
   const storagePath = join(tempDir, "board.json");
   const now = new Date().toISOString();
   saveBoardStorage({
@@ -1430,7 +1430,7 @@ test("冷启动从持久化配置恢复 botId/fallbackChatId 并沿用时间", a
 });
 
 test("静态配置 appToken 与 tableId 半配置时不读取缓存", async () => {
-  const tempDir = mkdtempSync(join(tmpdir(), "agent-os-board-partial-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "threadpilot-board-partial-"));
   const storagePath = join(tempDir, "board.json");
   saveBoardStorage({
     appToken: "cachedApp",

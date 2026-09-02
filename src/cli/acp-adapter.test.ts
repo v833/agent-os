@@ -10,7 +10,7 @@ import { acpDaemonEnvironment, acpMcpServers } from "./app-tools.js";
 test("AcpAdapter 用配置构造启动参数与展示名", () => {
   const applicationTools = [
     {
-      id: "agent_os_clarification",
+      id: "threadpilot_clarification",
       command: process.execPath,
       args: ["server.js"],
       tools: ["request_clarification"],
@@ -89,8 +89,8 @@ test("ACP daemon 环境剔除动态 HTTP 头变量并保留进程配置", () => 
         type: "http" as const,
         url: "http://127.0.0.1:3101/mcp",
         headersFromEnv: [
-          { name: "x-chat-id", env: "AGENT_OS_CHAT_ID" },
-          { name: "x-owner-id", env: "AGENT_OS_OWNER_OPEN_ID" },
+          { name: "x-chat-id", env: "THREADPILOT_CHAT_ID" },
+          { name: "x-owner-id", env: "THREADPILOT_OWNER_OPEN_ID" },
         ],
       },
     },
@@ -99,8 +99,8 @@ test("ACP daemon 环境剔除动态 HTTP 头变量并保留进程配置", () => 
   assert.deepEqual(
     acpDaemonEnvironment(servers, {
       HTTP_PROXY: "http://127.0.0.1:7890",
-      AGENT_OS_CHAT_ID: "oc_current",
-      AGENT_OS_OWNER_OPEN_ID: "ou_current",
+      THREADPILOT_CHAT_ID: "oc_current",
+      THREADPILOT_OWNER_OPEN_ID: "ou_current",
     }),
     { HTTP_PROXY: "http://127.0.0.1:7890" },
   );

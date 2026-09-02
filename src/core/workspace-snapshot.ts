@@ -164,7 +164,7 @@ export async function createWorkspaceSnapshot(
 ): Promise<WorkspaceSnapshot> {
   const sourceDir = resolve(sourceWorkspaceDir);
   const revision = await workspaceRevision(sourceDir);
-  const parentDir = await mkdtemp(join(tmpdir(), "agent-os-qa-"));
+  const parentDir = await mkdtemp(join(tmpdir(), "threadpilot-qa-"));
   const targetDir = join(parentDir, "workspace");
   let gitWorktree = false;
   let dependenciesLinked = false;

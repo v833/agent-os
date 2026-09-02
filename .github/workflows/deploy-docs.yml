@@ -42,7 +42,7 @@ jobs:
           SOURCE: "docs/.vitepress/dist/"
           REMOTE_HOST: ${{ secrets.SERVER_HOST || '103.240.199.204' }}
           REMOTE_USER: ${{ secrets.SERVER_USER || 'root' }}
-          TARGET: "/opt/agent-os-docs/dist/"
+          TARGET: "/opt/threadpilot-docs/dist/"
           SCRIPT_AFTER: |
-            chmod -R a+rX /opt/agent-os-docs/dist
+            chmod -R a+rX /opt/threadpilot-docs/dist
             echo "Docs updated successfully."

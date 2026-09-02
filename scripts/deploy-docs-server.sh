@@ -2,8 +2,8 @@
 set -e
 
 # 服务器端自动化拉取代码与构建部署脚本
-PROJECT_DIR="/opt/agent-os"
-DOCS_DIST="/opt/agent-os-docs/dist"
+PROJECT_DIR="/opt/threadpilot"
+DOCS_DIST="/opt/threadpilot-docs/dist"
 
 echo "===> Pulling latest code..."
 cd "$PROJECT_DIR"

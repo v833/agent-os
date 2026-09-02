@@ -13,7 +13,7 @@ import {
 } from "./project-skills.js";
 
 test("工作区 .agents Skill 优先于 .claude 与 ThreadPilot 内置版本", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const agentsSkill = join(
     directory,
@@ -41,7 +41,7 @@ test("工作区 .agents Skill 优先于 .claude 与 ThreadPilot 内置版本", a
 });
 
 test("工作区没有同名 Skill 时回退到 ThreadPilot 内置版本", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
 
   const resolved = await resolveProjectSkill(directory, "to-spec");
@@ -54,7 +54,7 @@ test("工作区没有同名 Skill 时回退到 ThreadPilot 内置版本", async 
 });
 
 test("工作区和内置目录都不存在时返回完整查找路径", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const missingSkill = `missing-${basename(directory)}`;
 

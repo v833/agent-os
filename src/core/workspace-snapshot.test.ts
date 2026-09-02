@@ -14,7 +14,7 @@ import { createWorkspaceSnapshot } from "./workspace-snapshot.js";
 const execFileAsync = promisify(execFile);
 
 test("Git 工作区快照固定 dirty 内容并安全复用依赖目录", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "agent-os-snapshot-source-"));
+  const directory = await mkdtemp(join(tmpdir(), "threadpilot-snapshot-source-"));
   try {
     await execFileAsync("git", ["init", directory]);
     await execFileAsync("git", ["-C", directory, "config", "user.email", "test@example.com"]);
