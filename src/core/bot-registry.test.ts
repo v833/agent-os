@@ -1,6 +1,6 @@
 /**
  * Bot 注册表测试：验证团队字段、重复 ID、启用过滤、环境凭证解析、
- * 文件错误提示与角色提示词拼接。
+ * 文件错误提示与配置边界。
  */
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";

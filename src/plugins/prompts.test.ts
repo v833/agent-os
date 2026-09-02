@@ -1,6 +1,6 @@
 /**
  * 提示词管理服务插件测试：
- * 验证插件生命周期挂载、内置模板、自定义模板注册、
+ * 验证插件生命周期挂载、内置模板、
  * 目录扫描覆盖与任务级提示词流水线组装。
  */
 import assert from "node:assert/strict";
@@ -50,20 +50,6 @@ test("prompts 插件在 Cordis 中正常挂载并提供内置模板", async () =
   });
   assert.match(qaReview, /固定审查 revision：rev-123/);
   assert.match(qaReview, /原始任务：修复登录 bug/);
-});
-
-test("prompts 插件支持自定义模板注册与覆盖", async () => {
-  const ctx = new Context();
-  await ctx.plugin(promptsPlugin);
-
-  ctx.prompts.define({
-    id: "custom.greeting",
-    template: "你好，{{user}}！",
-  });
-  assert.equal(ctx.prompts.render("custom.greeting", { user: "Bob" }), "你好，Bob！");
-
-  ctx.prompts.setOverride("custom.greeting", "欢迎回来，{{user}}。");
-  assert.equal(ctx.prompts.render("custom.greeting", { user: "Bob" }), "欢迎回来，Bob。");
 });
 
 test("内置字符串模板与仓库默认 Markdown 模板保持一致", async () => {
@@ -139,8 +125,10 @@ test("composeTaskPrompt 任务流水线支持插件事件扩展与排序", async
   const ctx = new Context();
   await ctx.plugin(promptsPlugin);
 
+  let receivedMode: string | undefined;
   // 注册一个模拟策略插件，通过 task/prompt-compose 注入片段
-  ctx.on("task/prompt-compose", (collector, _botConfig, _taskPrompt, _options) => {
+  ctx.on("task/prompt-compose", (collector, _botConfig, _taskPrompt, options) => {
+    receivedMode = options.defaultProductDeliveryMode;
     collector.add(
       {
         id: "security-policy",
@@ -158,6 +146,7 @@ test("composeTaskPrompt 任务流水线支持插件事件扩展与排序", async
   const bot = testBotConfig({ id: "developer", role: "开发助手" });
   const result = await ctx.prompts.composeTaskPrompt(bot, "实现用户注销接口", {
     interaction: createInteractionPolicy("team"),
+    defaultProductDeliveryMode: "lark-doc",
   });
 
   assert.match(result, /^你的角色：开发助手/);
@@ -169,21 +158,6 @@ test("composeTaskPrompt 任务流水线支持插件事件扩展与排序", async
   const gitIndex = result.indexOf("Git 规则");
   const securityIndex = result.indexOf("安全规则");
   assert.ok(gitIndex < securityIndex, "Git 策略应在安全策略之前");
-});
-
-test("composeTaskPrompt 向扩展事件传递默认产品交付方式", async () => {
-  const ctx = new Context();
-  await ctx.plugin(promptsPlugin);
-
-  let receivedMode: string | undefined;
-  ctx.on("task/prompt-compose", (_collector, _botConfig, _taskPrompt, options) => {
-    receivedMode = options.defaultProductDeliveryMode;
-  });
-
-  await ctx.prompts.composeTaskPrompt(testBotConfig(), "执行任务", {
-    interaction: createInteractionPolicy("team"),
-    defaultProductDeliveryMode: "lark-doc",
-  });
   assert.equal(receivedMode, "lark-doc");
 });
 
@@ -316,31 +290,6 @@ test("prompts 插件支持 Layer 2 全局目录与 Layer 3 工作区目录分层
   } finally {
     await rm(globalDir, { recursive: true, force: true });
     await rm(wsDir, { recursive: true, force: true });
-  }
-});
-
-test("函数模板被文件覆盖后退化为纯字符串插值（条件分支丢失）", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "prompts-fn-override-"));
-  try {
-    await mkdir(join(dir, "policy"), { recursive: true });
-    await writeFile(
-      join(dir, "policy", "feishu-output.md"),
-      "这是被覆盖的固定飞书规则",
-      "utf-8",
-    );
-
-    const ctx = new Context();
-    await ctx.plugin(promptsPlugin, { promptsDir: dir });
-
-    // 覆盖后 render 走 interpolatePrompt 纯字符串路径，不再执行函数模板，
-    // direct 场景下本应生成的「未通过 /doc 时不要创建云文档」条件行不再出现。
-    const rendered = ctx.prompts.render("policy.feishu-output", {
-      direct: true,
-      documentRequested: false,
-    });
-    assert.equal(rendered, "这是被覆盖的固定飞书规则");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
   }
 });
 

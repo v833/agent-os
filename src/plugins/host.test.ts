@@ -1327,7 +1327,7 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   await waitFor(() => host.cli.captured !== undefined);
   assert.ok(
     host.cli.captured?.prompt.includes("你所在的 Agent 团队"),
-    "team 插件应通过 prompt-context provider 注入团队上下文",
+    "team 插件应通过 task/prompt-compose 注入团队上下文",
   );
   assert.ok(startedTraceId, "CLI 启动前应广播 task/started");
 

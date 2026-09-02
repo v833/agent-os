@@ -40,7 +40,7 @@ test("interpolatePrompt 基础变量与嵌套变量插值", () => {
   assert.equal(result, "你好，Alice！欢迎使用 Agent OS v1.0。未定义字段：。");
 });
 
-test("parsePromptMarkdown 解析带 Frontmatter 的 Markdown 模板", () => {
+test("parsePromptMarkdown 解析有无 Frontmatter 的 Markdown 模板", () => {
   const raw = `---
 description: 测试提示词
 version: 1.0
@@ -52,13 +52,10 @@ version: 1.0
   assert.equal(parsed.metadata.description, "测试提示词");
   assert.equal(parsed.metadata.version, "1.0");
   assert.equal(parsed.template, "这是正文：{{task}}\n第二行内容。");
-});
 
-test("parsePromptMarkdown 解析无 Frontmatter 的纯 Markdown", () => {
-  const raw = "纯正文提示词\n第二行";
-  const parsed = parsePromptMarkdown(raw);
-  assert.deepEqual(parsed.metadata, {});
-  assert.equal(parsed.template, "纯正文提示词\n第二行");
+  const plain = parsePromptMarkdown("纯正文提示词\n第二行");
+  assert.deepEqual(plain.metadata, {});
+  assert.equal(plain.template, "纯正文提示词\n第二行");
 });
 
 test("composePromptFragments 按 priority 排序并过滤空值", () => {
@@ -104,56 +101,60 @@ test("PromptRegistry 支持函数模板与 Schema 校验", () => {
   assert.throws(() => registry.render("calc", { a: "not_number" as any, b: 20 }), /expected number/i);
 });
 
-test("PromptRegistry 支持覆盖模板（Override 优先）", () => {
+test("PromptRegistry 分层覆盖优先级、清理与回退", () => {
   const registry = new PromptRegistry();
   registry.define({
     id: "qa.review",
-    template: "默认审查规则：{{revision}}",
+    template: "Layer 1: 内置策略：{{revision}}",
   });
-
-  assert.equal(registry.render("qa.review", { revision: "rev-1" }), "默认审查规则：rev-1");
-
-  registry.setOverride("qa.review", "全局覆盖审查规则：{{revision}}", "global");
-  assert.equal(registry.render("qa.review", { revision: "rev-1" }), "全局覆盖审查规则：rev-1");
-  assert.equal(registry.getLayer("qa.review"), "global");
-
-  registry.removeOverride("qa.review");
-  assert.equal(registry.render("qa.review", { revision: "rev-1" }), "默认审查规则：rev-1");
   assert.equal(registry.getLayer("qa.review"), "builtin");
-});
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 1: 内置策略：rev-1",
+  );
 
-test("PromptRegistry 分层覆盖优先级（builtin < global < workspace）判定与清理", () => {
-  const registry = new PromptRegistry();
-  registry.define({
-    id: "policy.output",
-    template: "Layer 1: 内置策略",
-  });
-  assert.equal(registry.getLayer("policy.output"), "builtin");
-  assert.equal(registry.render("policy.output"), "Layer 1: 内置策略");
-
-  // Global 覆盖 Builtin
-  const globalOk = registry.setOverride("policy.output", "Layer 2: 全局策略", "global");
+  const globalOk = registry.setOverride(
+    "qa.review",
+    "Layer 2: 全局策略：{{revision}}",
+    "global",
+  );
   assert.equal(globalOk, true);
-  assert.equal(registry.getLayer("policy.output"), "global");
-  assert.equal(registry.render("policy.output"), "Layer 2: 全局策略");
+  assert.equal(registry.getLayer("qa.review"), "global");
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 2: 全局策略：rev-1",
+  );
 
-  // Workspace 覆盖 Global
-  const wsOk = registry.setOverride("policy.output", "Layer 3: 工作区策略", "workspace");
+  const wsOk = registry.setOverride(
+    "qa.review",
+    "Layer 3: 工作区策略：{{revision}}",
+    "workspace",
+  );
   assert.equal(wsOk, true);
-  assert.equal(registry.getLayer("policy.output"), "workspace");
-  assert.equal(registry.render("policy.output"), "Layer 3: 工作区策略");
+  assert.equal(registry.getLayer("qa.review"), "workspace");
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 3: 工作区策略：rev-1",
+  );
 
-  // 尝试用较低的 Global 覆盖已存在的 Workspace（应被拒绝）
-  const lowerOk = registry.setOverride("policy.output", "尝试降级覆盖", "global");
+  const lowerOk = registry.setOverride("qa.review", "尝试降级覆盖", "global");
   assert.equal(lowerOk, false);
-  assert.equal(registry.render("policy.output"), "Layer 3: 工作区策略");
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 3: 工作区策略：rev-1",
+  );
 
-  // 清除 workspace 层后，回退到仍然存在的 global 层
-  registry.clearOverrides("workspace");
-  assert.equal(registry.getLayer("policy.output"), "global");
-  assert.equal(registry.render("policy.output"), "Layer 2: 全局策略");
+  assert.equal(registry.removeOverride("qa.review"), true);
+  assert.equal(registry.getLayer("qa.review"), "global");
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 2: 全局策略：rev-1",
+  );
 
   registry.clearOverrides("global");
-  assert.equal(registry.getLayer("policy.output"), "builtin");
-  assert.equal(registry.render("policy.output"), "Layer 1: 内置策略");
+  assert.equal(registry.getLayer("qa.review"), "builtin");
+  assert.equal(
+    registry.render("qa.review", { revision: "rev-1" }),
+    "Layer 1: 内置策略：rev-1",
+  );
 });
