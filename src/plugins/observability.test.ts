@@ -290,7 +290,7 @@ test("/metrics 命令插件正确响应飞书大盘请求并支持子命令", as
   });
 
   assert.equal(replies.length, 1);
-  assert.match(replies[0], /Agent OS 可观测性大盘/);
+  assert.match(replies[0], /ThreadPilot 可观测性大盘/);
   assert.match(replies[0], /developer/);
   assert.match(replies[0], /任务总量：1/);
   assert.doesNotMatch(replies[0], /10,700/);

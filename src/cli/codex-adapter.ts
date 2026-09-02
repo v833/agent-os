@@ -149,7 +149,7 @@ function appServerError(message: AppServerMessage): string | undefined {
     : "Codex 会话列表读取失败";
 }
 
-/** 将 Codex 的命令行和 JSONL 协议适配为 Agent OS 公共事件。 */
+/** 将 Codex 的命令行和 JSONL 协议适配为 ThreadPilot 公共事件。 */
 export class CodexAdapter implements CliAdapter {
   readonly id = "codex" as const;
   readonly command = "codex";
@@ -323,8 +323,8 @@ export class CodexAdapter implements CliAdapter {
         method: "initialize",
         params: {
           clientInfo: {
-            name: "agent_os",
-            title: "Agent OS",
+            name: "threadpilot",
+            title: "ThreadPilot",
             version: "0.1.0",
           },
         },

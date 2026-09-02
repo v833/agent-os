@@ -37,7 +37,7 @@ export async function startLoopbackMcpHttpServer(
       return;
     }
 
-    const mcpServer = new McpServer({ name: "agent-os", version: "1.0.0" });
+    const mcpServer = new McpServer({ name: "threadpilot", version: "1.0.0" });
     options.register(mcpServer, request);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
@@ -81,7 +81,7 @@ export async function startLoopbackMcpHttpServer(
     httpServer.once("listening", onListening);
     httpServer.listen(options.port ?? 0, HOST);
   });
-  // 插件测试和 Agent OS 退出时不一定显式 dispose 根 Context，loopback 服务不应阻止退出。
+  // 插件测试和 ThreadPilot 退出时不一定显式 dispose 根 Context，loopback 服务不应阻止退出。
   httpServer.unref();
   const address = httpServer.address() as AddressInfo;
   return {

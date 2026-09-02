@@ -1,10 +1,12 @@
-# Agent OS
+# ThreadPilot
+
+> 在飞书话题里，指挥你的 AI 编程团队。
 
 当前阶段支持从飞书话题真实调度 Codex、Claude Code、DimAgent 或 agy，并用同一张卡片实时展示当前动作、工具轨迹、耗时和上下文；成功后答案回到卡片正文，任务也可由发起人随时停止。同一话题会续接 CLI 上下文，会话和恢复指针都可跨进程重启恢复。一个进程可以按注册表启动多台职责不同的 bot，每台 bot 使用独立凭证、默认引擎、接入模式和角色说明，同时保留 `@` 提及、富文本代码以及图片和文件下载能力。
 
 ## Cordis 插件架构（一切皆为插件）
 
-插件化设计：运行中的 Agent OS 本质上是一个 Cordis 根 Context，平台、执行引擎、斜杠命令、会话、任务编排和 bot 协作都是挂载在它上面的插件，通过 `ctx.<service>` 与类型化事件协作，而不是互相导入具体实现。
+插件化设计：运行中的 ThreadPilot 本质上是一个 Cordis 根 Context，平台、执行引擎、斜杠命令、会话、任务编排和 bot 协作都是挂载在它上面的插件，通过 `ctx.<service>` 与类型化事件协作，而不是互相导入具体实现。
 
 - **插件装配**：`cordis.yml` 声明启用哪些插件及参数。移除一个条目或设置 `disabled: true` 即可下线对应能力；新增能力只需写一个新插件并在 `src/plugins/loader.ts` 的注册表里登记名字。
 - **服务**：`ctx.config`（bot 注册表）、`ctx.sessions`（会话模型）、`ctx.cli`（执行引擎与调度）、`ctx.lark`（飞书平台）、`ctx.cards`（卡片渲染）、`ctx.commands`（斜杠命令）、`ctx.tasks`（任务编排）、`ctx.schedule`（定时任务）、`ctx.collaboration`（bot 协作）、`ctx.orchestration`（多话题并行编排）。消费方通过 `inject` 声明依赖，Cordis 按依赖自动决定启动顺序。
@@ -71,7 +73,7 @@ plugins:
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；可选的 `defaultProductDeliveryMode` 为 `local` 或 `lark-doc`，省略时保持兼容旧版本的 `local`；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`）。Skill 按当前 workspace 的 `.agents/skills`、`.claude/skills`、Agent OS 内置 `.agents/skills`，再到用户级 `~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills` 的顺序查找，workspace 同名 Skill 可以覆盖内置版本；任务启动时会把最终解析到的内容注入提示词。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；可选的 `defaultProductDeliveryMode` 为 `local` 或 `lark-doc`，省略时保持兼容旧版本的 `local`；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`）。Skill 按当前 workspace 的 `.agents/skills`、`.claude/skills`、ThreadPilot 内置 `.agents/skills`，再到用户级 `~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills` 的顺序查找，workspace 同名 Skill 可以覆盖内置版本；任务启动时会把最终解析到的内容注入提示词。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -137,7 +139,7 @@ Copy-Item config/bots.example.json config/bots.json
 
 ## lark-cli 多应用（profile）与授权流程
 
-Agent 使用 `lark-cli` 操作飞书云文档时，必须按“一个 bot = 一个 profile = 一个应用”工作，否则会出现文档归属错误（落到别的 bot 应用）或身份错误（以 `--as user` 创建时作者变成授权用户本人，且机器人在文档中不可被 @）。以下流程在首次部署或新增/更换 bot 时执行一次；配置完成后，Agent OS 会把 `--profile <botId> --as bot` 写进每个 bot 的任务提示词，无需手动干预。
+Agent 使用 `lark-cli` 操作飞书云文档时，必须按“一个 bot = 一个 profile = 一个应用”工作，否则会出现文档归属错误（落到别的 bot 应用）或身份错误（以 `--as user` 创建时作者变成授权用户本人，且机器人在文档中不可被 @）。以下流程在首次部署或新增/更换 bot 时执行一次；配置完成后，ThreadPilot 会把 `--profile <botId> --as bot` 写进每个 bot 的任务提示词，无需手动干预。
 
 ### 1. 为每台 bot 添加 profile
 
@@ -247,7 +249,7 @@ claude
 
 首次运行 `claude` 时完成 Anthropic 登录。使用兼容模型服务时，把供应商地址、认证令牌和模型配置保存在各 CLI 的用户级配置中，也可以使用 CC Switch 切换服务；不要把模型密钥写入项目或提交仓库。
 
-飞书无法展示 Claude Code 的交互式权限确认，因此 Agent OS 会以 `--dangerously-skip-permissions` 无人值守运行 Claude。只应把 bot 指向明确可信、可随时回退的工作目录。
+飞书无法展示 Claude Code 的交互式权限确认，因此 ThreadPilot 会以 `--dangerously-skip-permissions` 无人值守运行 Claude。只应把 bot 指向明确可信、可随时回退的工作目录。
 
 每台 bot 的默认工作目录和新话题默认引擎由 `config/bots.json` 决定：
 
@@ -259,7 +261,7 @@ claude
 }
 ```
 
-- `workspace` 可以填写相对路径或绝对路径；相对路径从 Agent OS 启动目录解析，未填写时兼容读取 `CLI_WORKDIR`、`CLAUDE_WORKDIR`，最后回退当前目录。
+- `workspace` 可以填写相对路径或绝对路径；相对路径从 ThreadPilot 启动目录解析，未填写时兼容读取 `CLI_WORKDIR`、`CLAUDE_WORKDIR`，最后回退当前目录。
 - 工作目录决定 CLI 读取、修改和执行命令的项目，启动时会检查路径存在且是文件夹。
 - 话题创建时复制 bot 的默认目录；同一 bot 的不同话题可以分别使用不同项目。
 - 在话题中发送 `/cd` 查看目录，发送 `/cd <目录>` 切换目录。相对路径以当前话题目录为基准，目录变化会清除旧 CLI 会话，下一条任务重新建立上下文。
@@ -269,7 +271,7 @@ Codex 通过 `codex exec --json --sandbox danger-full-access --skip-git-repo-che
 
 ### Antigravity（agy headless）
 
-安装并完成 agy 登录后，可在 `config/bots.json` 中把 bot 的 `defaultCli` 设置为 `agy`。agy 的 `-p/--print` headless 模式会加载 MCP；Agent OS 每轮启动前会把插件注册的 stdio Server 合并到当前工作区 `.agents/mcp_config.json`，保留用户已有的其他 Server，因此 `request_clarification` 也能进入飞书表单链路。agy 的全局 MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
+安装并完成 agy 登录后，可在 `config/bots.json` 中把 bot 的 `defaultCli` 设置为 `agy`。agy 的 `-p/--print` headless 模式会加载 MCP；ThreadPilot 每轮启动前会把插件注册的 stdio Server 合并到当前工作区 `.agents/mcp_config.json`，保留用户已有的其他 Server，因此 `request_clarification` 也能进入飞书表单链路。agy 的全局 MCP 配置仍位于 `~/.gemini/config/mcp_config.json`。
 
 ```powershell
 agy --version
@@ -281,7 +283,7 @@ agy 当前没有原生 `/compact` 协议；话题仍可发送普通任务继续�
 
 #### agy 登录与「登录卡片」（auth 插件）
 
-agy 未登录 Google 账号时，headless 任务会以 `Authentication required ...` 失败。启用 auth 插件（`cordis.yml` 中 `- name: auth`）后，Agent OS 会在失败话题里补发登录卡片：用户打开卡片上的授权链接，把授权码粘贴到输入框并点「确认并登录」，auth 插件会通过 ConPTY 把授权码注入 agy 完成登录（agy 只在真实 TTY 上接受粘贴，普通管道 stdin 会被忽略）。登录成功后令牌写入 `~/.gemini/antigravity-cli/antigravity-oauth-token`，之后 headless 免登录运行。
+agy 未登录 Google 账号时，headless 任务会以 `Authentication required ...` 失败。启用 auth 插件（`cordis.yml` 中 `- name: auth`）后，ThreadPilot 会在失败话题里补发登录卡片：用户打开卡片上的授权链接，把授权码粘贴到输入框并点「确认并登录」，auth 插件会通过 ConPTY 把授权码注入 agy 完成登录（agy 只在真实 TTY 上接受粘贴，普通管道 stdin 会被忽略）。登录成功后令牌写入 `~/.gemini/antigravity-cli/antigravity-oauth-token`，之后 headless 免登录运行。
 
 - 登录执行器由 `AgyAdapter.login()` 提供（`src/cli/agy-adapter.ts`），auth 插件不感知引擎细节；其他引擎可按 `CliAdapter` 的可选协议 `isAuthRequired` / `login` 接入同类能力。
 - 授权码有效期短（通常几分钟），超时后需要重新生成；提交后卡片会流转「登录中 → 成功/失败」，失败可修改后重新提交。
@@ -290,7 +292,7 @@ agy 未登录 Google 账号时，headless 任务会以 `Authentication required 
 
 #### DimAgent 登录与「登录卡片」（auth 插件）
 
-DimAgent 未登录平台账号时，任务会以 `Not signed in to DimAgent` 失败。启用 auth 插件后，Agent OS 会在失败话题里补发登录卡片：点击「确认并登录」即启动设备码流程（`dim auth login --device-login`），卡片会实时展示授权链接与设备码，用户在浏览器完成授权后自动完成登录（无需输入任何 key）。凭据写入 `~/.dimcode/v2/auth.json`，之后 headless / ACP 免登录运行。登录执行器由 `DimagentAdapter.login()` 提供（`src/cli/dimagent-adapter.ts`），声明 `loginMode: "device"`；auth 插件按此渲染“无输入框 + 浏览器授权”的卡片形态。
+DimAgent 未登录平台账号时，任务会以 `Not signed in to DimAgent` 失败。启用 auth 插件后，ThreadPilot 会在失败话题里补发登录卡片：点击「确认并登录」即启动设备码流程（`dim auth login --device-login`），卡片会实时展示授权链接与设备码，用户在浏览器完成授权后自动完成登录（无需输入任何 key）。凭据写入 `~/.dimcode/v2/auth.json`，之后 headless / ACP 免登录运行。登录执行器由 `DimagentAdapter.login()` 提供（`src/cli/dimagent-adapter.ts`），声明 `loginMode: "device"`；auth 插件按此渲染“无输入框 + 浏览器授权”的卡片形态。
 
 安装并先在交互界面完成 provider、模型和 MCP 配置：
 
@@ -301,7 +303,7 @@ dim
 
 DimAgent 的官方 CLI 入口是 `dim`；如果使用自定义命令名，可在 `.env` 中通过 `DIMAGENT_COMMAND` 覆盖。
 
-官方 CLI 支持 stdio 与 HTTP MCP：`dim mcp add` 管理 `~/.dimcode/v2/mcp.json`，项目级配置为 `<project>/.mcp.json`；`dim exec` 默认加载配置中的 MCP，也可用 `--mcp-server <id>` 选择 Server。Agent OS 每轮 headless 执行前会把 `request_clarification` Server 增量写入当前项目的 `.mcp.json`，保留已有 Server；设置 `DIMAGENT_MCP_CONFIG_PATH` 可覆盖写入位置。
+官方 CLI 支持 stdio 与 HTTP MCP：`dim mcp add` 管理 `~/.dimcode/v2/mcp.json`，项目级配置为 `<project>/.mcp.json`；`dim exec` 默认加载配置中的 MCP，也可用 `--mcp-server <id>` 选择 Server。ThreadPilot 每轮 headless 执行前会把 `request_clarification` Server 增量写入当前项目的 `.mcp.json`，保留已有 Server；设置 `DIMAGENT_MCP_CONFIG_PATH` 可覆盖写入位置。
 
 bot 通过 `accessMode` 选择接入方式，未填写时默认 `headless`：
 
@@ -329,7 +331,7 @@ session:
   model: dimcode-api-oauth/deepseek-v4-pro
 ```
 
-- 官方 CLI 文档支持 stdio，但本机 `dimcode 0.3.16` 的 ACP `session/new` 会拒绝 stdio MCP；Agent OS 因此为 ACP 额外启动仅监听 `127.0.0.1` 的 HTTP MCP 入口，并把同一个 `request_clarification` 工具通过该入口注入。这样切换 `accessMode` 仍保持飞书澄清链路一致。只应配置可信且可回退的工作目录。
+- 官方 CLI 文档支持 stdio，但本机 `dimcode 0.3.16` 的 ACP `session/new` 会拒绝 stdio MCP；ThreadPilot 因此为 ACP 额外启动仅监听 `127.0.0.1` 的 HTTP MCP 入口，并把同一个 `request_clarification` 工具通过该入口注入。这样切换 `accessMode` 仍保持飞书澄清链路一致。只应配置可信且可回退的工作目录。
 - 同一话题会自动续接 DimAgent session；当前 `/resume` 不枚举 DimAgent 自身数据库中的历史会话，`/compact` 也暂不调用 DimAgent 原生整理协议。
 
 新话题可发送 `/dimagent <任务>` 显式选择 DimAgent；接入模式仍取该 bot 的 `accessMode` 配置。`engines/acp` 插件通过 `cordis.yml` 的 `engines` 列表声明 ACP 引擎（`id`/`command`/`args`），因此任何提供 ACP server 的 CLI 都能以相同方式接入；未注册的引擎与接入模式组合会在运行时明确报错。
@@ -393,7 +395,7 @@ Get-ChildItem -LiteralPath .\data\downloads
 
 系统会依次执行：
 
-1. 创建或复用当前话题的 Agent OS 会话，并切换为 `active`。
+1. 创建或复用当前话题的 ThreadPilot 会话，并切换为 `active`。
 2. 在原话题发送蓝色的“Codex · 执行中”或“Claude Code · 执行中”卡片。
 3. 后台启动真实 CLI 子进程，飞书长连接仍可处理 `/status` 和 `/close`。
 4. 按行解析 stdout 中的 JSONL；一行可产生多个统一事件，普通诊断噪音会被忽略。
@@ -462,7 +464,7 @@ Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 
 [Bot DEVELOPER] default_cli=claude access_mode=headless workspace=C:\你的\项目
 [Bot REVIEWER] default_cli=codex access_mode=headless workspace=C:\审查\项目
 [Bot ASSISTANT] default_cli=codex access_mode=headless workspace=C:\你的\项目
-Agent OS 启动完成
+ThreadPilot 启动完成
 ```
 
 分别新开三个话题，向开发助手、审查助手和个人助理各发一条任务。开发助手应使用 Claude Code，审查助手和个人助理应使用 Codex；同一话题分别 @ 三台 bot 时，`/status` 返回的机器人 ID、执行引擎和 CLI 会话 ID 也应各自独立。
@@ -500,7 +502,7 @@ CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下�
 
 1. 新开话题发送“请记住暗号‘Agent 操作系统’，只回复‘记住了’”。
 2. 等待完成后，在同一话题追问“我刚才让你记住的暗号是什么？”，回答应包含“Agent 操作系统”。
-3. 发送 `/status`，应同时看到 Agent OS 的“会话”和执行引擎的“CLI 会话”。
+3. 发送 `/status`，应同时看到 ThreadPilot 的“会话”和执行引擎的“CLI 会话”。
 4. 打开 `data/sessions.json`，对应记录应包含非空 `cliSessionId`。
 5. 重启机器人并在原话题继续追问，上下文仍应保留。
 6. 新开另一个话题询问暗号，它不应继承上一话题的上下文。
@@ -557,7 +559,7 @@ data/sessions.json
 - Codex、Claude 和 DimAgent 都可以保存恢复指针。
 - 旧记录可以没有 `cliSessionId`；首次任务成功后写入，新记录的空字符串会被视为坏数据。
 - CLI 首次返回会话 ID 时会立即写入快照；即使任务随后被停止、超时或进程重启，下一条消息仍会优先尝试续接原会话。
-- 若 CLI 明确返回会话不存在或已失效，Agent OS 会清除旧指针；下一次“继续执行”会用原始任务重新建立会话，避免无限重试坏 ID。
+- 若 CLI 明确返回会话不存在或已失效，ThreadPilot 会清除旧指针；下一次“继续执行”会用原始任务重新建立会话，避免无限重试坏 ID。
 - 任务启动前会临时写入 `retryPrompt`，成功后立即删除；若失败发生在 CLI 返回会话 ID 之前，发送“继续执行”等明确重试指令会重放原任务。
 - 并发保存通过写入队列串行执行，确保后触发的状态不会被旧快照覆盖。
 - 数据先完整写入 `sessions.json.tmp`，再用 `rename` 替换正式文件，避免留下半截 JSON。
@@ -593,7 +595,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 /codex 查看当前目录结构
 ```
 
-- `/status`：返回 Agent OS 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
+- `/status`：返回 ThreadPilot 会话 ID、状态、执行引擎、CLI 会话 ID、工作目录、话题 ID 和更新时间
 - `/new`：清空当前话题绑定的 CLI 会话；旧会话仍由引擎保留
 - `/resume`：读取当前工作目录中的 Claude/Codex 原生会话并用卡片选择恢复
 - `/compact [要求]`：在当前 CLI 会话内调用引擎原生上下文整理；Claude 支持附加要求，Codex 使用默认策略
@@ -613,7 +615,7 @@ Get-Content -LiteralPath .\data\sessions.json -Encoding utf8
 
 ## 定时任务
 
-Agent OS 可以把“开始”这件事也交给系统：用自然语言 `/schedule <需求>` 创建定时任务，到点后直接唤醒目标 bot 的 CLI 会话静默执行计划里的 `prompt`，结果由任务内容自己送回，不在群里推派发消息。
+ThreadPilot 可以把“开始”这件事也交给系统：用自然语言 `/schedule <需求>` 创建定时任务，到点后直接唤醒目标 bot 的 CLI 会话静默执行计划里的 `prompt`，结果由任务内容自己送回，不在群里推派发消息。
 
 ```text
 /schedule 每天 9 点检查服务日志
@@ -639,11 +641,11 @@ Agent OS 可以把“开始”这件事也交给系统：用自然语言 `/sched
 
 ## 多维表格任务看板（bitable-board）
 
-Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看板，也能从表格反向拉起新任务：管理者在表格里新增一行“待处理”记录并指定负责人，Agent OS 自动驱动对应 Bot 开工并把结果写回该记录。这是独立插件 `bitable-board`（`src/plugins/bitable-board.ts` + 数据契约 `src/core/bitable-board.ts`），在 `cordis.yml` 中移除条目或保持 `disabled: true` 即整体下线，不影响核心任务执行。
+ThreadPilot 可以把团队任务实时同步到飞书多维表格（Bitable）看板，也能从表格反向拉起新任务：管理者在表格里新增一行“待处理”记录并指定负责人，ThreadPilot 自动驱动对应 Bot 开工并把结果写回该记录。这是独立插件 `bitable-board`（`src/plugins/bitable-board.ts` + 数据契约 `src/core/bitable-board.ts`），在 `cordis.yml` 中移除条目或保持 `disabled: true` 即整体下线，不影响核心任务执行。
 
 ### 一键初始化（推荐）
 
-无需手动建表与提取 `appToken/tableId`：在飞书群聊中发送 `/board init [看板名称]`，Agent OS 自动创建多维表格、10 个标准字段与 6 色状态枚举、看板视图，并把**初始化群绑定为反向拉起的回退群聊**（记录未填“群聊ID”也能开工），完成后持久化到 `data/bitable-board.json` 并就地热挂载，无需重启。重启后自动从缓存恢复挂载。使用 `/board link`、`/board status` 查询状态，`/board init --force` 覆盖重建。
+无需手动建表与提取 `appToken/tableId`：在飞书群聊中发送 `/board init [看板名称]`，ThreadPilot 自动创建多维表格、10 个标准字段与 6 色状态枚举、看板视图，并把**初始化群绑定为反向拉起的回退群聊**（记录未填“群聊ID”也能开工），完成后持久化到 `data/bitable-board.json` 并就地热挂载，无需重启。重启后自动从缓存恢复挂载。使用 `/board link`、`/board status` 查询状态，`/board init --force` 覆盖重建。
 
 ### 前置配置
 
@@ -652,7 +654,7 @@ Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看�
 
 | 字段名 | 类型 | 说明 |
 | --- | --- | --- |
-| 任务ID | 文本 | Agent OS 任务标识；反向拉起的记录由系统自动回写 |
+| 任务ID | 文本 | ThreadPilot 任务标识；反向拉起的记录由系统自动回写 |
 | 任务标题 | 文本 | 必填；反向拉起时作为 Bot 的任务指令 |
 | 负责人(Bot) | 文本 | 必填；`config/bots.json` 中的 bot id（如 `developer`） |
 | 发起人 | 文本 | 可选；发起人 open_id，用于停止按钮鉴权 |
@@ -672,8 +674,8 @@ Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看�
     appToken: "你的 app_token"
     tableId: "你的 table_id"
     # botId: ""              # 调用 Bitable API 的 bot，缺省用 Team Leader
-    # sync: true             # 单向事件同步（Agent OS ➔ Bitable）
-    # pull: true             # 反向任务拉起（Bitable ➔ Agent OS）
+    # sync: true             # 单向事件同步（ThreadPilot ➔ Bitable）
+    # pull: true             # 反向任务拉起（Bitable ➔ ThreadPilot）
     # pollIntervalMs: 30000  # 反向拉起轮询间隔
     # fallbackChatId: ""     # 记录未填“群聊ID”时的执行群聊
 ```
@@ -694,7 +696,7 @@ Agent OS 可以把团队任务实时同步到飞书多维表格（Bitable）看�
 
 ## 多话题并行编排
 
-Agent OS 可以把一个大目标拆成多个可并行的子任务，派发给不同 bot 独立执行，再用一张面板汇总进度——`orchestration` 服务插件 + `/orchestrate`、`/panel` 命令插件。
+ThreadPilot 可以把一个大目标拆成多个可并行的子任务，派发给不同 bot 独立执行，再用一张面板汇总进度——`orchestration` 服务插件 + `/orchestrate`、`/panel` 命令插件。
 
 ```text
 /orchestrate 检查 TASK.md 里的 A、B、C 三个模块，分别让开发、审查、助理 bot 分析

@@ -53,7 +53,7 @@ async function callScheduleManage(
       content: [
         {
           type: "text",
-          text: `无法连接 Agent OS 定时任务管理接口：${(error as Error).message}`,
+          text: `无法连接 ThreadPilot 定时任务管理接口：${(error as Error).message}`,
         },
       ],
       isError: true,

@@ -52,7 +52,7 @@ export class TeamRegistry {
       return `- ${member.id}${leader}：${member.role}${skills}`;
     });
     const dispatchPolicy = current.id === this.leaderBotId
-      ? "需要把任务交给其他成员时，使用 dispatch_task 工具，由 Agent OS 发送协作卡片并真正 @ 对方；targetBotId 必须来自上面的团队名单，不能填写自己。"
+      ? "需要把任务交给其他成员时，使用 dispatch_task 工具，由 ThreadPilot 发送协作卡片并真正 @ 对方；targetBotId 必须来自上面的团队名单，不能填写自己。"
       : "只有 Team Leader 可以调用 dispatch_task。你完成当前职责后直接返回结果，由 Team Leader 组织下一步，不要自行调用该工具。";
     return [
       "你所在的 Agent 团队：",

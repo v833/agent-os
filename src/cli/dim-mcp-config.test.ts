@@ -19,7 +19,7 @@ const server = {
   tools: ["request_clarification"],
 } as const;
 
-test("DimAgent MCP 配置保留已有 Server，并可幂等更新 Agent OS Server", async (t) => {
+test("DimAgent MCP 配置保留已有 Server，并可幂等更新 ThreadPilot Server", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "agent-os-dim-mcp-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   const configPath = join(root, "v2", "mcp.json");

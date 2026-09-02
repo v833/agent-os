@@ -1,5 +1,5 @@
 /**
- * 项目 Skill 解析器：按工作区覆盖、Agent OS 内置、用户级的顺序查找 Skill，
+ * 项目 Skill 解析器：按工作区覆盖、ThreadPilot 内置、用户级的顺序查找 Skill，
  * 供启动诊断与任务提示词共用，避免两条路径对“已安装”的判断不一致。
  */
 import { readFile } from "node:fs/promises";
@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 
 const agentOsRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
-/** Agent OS 随仓库分发的内置 Skill 根目录。 */
+/** ThreadPilot 随仓库分发的内置 Skill 根目录。 */
 export const builtInSkillsDirectory = join(agentOsRoot, ".agents", "skills");
 
 export interface ResolvedProjectSkill {

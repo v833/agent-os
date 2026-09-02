@@ -26,7 +26,7 @@ const handler: CommandHandler = async ({
   } catch {
     await bot.reply(
       message.messageId,
-      `${cliAdapter.displayName} 暂不支持从 Agent OS 调用原生 /compact，请直接发起整理任务。`,
+      `${cliAdapter.displayName} 暂不支持从 ThreadPilot 调用原生 /compact，请直接发起整理任务。`,
       hasThread,
     );
     return;

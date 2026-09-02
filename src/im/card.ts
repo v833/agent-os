@@ -708,7 +708,7 @@ export function buildClarificationSupersededCard(
           tag: "markdown",
           content: [
             "**已收到你在话题里的新消息**",
-            "这张卡片已经失效，Agent OS 正在沿用同一个任务上下文处理新的补充。",
+            "这张卡片已经失效，ThreadPilot 正在沿用同一个任务上下文处理新的补充。",
             flow.answers.length ? `此前已确认 ${flow.answers.length} 项，相关答案会一并带入。` : "",
           ].filter(Boolean).join("\n\n"),
         },
@@ -735,12 +735,12 @@ export function buildAuthLoginCard(
       ? [
           "**1** 点击下方「开始登录」；",
           "**2** 在随后出现的卡片里打开授权链接，用浏览器完成登录；",
-          "**3** 授权完成后 Agent OS 自动继续，无需输入任何 key。",
+          "**3** 授权完成后 ThreadPilot 自动继续，无需输入任何 key。",
         ]
       : [
           "**1** 点击下方「开始登录」；",
           "**2** 浏览器会**再次弹出**新的授权页（或使用卡片上的链接），请用**新弹出**的页面授权；",
-          "**3** 把授权码粘贴到输入框并点「确认」，Agent OS 完成登录。",
+          "**3** 把授权码粘贴到输入框并点「确认」，ThreadPilot 完成登录。",
         ];
   const elements: Record<string, unknown>[] = [
     {
@@ -931,7 +931,7 @@ export function buildAuthDeviceWaitingCard(
           : []),
         {
           tag: "markdown",
-          content: "授权完成后 Agent OS 会自动继续，无需再操作。",
+          content: "授权完成后 ThreadPilot 会自动继续，无需再操作。",
         },
       ],
     },
@@ -1477,7 +1477,7 @@ export function buildOrchestrationPanelCard(
 export function buildBoardInitProgressCard(
   options: BoardInitProgressCardOptions = {},
 ): CardJson {
-  const name = options.name?.trim() || "Agent OS 任务看板";
+  const name = options.name?.trim() || "ThreadPilot 任务看板";
   return {
     schema: "2.0",
     config: {
@@ -1520,7 +1520,7 @@ export function buildBoardReadyCard(options: BoardReadyCardOptions): CardJson {
     },
     header: {
       template: "green",
-      title: { tag: "plain_text", content: "📊 Agent OS 任务看板已就绪" },
+      title: { tag: "plain_text", content: "📊 ThreadPilot 任务看板已就绪" },
       subtitle: { tag: "plain_text", content: options.name },
     },
     body: {
@@ -1591,7 +1591,7 @@ export function buildBoardErrorCard(options: BoardErrorCardOptions): CardJson {
           type: "callback",
           value: {
             action: "board_retry_init",
-            name: options.name || "Agent OS 任务看板",
+            name: options.name || "ThreadPilot 任务看板",
             appToken: "",
           },
         }],
@@ -1820,7 +1820,7 @@ export function buildScheduleListCard(tasks: ScheduledTask[]): CardJson {
             {
               tag: "markdown",
               content:
-                "到点后 Agent OS 会直接唤醒目标成员静默执行，不在群里推派发消息。",
+                "到点后 ThreadPilot 会直接唤醒目标成员静默执行，不在群里推派发消息。",
             },
             { tag: "hr" },
             ...tasks.map((task) => ({

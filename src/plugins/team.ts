@@ -53,7 +53,7 @@ export async function apply(ctx: Context): Promise<void> {
   // Skill 缺失只打印明确警告，不阻止其他成员上线；诊断归团队插件所有。
   for (const missing of await service.findMissingSkills()) {
     console.warn(
-      `[Skill] bot=${missing.botId} 找不到 $${missing.skill}，请安装到当前工作目录的 .agents/skills、.claude/skills、Agent OS 内置目录，或用户级 ~/.agents/skills、~/.claude/skills、~/.codex/skills`,
+      `[Skill] bot=${missing.botId} 找不到 $${missing.skill}，请安装到当前工作目录的 .agents/skills、.claude/skills、ThreadPilot 内置目录，或用户级 ~/.agents/skills、~/.claude/skills、~/.codex/skills`,
     );
   }
 

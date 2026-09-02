@@ -2,12 +2,12 @@
 layout: home
 
 hero:
-  name: "Agent OS"
-  text: "在飞书中使用 AI 编程 CLI"
-  tagline: "在飞书话题群中调度 Claude Code、Codex、DimAgent 与 Antigravity，配合角色化分工协同完成研发任务。"
+  name: "ThreadPilot"
+  text: "在飞书话题里，指挥你的 AI 编程团队"
+  tagline: "调度 Claude Code、Codex、DimAgent 与 Antigravity，让不同角色的 Agent 协同完成研发任务。"
   image:
     src: /logo.png
-    alt: Agent OS Logo
+    alt: ThreadPilot Logo
   actions:
     - theme: brand
       text: 快速上手 →

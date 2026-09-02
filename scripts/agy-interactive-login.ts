@@ -87,7 +87,7 @@ child.onExit(({ exitCode }) => {
   if (exitCode === 0) {
     if (existsSync(TOKEN_FILE)) {
       console.log(`>>> 登录成功！令牌已写入:\n    ${TOKEN_FILE}`);
-      console.log(">>> 之后 Agent OS 的 agy 任务免登录。");
+      console.log(">>> 之后 ThreadPilot 的 agy 任务免登录。");
     } else {
       console.log(">>> 进程成功退出，但未发现令牌文件，请确认授权是否完成。");
     }

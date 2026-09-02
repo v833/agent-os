@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerProductSpecTool } from "./product-spec-tools.js";
 
 const server = new McpServer({
-  name: "agent-os",
+  name: "threadpilot",
   version: "1.0.0",
 });
 registerProductSpecTool(server);

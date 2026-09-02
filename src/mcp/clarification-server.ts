@@ -8,7 +8,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerClarificationTool } from "./clarification-tools.js";
 
 const server = new McpServer({
-  name: "agent-os",
+  name: "threadpilot",
   version: "1.0.0",
 });
 registerClarificationTool(server);

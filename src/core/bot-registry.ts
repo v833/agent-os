@@ -1,5 +1,5 @@
 /**
- * Bot 注册表：在 Agent OS 启动前读取并校验多 bot 配置，
+ * Bot 注册表：在 ThreadPilot 启动前读取并校验多 bot 配置，
  * 把环境变量中的飞书凭证解析成入口可直接使用的运行配置。
  */
 import { readFile } from "node:fs/promises";

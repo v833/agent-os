@@ -42,7 +42,7 @@ export function acpDaemonEnvironment(
   );
 }
 
-/** 将 Agent OS 的 stdio Server 描述转换成 ACP session/* 请求所需的结构。 */
+/** 将 ThreadPilot 的 stdio Server 描述转换成 ACP session/* 请求所需的结构。 */
 export function acpMcpServers(
   servers: readonly ApplicationToolServer[],
   supportedTransports?: readonly AcpMcpTransport[],

@@ -33,11 +33,11 @@ test("interpolatePrompt 基础变量与嵌套变量插值", () => {
   const result = interpolatePrompt(template, {
     name: "Alice",
     app: {
-      name: "Agent OS",
+      name: "ThreadPilot",
       version: "1.0",
     },
   });
-  assert.equal(result, "你好，Alice！欢迎使用 Agent OS v1.0。未定义字段：。");
+  assert.equal(result, "你好，Alice！欢迎使用 ThreadPilot v1.0。未定义字段：。");
 });
 
 test("parsePromptMarkdown 解析有无 Frontmatter 的 Markdown 模板", () => {

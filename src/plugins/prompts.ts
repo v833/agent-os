@@ -47,7 +47,7 @@ export interface PromptComposeCollector {
 export interface PromptsConfig {
   /** 全局提示词模板目录（相对于 cwd 或绝对路径），默认 "prompts" */
   promptsDir?: string;
-  /** Agent OS 启动工作区的覆盖模板相对目录，默认 ".agents/prompts" */
+  /** ThreadPilot 启动工作区的覆盖模板相对目录，默认 ".agents/prompts" */
   workspaceOverrideDir?: string;
 }
 
@@ -439,7 +439,7 @@ export class PromptsService extends Service {
         `评论 ID：${data.commentId}`,
         data.replyId ? `触发回复 ID：${data.replyId}` : "",
         "使用 lark-drive 读取这一条评论、完整回复和正文位置，再使用 lark-doc 精确修改原文档。",
-        "修改成功后，最终回答只写一段给评论者看的简短说明，讲清楚具体改了什么。Agent OS 会把最终回答写回原评论。",
+        "修改成功后，最终回答只写一段给评论者看的简短说明，讲清楚具体改了什么。ThreadPilot 会把最终回答写回原评论。",
         "不要调用评论回复或解决接口，评论是否解决由用户复查后决定。",
         "不要调用 request_spec_approval，不要生成新的确认卡；原待确认卡继续有效。",
       ].filter(Boolean).join("\n\n"),
@@ -458,7 +458,7 @@ export async function apply(ctx: Context, options: PromptsConfig = {}) {
     await service.loadFromDirectory(service.options.promptsDir, "global");
   }
 
-  // 2. 加载 Agent OS 启动工作区模板覆盖（Layer 3: workspace，后加载覆盖先加载）
+  // 2. 加载 ThreadPilot 启动工作区模板覆盖（Layer 3: workspace，后加载覆盖先加载）
   if (service.options.workspaceOverrideDir) {
     await service.loadFromDirectory(service.options.workspaceOverrideDir, "workspace");
   }

@@ -1,6 +1,6 @@
 /**
  * 原生上下文整理执行器：按适配器计划驱动 Claude stream-json 或 Codex
- * app-server；它只负责协议、超时和取消，不改变 Agent OS 的会话指针。
+ * app-server；它只负责协议、超时和取消，不改变 ThreadPilot 的会话指针。
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -255,8 +255,8 @@ function runCodexCompact(
       method: "initialize",
       params: {
         clientInfo: {
-          name: "agent_os",
-          title: "Agent OS",
+          name: "threadpilot",
+          title: "ThreadPilot",
           version: "0.1.0",
         },
       },

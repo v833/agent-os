@@ -205,7 +205,7 @@ export class AgyAdapter implements CliAdapter {
     });
   }
 
-  /** 将 agy 的 stream-json 单行输出解析为 Agent OS 标准 CliEvent */
+  /** 将 agy 的 stream-json 单行输出解析为 ThreadPilot 标准 CliEvent */
   parseEvents(line: string): CliEvent[] {
     let raw: AgyEvent;
     try {

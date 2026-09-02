@@ -1,6 +1,6 @@
 /**
  * 产品文档 MCP 工具定义：同时供 stdio 与 loopback HTTP 传输复用。
- * 工具只提交产物元数据，文件真实性由 Agent OS 产品文档插件校验。
+ * 工具只提交产物元数据，文件真实性由 ThreadPilot 产品文档插件校验。
  */
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -81,7 +81,7 @@ export function registerProductSpecTool(server: McpServer): void {
         content: [
           {
             type: "text",
-            text: "唯一的产品方案产物已交给 Agent OS，等待用户查看。",
+            text: "唯一的产品方案产物已交给 ThreadPilot，等待用户查看。",
           },
         ],
       };

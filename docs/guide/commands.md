@@ -91,7 +91,7 @@
 
 ## 引擎显式调度
 
-如果你想在单次任务中临时指定某种特定的 CLI 引擎执行，可以在命令前加上引擎名称，Agent OS 会在该引擎上开启新话题执行：
+如果你想在单次任务中临时指定某种特定的 CLI 引擎执行，可以在命令前加上引擎名称，ThreadPilot 会在该引擎上开启新话题执行：
 
 - `@机器人 /codex 检查数据库连接池实现`
 - `@机器人 /claude 分析当前前端组件的渲染性能`
@@ -100,7 +100,7 @@
 
 ### 引擎矩阵
 
-Agent OS 通过「一切皆为插件」架构支持多引擎，已在 `cordis.yml` 装配的引擎如下：
+ThreadPilot 通过「一切皆为插件」架构支持多引擎，已在 `cordis.yml` 装配的引擎如下：
 
 | 引擎 | 调度前缀 | 说明 |
 | :--- | :--- | :--- |
@@ -109,4 +109,4 @@ Agent OS 通过「一切皆为插件」架构支持多引擎，已在 `cordis.ym
 | DimAgent | `/dimagent` | headless 接入；另提供标准 ACP 接入 |
 | Antigravity | `/agy` | Google Antigravity CLI（agy）headless 接入 |
 
-**标准 ACP 接入**：除了上述 headless 适配器，Agent OS 还支持通过标准 Agent Client Protocol（ACP）接入任何提供 ACP server 的 CLI。当前装配中，DimAgent（`dim acp`）与 Claude（官方 ACP 适配器）均通过标准 ACP 通道注册。ACP 接入与具体供应商解耦——在 `cordis.yml` 的 `engines/acp` 插件 `engines` 列表中声明 `id/command/args`，即可接入任意 CLI，无需改动核心代码。
+**标准 ACP 接入**：除了上述 headless 适配器，ThreadPilot 还支持通过标准 Agent Client Protocol（ACP）接入任何提供 ACP server 的 CLI。当前装配中，DimAgent（`dim acp`）与 Claude（官方 ACP 适配器）均通过标准 ACP 通道注册。ACP 接入与具体供应商解耦——在 `cordis.yml` 的 `engines/acp` 插件 `engines` 列表中声明 `id/command/args`，即可接入任意 CLI，无需改动核心代码。

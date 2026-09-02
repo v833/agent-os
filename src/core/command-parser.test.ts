@@ -6,9 +6,9 @@ import { parseCliRequest, parseCommand } from "./command-parser.js";
 test("识别会话控制命令和可选机器人提及", () => {
   assert.deepEqual(parseCommand("/status"), { name: "status" });
   assert.deepEqual(parseCommand("@MyBot /close"), { name: "close" });
-  assert.deepEqual(parseCommand("@Agent OS /help  "), { name: "help" });
+  assert.deepEqual(parseCommand("@ThreadPilot /help  "), { name: "help" });
   assert.deepEqual(parseCommand("/new"), { name: "new" });
-  assert.deepEqual(parseCommand("@Agent OS /resume"), { name: "resume" });
+  assert.deepEqual(parseCommand("@ThreadPilot /resume"), { name: "resume" });
   assert.deepEqual(parseCommand("/team"), { name: "team" });
   assert.deepEqual(parseCommand("@CEO 助理 /team"), { name: "team" });
   assert.deepEqual(parseCommand("/compact"), {
@@ -23,7 +23,7 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "doc",
     prompt: "整理本周发布说明",
   });
-  assert.deepEqual(parseCommand("@Agent OS /doc  汇总历史消息"), {
+  assert.deepEqual(parseCommand("@ThreadPilot /doc  汇总历史消息"), {
     name: "doc",
     prompt: "汇总历史消息",
   });
@@ -31,7 +31,7 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "metrics",
     args: undefined,
   });
-  assert.deepEqual(parseCommand("@Agent OS /metrics traces"), {
+  assert.deepEqual(parseCommand("@ThreadPilot /metrics traces"), {
     name: "metrics",
     args: "traces",
   });
@@ -43,7 +43,7 @@ test("识别会话控制命令和可选机器人提及", () => {
     name: "board",
     args: undefined,
   });
-  assert.deepEqual(parseCommand("@Agent OS /board init 敏捷开发大盘"), {
+  assert.deepEqual(parseCommand("@ThreadPilot /board init 敏捷开发大盘"), {
     name: "board",
     args: "init 敏捷开发大盘",
   });
@@ -59,7 +59,7 @@ test("识别会话控制命令和可选机器人提及", () => {
 
 test("解析 /cd 的查询、带空格路径和机器人提及", () => {
   assert.deepEqual(parseCommand("/cd"), { name: "cd", path: undefined });
-  assert.deepEqual(parseCommand("@Agent OS /cd ../another project  "), {
+  assert.deepEqual(parseCommand("@ThreadPilot /cd ../another project  "), {
     name: "cd",
     path: "../another project",
   });
@@ -74,7 +74,7 @@ test("解析 /schedule 自然语言与 /schedules 列表命令", () => {
     name: "schedule",
     request: "每小时检查一次服务日志",
   });
-  assert.deepEqual(parseCommand("@Agent OS /schedule 每天 9 点检查日志"), {
+  assert.deepEqual(parseCommand("@ThreadPilot /schedule 每天 9 点检查日志"), {
     name: "schedule",
     request: "每天 9 点检查日志",
   });
@@ -83,7 +83,7 @@ test("解析 /schedule 自然语言与 /schedules 列表命令", () => {
     request: undefined,
   });
   assert.deepEqual(parseCommand("/schedules"), { name: "schedules" });
-  assert.deepEqual(parseCommand("@Agent OS /schedules"), {
+  assert.deepEqual(parseCommand("@ThreadPilot /schedules"), {
     name: "schedules",
   });
 });
@@ -144,7 +144,7 @@ test("解析新话题显式指定的 CLI 与真实任务正文", () => {
     prompt: "检查 package.json",
   });
   assert.deepEqual(
-    parseCliRequest("@Agent OS /claude 检查项目", "Agent OS"),
+    parseCliRequest("@ThreadPilot /claude 检查项目", "ThreadPilot"),
     {
       cliId: "claude",
       prompt: "检查项目",
@@ -195,7 +195,7 @@ test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {
   });
   assert.equal(parseCliRequest("帮我解释 /codex 的作用"), undefined);
   assert.equal(
-    parseCliRequest("@Agent OS 帮我解释 /codex 的作用", "Agent OS"),
+    parseCliRequest("@ThreadPilot 帮我解释 /codex 的作用", "ThreadPilot"),
     undefined,
   );
   assert.equal(parseCliRequest("/status"), undefined);
@@ -203,7 +203,7 @@ test("空 CLI 指令保留引擎选择，普通文本不误识别", () => {
 
 test("解析 /login 与 /<engine> login 登录指令", () => {
   assert.deepEqual(parseCommand("/login"), { name: "login" });
-  assert.deepEqual(parseCommand("@Agent OS /login  "), { name: "login" });
+  assert.deepEqual(parseCommand("@ThreadPilot /login  "), { name: "login" });
 
   // "/<engine> login" 按注册表引擎名识别为登录指令，不启动任务。
   assert.deepEqual(parseCliRequest("/agy login"), {
@@ -217,7 +217,7 @@ test("解析 /login 与 /<engine> login 登录指令", () => {
     login: true,
   });
   assert.deepEqual(
-    parseCliRequest("@Agent OS /agy login", undefined, ["codex", "agy"]),
+    parseCliRequest("@ThreadPilot /agy login", undefined, ["codex", "agy"]),
     { cliId: "agy", prompt: "", login: true },
   );
   // login 只是任务正文的一部分时仍是普通引擎请求。

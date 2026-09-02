@@ -1,5 +1,5 @@
 /**
- * DimAgent 适配器：把 `dim exec --json` 的 headless 输出接入 Agent OS。
+ * DimAgent 适配器：把 `dim exec --json` 的 headless 输出接入 ThreadPilot。
  * DimAgent 的 ACP 接入由通用 AcpAdapter（engines/acp 插件）提供，不再内嵌于此。
  * 注意：dim 0.3.x 的 JSONL 事件格式是 eventType/payload 结构（text:delta 增量、run:ended 收尾），
  * 最终答案跨多行累积，因此本适配器按会话 ID 维护跨行状态（每轮 headless 独占一个会话/进程）。
@@ -333,7 +333,7 @@ export class DimagentAdapter implements CliAdapter {
         settled = true;
         clearTimeout(timer);
         if (code === 0) {
-          options.onOutput?.("\n[agent-os] 登录进程已退出（状态码 0）\n");
+          options.onOutput?.("\n[threadpilot] 登录进程已退出（状态码 0）\n");
           resolve();
         } else {
           fail(

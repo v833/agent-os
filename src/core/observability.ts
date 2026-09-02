@@ -502,7 +502,7 @@ export class ObservabilityStore {
   /** 格式化输出易读的飞书 Markdown 大盘报告。 */
   formatSummaryMarkdown(summary = this.computeSummary()): string {
     const lines: string[] = [];
-    lines.push("📊 **Agent OS 可观测性大盘**\n");
+    lines.push("📊 **ThreadPilot 可观测性大盘**\n");
 
     // 核心概览
     lines.push("⚡ **任务吞吐与时延**");

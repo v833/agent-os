@@ -27,7 +27,7 @@ export function registerDispatchTaskTool(server: McpServer): void {
       content: [
         {
           type: "text",
-          text: "派发请求已交给 Agent OS，等待协作任务送达目标成员。",
+          text: "派发请求已交给 ThreadPilot，等待协作任务送达目标成员。",
         },
       ],
     }),

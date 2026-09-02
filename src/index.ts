@@ -1,5 +1,5 @@
 /**
- * Agent OS 引导入口：创建根 Context 并挂载 loader 插件。
+ * ThreadPilot 引导入口：创建根 Context 并挂载 loader 插件。
  * loader 读取 cordis.yml 声明式装配全部服务与功能插件——“一切皆为插件”。
  */
 import "dotenv/config";
@@ -20,8 +20,8 @@ try {
     );
   }
   console.log(`[团队] Team Leader=${root.config.teamLeaderId}`);
-  console.log("Agent OS 启动完成");
+  console.log("ThreadPilot 启动完成");
 } catch (error) {
-  console.error("Agent OS 启动失败:", (error as Error).message);
+  console.error("ThreadPilot 启动失败:", (error as Error).message);
   process.exit(1);
 }

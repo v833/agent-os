@@ -1,6 +1,6 @@
 /**
  * 飞书平台适配器：WSClient 负责长连接收消息与卡片动作，Client 负责 REST
- * 回复、更新卡片和下载资源；对外只暴露 Agent OS 自己的干净事件模型。
+ * 回复、更新卡片和下载资源；对外只暴露 ThreadPilot 自己的干净事件模型。
  */
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { mkdir } from "node:fs/promises";
@@ -45,7 +45,7 @@ export interface IncomingDocumentComment {
   mentionedBot: boolean;
 }
 
-/** Agent OS 对飞书长连接状态的稳定抽象，不暴露 SDK 内部 WebSocket 类型。 */
+/** ThreadPilot 对飞书长连接状态的稳定抽象，不暴露 SDK 内部 WebSocket 类型。 */
 export type BotConnectionState =
   | "connecting"
   | "connected"

@@ -104,7 +104,7 @@ test("findMissingSkills 仅报告所有查找位置都缺失的项目 Skill", as
   ]);
 });
 
-test("product workspace 在仓库外时使用 Agent OS 内置 Skill", async (t) => {
+test("product workspace 在仓库外时使用 ThreadPilot 内置 Skill", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-product-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const registry = new TeamRegistry("product", [

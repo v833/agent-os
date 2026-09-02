@@ -1,4 +1,4 @@
-# Agent OS 插件装配文件（一切皆为插件）
+# ThreadPilot 插件装配文件（一切皆为插件）
 # 这里声明启用哪些插件及其参数；移除条目或设置 disabled: true 即可下线对应能力。
 # 参考 deepseek-harness 的 cordis.yml 设计：能力由配置组装，而不是硬编码。
 plugins:
@@ -102,8 +102,8 @@ plugins:
       # fallbackChatId: ""    # 反向拉起回退群聊（记录未填“群聊ID”时开工的群）：
       #                       #   - /board init 模式：自动绑定初始化群并持久化，无需配置
       #                       #   - 静态配置模式：需手动指定，否则缺群聊ID的记录会被跳过
-      # sync: true            # 单向事件同步（Agent OS ➔ Bitable）
-      # pull: true            # 反向任务拉起（Bitable ➔ Agent OS）
+      # sync: true            # 单向事件同步（ThreadPilot ➔ Bitable）
+      # pull: true            # 反向任务拉起（Bitable ➔ ThreadPilot）
       # pollIntervalMs: 30000 # 反向拉起轮询间隔（毫秒）
   - name: tasks
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。

@@ -1,7 +1,7 @@
 /**
  * DimAgent MCP 配置准备：把插件注册的 stdio Server 合并到
  * DimAgent 官方支持的用户级或项目级 mcp.json，让 `dim exec` headless
- * 自动发现 Agent OS 工具。项目级配置按当前任务工作目录隔离，用户级路径
+ * 自动发现 ThreadPilot 工具。项目级配置按当前任务工作目录隔离，用户级路径
  * 仍保留给显式调用和测试覆盖。
  */
 import { homedir } from "node:os";
@@ -30,7 +30,7 @@ export function ensureDimagentMcpConfig(
   return ensureMcpConfigFile(path, servers, "DimAgent");
 }
 
-/** 将 Agent OS 工具注入当前 headless 任务的项目级 `.mcp.json`。 */
+/** 将 ThreadPilot 工具注入当前 headless 任务的项目级 `.mcp.json`。 */
 export function ensureDimagentProjectMcpConfig(
   cwd: string,
   servers: readonly ApplicationToolServer[],

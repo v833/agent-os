@@ -109,7 +109,7 @@ export async function buildProjectSkillPolicy(
   const loadedSkills = resolvedSkills.filter((skill) => skill !== undefined);
   const missingSkills = skills.filter((_skill, index) => !resolvedSkills[index]);
   return [
-    "项目 Skill（工作区版本优先，其次使用 Agent OS 内置或用户级版本）：",
+    "项目 Skill（工作区版本优先，其次使用 ThreadPilot 内置或用户级版本）：",
     "以下 Skill 内容已经加载，必须直接遵守，无需再次搜索同名 Skill。",
     ...loadedSkills.map(
       (skill) =>

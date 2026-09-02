@@ -4,7 +4,7 @@
  * 避免各处重新解释 chatType、threadId 或 documentRequested。
  */
 
-/** Agent OS 当前任务的交互模式。 */
+/** ThreadPilot 当前任务的交互模式。 */
 export type InteractionMode = "direct" | "team";
 
 /** 一轮任务的能力开关；字段由 createInteractionPolicy 统一推导。 */

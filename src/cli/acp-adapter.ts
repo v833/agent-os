@@ -1,6 +1,6 @@
 /**
  * 通用 ACP 适配器：把任意提供 Agent Client Protocol server 的 CLI 接入
- * Agent OS，接入方式与具体供应商解耦——只要配置启动命令与参数即可。
+ * ThreadPilot，接入方式与具体供应商解耦——只要配置启动命令与参数即可。
  * ACP 模式的会话/事件/取消由 acp-daemon（常驻进程）处理，本适配器只负责
  * 描述“如何拉起这个 ACP server”以及失效会话识别。
  */

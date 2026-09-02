@@ -82,19 +82,19 @@ export function runLoginWithPty(options: PtyLoginOptions): Promise<void> {
         injected = true;
         if (options.getCode) {
           // 延迟注入：授权码必须来自本进程打印的授权 URL，等用户在卡片提交后写入。
-          options.onOutput?.("\n[agent-os] 等待用户提交授权码…\n");
+          options.onOutput?.("\n[threadpilot] 等待用户提交授权码…\n");
           options
             .getCode()
             .then((code) => {
               if (settled) return;
-              options.onOutput?.("\n[agent-os] 正在注入登录 key…\n");
+              options.onOutput?.("\n[threadpilot] 正在注入登录 key…\n");
               child.write(`${code}\r`);
             })
             .catch(() => {
               // getCode 被拒绝（如流程被替换）时静默放弃注入。
             });
         } else {
-          options.onOutput?.("\n[agent-os] 检测到授权提示，正在注入登录 key…\n");
+          options.onOutput?.("\n[threadpilot] 检测到授权提示，正在注入登录 key…\n");
           child.write(`${options.code ?? ""}\r`);
         }
       }
@@ -104,7 +104,7 @@ export function runLoginWithPty(options: PtyLoginOptions): Promise<void> {
       settled = true;
       clearTimeout(timer);
       if (exitCode === 0) {
-        options.onOutput?.("\n[agent-os] 登录进程已退出（状态码 0）\n");
+        options.onOutput?.("\n[threadpilot] 登录进程已退出（状态码 0）\n");
         resolve();
       } else {
         fail(

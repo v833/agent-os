@@ -1,7 +1,7 @@
 /**
  * 澄清 HTTP MCP Server：为只支持 HTTP/SSE MCP 的 ACP 引擎提供 loopback 入口。
  * 每个 POST 使用无状态 Streamable HTTP 传输，监听地址固定为 127.0.0.1，
- * 避免把 Agent OS 的澄清工具暴露到局域网或公网。
+ * 避免把 ThreadPilot 的澄清工具暴露到局域网或公网。
  */
 import { registerClarificationTool } from "./clarification-tools.js";
 import {

@@ -1,6 +1,6 @@
 /**
  * 飞书多维表格（Bitable）自动化建表流水线与纯函数契约：封装应用创建、
- * 10 个标准业务字段创建、6 色单选状态枚举及看板视图创建。它位于 Agent OS
+ * 10 个标准业务字段创建、6 色单选状态枚举及看板视图创建。它位于 ThreadPilot
  * 看板初始化指令与飞书 OpenAPI 之间，不依赖任何 Cordis 运行时或插件状态。
  */
 import * as Lark from "@larksuiteoapi/node-sdk";
@@ -135,7 +135,7 @@ export async function bootstrapBitableBoard(
   client: BitableBootstrapClient,
   options: BootstrapBoardOptions = {},
 ): Promise<BootstrapBoardResult> {
-  const appName = options.name?.trim() || "Agent OS 任务看板";
+  const appName = options.name?.trim() || "ThreadPilot 任务看板";
   const fields = options.fields ?? DEFAULT_BOOTSTRAP_FIELDS;
 
   // Step 1: 创建多维表格应用

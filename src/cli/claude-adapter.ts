@@ -221,7 +221,7 @@ async function readClaudeSession(
   };
 }
 
-/** 将 Claude Code 的命令行和 JSONL 协议适配为 Agent OS 公共事件。 */
+/** 将 Claude Code 的命令行和 JSONL 协议适配为 ThreadPilot 公共事件。 */
 export class ClaudeAdapter implements CliAdapter {
   readonly id = "claude" as const;
   readonly command = "claude";

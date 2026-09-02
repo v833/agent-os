@@ -1,6 +1,6 @@
 /**
  * 工作目录工具：解析 bot 配置和话题相对路径，并在启动 CLI 前确认目标目录。
- * 它位于 Agent OS 的配置与会话之间，确保后续进程始终收到可用的绝对 cwd。
+ * 它位于 ThreadPilot 的配置与会话之间，确保后续进程始终收到可用的绝对 cwd。
  */
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";

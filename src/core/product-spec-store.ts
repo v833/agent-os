@@ -1,6 +1,6 @@
 /**
  * 产品方案 Flow 的 JSON 持久化：把待确认云文档与原产品会话的关联保存到磁盘，
- * 让 Agent OS 重启后仍能接收旧文档评论。写盘采用临时文件加原子替换，避免进程
+ * 让 ThreadPilot 重启后仍能接收旧文档评论。写盘采用临时文件加原子替换，避免进程
  * 中断留下半份 JSON，评论路由也不会读取到损坏状态。
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";

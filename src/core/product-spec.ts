@@ -196,7 +196,7 @@ export interface ProductSpecFlow {
   token: string;
   taskId: string;
   botId: string;
-  /** 创建确认卡时对应的 Agent OS 会话，评论事件依靠它续接上下文。 */
+  /** 创建确认卡时对应的 ThreadPilot 会话，评论事件依靠它续接上下文。 */
   sessionId: string;
   ownerOpenId: string;
   ownerUnionId?: string;

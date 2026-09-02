@@ -1,6 +1,6 @@
 ---
 name: grill-me
-description: 在动手实现前澄清产品目标、范围、边界和验收标准；信息不足时通过 Agent OS 飞书表单收集决策。
+description: 在动手实现前澄清产品目标、范围、边界和验收标准；信息不足时通过 ThreadPilot 飞书表单收集决策。
 disable-model-invocation: false
 ---
 
@@ -8,9 +8,9 @@ disable-model-invocation: false
 
 先阅读项目和用户的原始需求，一次性找出当前已经可预见、且真正会改变实现方案的未决问题。此时不要写代码，也不要假装已经向用户提过问题。
 
-如果信息不足，必须调用 Agent OS 提供的 `request_clarification` 工具，把问题交给飞书交互卡片。不要在最终回复里粘贴问题 JSON，也不要用 Markdown 代码块模拟工具调用。
+如果信息不足，必须调用 ThreadPilot 提供的 `request_clarification` 工具，把问题交给飞书交互卡片。不要在最终回复里粘贴问题 JSON，也不要用 Markdown 代码块模拟工具调用。
 
-如果当前工具列表里没有直接显示 `request_clarification`，先搜索可用工具并找到 Agent OS 的同名工具，再发起调用；不能退回到输出结构化文本。
+如果当前工具列表里没有直接显示 `request_clarification`，先搜索可用工具并找到 ThreadPilot 的同名工具，再发起调用；不能退回到输出结构化文本。
 
 工具参数包含：
 
@@ -27,6 +27,6 @@ disable-model-invocation: false
 - 不添加“其他”选项，卡片会自动提供自定义输入框。
 - `id` 只使用小写字母、数字、下划线和连字符。
 - 不在工具调用之外重复问题、选项、分析报告或表格。
-- 工具调用成功后立即结束本轮，等待用户通过 Agent OS 卡片作答；不要调用终端交互等待回答。
+- 工具调用成功后立即结束本轮，等待用户通过 ThreadPilot 卡片作答；不要调用终端交互等待回答。
 
 收到卡片答案后，结合原会话上下文继续判断。如果仍有关键歧义，可以再次调用 `request_clarification`；信息足够时，直接输出清晰、可验收的需求结论。

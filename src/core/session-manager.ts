@@ -1,5 +1,5 @@
 /**
- * Agent OS 会话模型：把飞书话题地址映射为稳定会话，集中约束
+ * ThreadPilot 会话模型：把飞书话题地址映射为稳定会话，集中约束
  * creating、active、idle、closed 的生命周期，并协调内存与磁盘状态。
  */
 import { randomUUID } from "node:crypto";
@@ -108,7 +108,7 @@ export class SessionManager {
   }
 
   get(sessionId: string): Session | undefined {
-    // Map 按飞书地址建索引；按 Agent OS UUID 查询时需要在值集合中查找。
+    // Map 按飞书地址建索引；按 ThreadPilot UUID 查询时需要在值集合中查找。
     return [...this.sessions.values()].find(
       (session) => session.id === sessionId,
     );
@@ -127,7 +127,7 @@ export class SessionManager {
     const existing = this.sessions.get(key);
     if (existing) return { session: existing, isNew: false };
 
-    // 会话 ID 与飞书 ID 分层：前者属于 Agent OS，后者只负责消息路由。
+    // 会话 ID 与飞书 ID 分层：前者属于 ThreadPilot，后者只负责消息路由。
     const now = this.now().toISOString();
     const session: Session = {
       id: this.createId(),

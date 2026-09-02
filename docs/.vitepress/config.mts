@@ -1,14 +1,14 @@
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
-  title: "Agent OS",
-  description: "把飞书变成 AI 编程 CLI 的智能指挥台",
+  title: "ThreadPilot",
+  description: "在飞书话题里，指挥你的 AI 编程团队",
   head: [
     ['link', { rel: 'icon', href: '/logo.png' }]
   ],
   themeConfig: {
     logo: '/logo.png',
-    siteTitle: 'Agent OS',
+    siteTitle: 'ThreadPilot',
     nav: [
       { text: '首页', link: '/' },
       { text: '快速上手', link: '/guide/getting-started' },
@@ -45,11 +45,11 @@ export default defineConfig({
       }
     ],
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/v833/agent-os' }
+      { icon: 'github', link: 'https://github.com/v833/threadpilot' }
     ],
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2026 Agent OS Team'
+      copyright: 'Copyright © 2026 ThreadPilot Team'
     },
     docFooter: {
       prev: '上一篇',

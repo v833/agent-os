@@ -1,13 +1,13 @@
-# agent-os
+# ThreadPilot
 
-把飞书变成 AI 编程 CLI（Claude Code / Codex / DimAgent）的指挥台。
+在飞书话题里，指挥你的 AI 编程团队。
 一个话题对应一个任务；Agent 之间可以协作；定时任务可以主动触发工作。
 
 ## 最重要的行为准则：一切皆为插件
 
 > 本项目所有设计与改动，必须把「一切皆为插件」作为最高优先级的准则，优先级高于其他任何工程约定。
 
-**核心思想**：Agent OS 的能力不是写死的，而是由插件装配而成——`cordis.yml` 声明启用哪些插件及参数，`src/plugins/loader.ts` 按声明挂载。能力通过 `ctx.<service>` 与类型化事件协作，而不是互相 import 具体实现。
+**核心思想**：ThreadPilot 的能力不是写死的，而是由插件装配而成——`cordis.yml` 声明启用哪些插件及参数，`src/plugins/loader.ts` 按声明挂载。能力通过 `ctx.<service>` 与类型化事件协作，而不是互相 import 具体实现。
 
 **落地要求**：
 
@@ -92,7 +92,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/observability.test.ts`：可观测性插件集成测试——测试指标统计、Trace 归档落盘与 /metrics 命令
 - `src/plugins/bitable-board.ts`：bitable-board 看板插件——把任务生命周期同步到飞书多维表格，并轮询待处理记录反向拉起任务
 - `src/plugins/bitable-board.test.ts`：看板插件集成测试——覆盖事件聚合、状态同步、失败重试、重启补拉与反向任务启动
-- `src/plugins/host.test.ts`：最小 Agent OS 集成测试——事件路由、命令派发、任务生命周期、停止与协作交接
+- `src/plugins/host.test.ts`：最小 ThreadPilot 集成测试——事件路由、命令派发、任务生命周期、停止与协作交接
 
 ### 核心与执行引擎（纯函数模块，供服务插件复用）
 
@@ -101,7 +101,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/prompt-policies.ts`：提示词策略文案、交互模式下的 Skill 选择与项目 Skill 片段组装
 - `src/core/prompts.ts`：提示词领域模型——模板定义、参数校验、{{var}} 插值、Markdown 模板解析、分层覆盖与流水线片段排序合并
 - `src/core/prompts.test.ts`：提示词核心领域模型测试
-- `src/core/project-skills.ts`：工作区覆盖与 Agent OS 内置 Skill 的查找、读取和提示词复用
+- `src/core/project-skills.ts`：工作区覆盖与 ThreadPilot 内置 Skill 的查找、读取和提示词复用
 - `src/core/project-skills.test.ts`：Skill 覆盖优先级、内置回退和真实缺失测试
 - `src/core/team-registry.ts`：团队成员注册表、团队上下文与项目 Skill 检查
 - `src/core/team-registry.test.ts`：团队成员查询、上下文和缺失 Skill 检查测试
@@ -210,7 +210,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 ## 注释规范
 
-- 每个源文件顶部都要用中文说明模块职责，以及它在 Agent OS 流程中的位置。
+- 每个源文件顶部都要用中文说明模块职责，以及它在 ThreadPilot 流程中的位置。
 - 对状态机、并发/节流、取消与回滚、外部平台协议、双层 JSON、权限和安全边界等关键代码，必须补充解释“为什么这样做”的注释。
 - 对语义不直观的导出类型、函数和类使用简洁的中文 JSDoc，说明输入、输出或重要约束。
 - 注释必须与实现同步；修改行为时同时更新相关注释，禁止保留已经失效的说明。

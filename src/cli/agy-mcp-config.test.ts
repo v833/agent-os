@@ -15,7 +15,7 @@ const server = {
   tools: ["request_clarification"],
 } as const;
 
-test("agy MCP 配置合并工作区已有 Server，并可幂等更新 Agent OS Server", async (t) => {
+test("agy MCP 配置合并工作区已有 Server，并可幂等更新 ThreadPilot Server", async (t) => {
   const cwd = await mkdtemp(join(tmpdir(), "agent-os-agy-mcp-"));
   t.after(() => rm(cwd, { recursive: true, force: true }));
   const configPath = join(cwd, ".agents", "mcp_config.json");

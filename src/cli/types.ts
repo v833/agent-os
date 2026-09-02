@@ -1,6 +1,6 @@
 /**
  * CLI 适配层公共契约：统一 Codex、Claude Code 与 DimAgent 的参数构造和事件语义，
- * 让 Agent OS 的进程控制与具体供应商协议彼此独立。
+ * 让 ThreadPilot 的进程控制与具体供应商协议彼此独立。
  */
 import type { ApplicationToolServer } from './app-tools.js'
 

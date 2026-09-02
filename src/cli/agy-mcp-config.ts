@@ -1,6 +1,6 @@
 /**
  * CLI MCP 配置准备：把插件注册的 stdio Server 合并到指定配置文件，
- * 让 headless 执行引擎自动发现 Agent OS 工具；只写入执行引擎提供的
+ * 让 headless 执行引擎自动发现 ThreadPilot 工具；只写入执行引擎提供的
  * server，不覆盖用户已有的其他 MCP 配置。
  */
 import { randomUUID } from "node:crypto";
@@ -44,7 +44,7 @@ async function readConfig(path: string, label: string): Promise<AgyMcpConfig> {
   return parsed as AgyMcpConfig;
 }
 
-/** 把 Agent OS 的 stdio Server 合并进一个 CLI 的 mcpServers 配置文件。 */
+/** 把 ThreadPilot 的 stdio Server 合并进一个 CLI 的 mcpServers 配置文件。 */
 export async function ensureMcpConfigFile(
   path: string,
   servers: readonly ApplicationToolServer[],
@@ -56,7 +56,7 @@ export async function ensureMcpConfigFile(
     const config = await readConfig(path, label);
     const mcpServers = isRecord(config.mcpServers) ? config.mcpServers : {};
     for (const server of servers) {
-      // stdio 配置使用 command/args；tools 仅供 Agent OS 结果路由，不写入文件。
+      // stdio 配置使用 command/args；tools 仅供 ThreadPilot 结果路由，不写入文件。
       mcpServers[server.id] = {
         command: server.command,
         args: [...server.args],
@@ -80,7 +80,7 @@ export async function ensureMcpConfigFile(
   }
 }
 
-/** 确保 agy 在指定工作区及全局配置发现当前已注册的 Agent OS MCP Server。 */
+/** 确保 agy 在指定工作区及全局配置发现当前已注册的 ThreadPilot MCP Server。 */
 export async function ensureAgyMcpConfig(
   cwd: string,
   servers: readonly ApplicationToolServer[],

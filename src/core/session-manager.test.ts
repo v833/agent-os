@@ -194,7 +194,7 @@ test("会话只允许合法状态流转并保留 CLI 会话 ID", async () => {
   await assert.rejects(manager.transition("missing", "active"), /会话不存在/);
 });
 
-test("CLI 会话 ID 拒绝空值和不存在的 Agent OS 会话", async () => {
+test("CLI 会话 ID 拒绝空值和不存在的 ThreadPilot 会话", async () => {
   const manager = new SessionManager({ createId: () => "session-1" });
   const created = (await manager.resolve(address())).session;
 

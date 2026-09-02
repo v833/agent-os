@@ -1,6 +1,6 @@
 /**
  * 澄清 MCP 工具定义：同时供 stdio 与 loopback HTTP 传输复用。
- * 工具只返回“已提交”确认，实际问题收集由 Agent OS 澄清插件接管。
+ * 工具只返回“已提交”确认，实际问题收集由 ThreadPilot 澄清插件接管。
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -25,7 +25,7 @@ export function registerClarificationTool(server: McpServer): void {
       content: [
         {
           type: "text",
-          text: `已提交 ${questions.length} 个结构化问题，等待 Agent OS 展示给用户并收集回答。`,
+          text: `已提交 ${questions.length} 个结构化问题，等待 ThreadPilot 展示给用户并收集回答。`,
         },
       ],
     }),

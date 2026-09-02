@@ -1,7 +1,7 @@
 /**
  * ACP 常驻进程：为任意标准 ACP 接入引擎维护单个常驻 ACP server 子进程与
  * 持久 ACP 连接。多个任务在同一进程上并发执行（通知按 sessionId 路由隔离），
- * 空闲超时自动回收，进程崩溃后下次调用自动重建，Agent OS 退出时显式关闭。
+ * 空闲超时自动回收，进程崩溃后下次调用自动重建，ThreadPilot 退出时显式关闭。
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
@@ -31,7 +31,7 @@ const INITIALIZE_TIMEOUT_MS = 30 * 1_000;
 const LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 2_500] as const;
 /** prompt 响应与最后一条 session/update 可能乱序，给通知一个有限排空窗口。 */
 const PROMPT_NOTIFICATION_DRAIN_MS = 250;
-/** session/close 是收尾操作，不能因为服务端异常拖住 Agent OS 退出。 */
+/** session/close 是收尾操作，不能因为服务端异常拖住 ThreadPilot 退出。 */
 const SESSION_CLOSE_TIMEOUT_MS = 2_000;
 
 const TOOL_LABELS: Record<string, string> = {
@@ -422,7 +422,7 @@ export class AcpDaemon {
     });
 
     const app = acp
-      .client({ name: "agent-os" })
+      .client({ name: "threadpilot" })
       .onRequest(acp.methods.client.session.requestPermission, (context) =>
         permissionResponse(context.params),
       )
@@ -472,8 +472,8 @@ export class AcpDaemon {
           protocolVersion: acp.PROTOCOL_VERSION,
           clientCapabilities: {},
           clientInfo: {
-            name: "agent-os",
-            title: "Agent OS",
+            name: "threadpilot",
+            title: "ThreadPilot",
             version: "0.1.0",
           },
         }),
@@ -680,7 +680,7 @@ export class AcpDaemon {
       throw new Error(`${this.adapter.displayName} ACP 需要工作目录 cwd`);
     }
     // ACP session/new、resume、load 都要求绝对路径；调用方传相对路径时
-    // 统一以 Agent OS 当前进程目录解析，避免 DimCode 直接拒绝请求。
+    // 统一以 ThreadPilot 当前进程目录解析，避免 DimCode 直接拒绝请求。
     const absoluteWorkingDirectory = resolve(cwd);
     this.activeRuns += 1;
     this.clearIdleTimer();
@@ -957,7 +957,7 @@ export class AcpDaemon {
     }
   }
 
-  /** 永久关闭常驻进程并释放连接；幂等，供 Agent OS 退出时调用。 */
+  /** 永久关闭常驻进程并释放连接；幂等，供 ThreadPilot 退出时调用。 */
   async close(): Promise<void> {
     await this.closeConnection(true);
   }

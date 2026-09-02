@@ -1,4 +1,4 @@
-# Agent OS Docs 一键构建并部署至服务器
+# ThreadPilot Docs 一键构建并部署至服务器
 param(
     [string]$Server = "103.240.199.204",
     [string]$User = "root",

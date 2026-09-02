@@ -15,7 +15,7 @@ import type { CommandHandler } from "../types.js";
 function parseInitArgs(argsString: string): { force: boolean; name: string } {
   const tokens = argsString.trim().split(/\s+/).filter(Boolean);
   const force = tokens.includes("--force") || tokens.includes("-f");
-  const name = tokens.filter((token) => token !== "--force" && token !== "-f").join(" ") || "Agent OS 任务看板";
+  const name = tokens.filter((token) => token !== "--force" && token !== "-f").join(" ") || "ThreadPilot 任务看板";
   return { force, name };
 }
 
@@ -182,7 +182,7 @@ function createHandler(pluginCtx: Context): CommandHandler {
       return;
     }
     const storage = ctx.bitableBoard.getStorage();
-    const name = storage?.name || "Agent OS 任务看板";
+    const name = storage?.name || "ThreadPilot 任务看板";
     const url = storage?.url || `https://feishu.cn/base/${storage?.appToken}`;
     const tableId = storage?.tableId || "未知";
     const lines = [
@@ -273,7 +273,7 @@ async function handleBoardCardAction(
     }
     const name = typeof action.value.name === "string" && action.value.name.trim()
       ? action.value.name.trim()
-      : "Agent OS 任务看板";
+      : "ThreadPilot 任务看板";
     // 覆盖场景沿用当前看板绑定的回退群聊，避免新表失去反向拉起目标群。
     const fallbackChatId = storage?.fallbackChatId;
     await runBoardInit(ctx, bot, botConfig, action.messageId, false, name, fallbackChatId);
@@ -290,7 +290,7 @@ async function handleBoardCardAction(
     }
     const name = typeof action.value.name === "string" && action.value.name.trim()
       ? action.value.name.trim()
-      : "Agent OS 任务看板";
+      : "ThreadPilot 任务看板";
     const fallbackChatId = storage?.fallbackChatId;
     await runBoardInit(ctx, bot, botConfig, action.messageId, false, name, fallbackChatId);
     return { toast: { type: "success", content: "已开始重试初始化任务看板。" } };

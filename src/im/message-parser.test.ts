@@ -34,13 +34,13 @@ test("还原所有重复出现的提及占位符", () => {
 
 test("从飞书原始占位符识别带空格的前导提及名称", () => {
   const mentions = [
-    { key: "@_user_1", name: "Agent OS", openId: "ou_bot" },
+    { key: "@_user_1", name: "ThreadPilot", openId: "ou_bot" },
     { key: "@_user_2", name: "开发同学", openId: "ou_user" },
   ];
 
   assert.equal(
     leadingMentionName("@_user_1 /claude 检查项目", mentions),
-    "Agent OS",
+    "ThreadPilot",
   );
   assert.equal(
     leadingMentionName("请 @_user_1 检查项目", mentions),

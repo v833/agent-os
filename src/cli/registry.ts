@@ -1,5 +1,5 @@
 /**
- * CLI 注册表：登记 Agent OS 支持的执行引擎。引擎插件通过 registerCliAdapter
+ * CLI 注册表：登记 ThreadPilot 支持的执行引擎。引擎插件通过 registerCliAdapter
  * 把自己登记进统一注册表（“一切皆插件”：新增执行引擎 = 新增一个插件，
  * 从 cordis.yml 移除引擎插件 = 引擎整体下线）。
  */

@@ -12,7 +12,7 @@ import {
   resolveProjectSkill,
 } from "./project-skills.js";
 
-test("工作区 .agents Skill 优先于 .claude 与 Agent OS 内置版本", async (t) => {
+test("工作区 .agents Skill 优先于 .claude 与 ThreadPilot 内置版本", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const agentsSkill = join(
@@ -40,7 +40,7 @@ test("工作区 .agents Skill 优先于 .claude 与 Agent OS 内置版本", asyn
   assert.equal(resolved?.content, "# workspace agents\n");
 });
 
-test("工作区没有同名 Skill 时回退到 Agent OS 内置版本", async (t) => {
+test("工作区没有同名 Skill 时回退到 ThreadPilot 内置版本", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "agent-os-skills-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
 

@@ -1,8 +1,8 @@
 # 产品简介
 
-## Agent OS 是什么
+## ThreadPilot 是什么
 
-Agent OS 将 Claude Code、OpenAI Codex、DimAgent 和 Google Antigravity (agy) 等命令行编程工具接入飞书。团队成员直接在飞书话题群中与对应角色的 Bot 沟通，由 Bot 在后台调用本地 CLI 完成代码读取、编写和验证。
+ThreadPilot 将 Claude Code、OpenAI Codex、DimAgent 和 Google Antigravity (agy) 等命令行编程工具接入飞书。团队成员直接在飞书话题群中与对应角色的 Bot 沟通，由 Bot 在后台调用本地 CLI 完成代码读取、编写和验证。
 
 系统通过飞书 WebSocket 长连接与开放平台通信，部署在内网或个人开发机上，不需要公网 IP。
 

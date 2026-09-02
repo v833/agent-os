@@ -1,5 +1,5 @@
 /**
- * bitable-board 看板插件：把 Agent OS 任务生命周期实时同步到飞书多维表格，
+ * bitable-board 看板插件：把 ThreadPilot 任务生命周期实时同步到飞书多维表格，
  * 并轮询表格记录反向拉起新任务。支持运行时通过 mount() 动态热挂载、本地持久化
  * (data/bitable-board.json) 与冷启动自愈。
  */
@@ -508,7 +508,7 @@ export class BitableBoardService extends Service {
       appToken: options.appToken,
       tableId: options.tableId,
       url: normalizeBoardUrl(options.url, options.appToken),
-      name: options.name || "Agent OS 任务看板",
+      name: options.name || "ThreadPilot 任务看板",
       botId,
       // 冷启动恢复（options.createdAt/updatedAt 来自缓存）时沿用原时间，
       // 保证 /board link 重启前后输出一致；否则用当前时间。
@@ -1139,7 +1139,7 @@ export class BitableBoardService extends Service {
     try {
       await runtime.bot.send(
         chatId,
-        `⚠️ 任务看板「${this.currentStorage?.name || "Agent OS 任务看板"}」已失效，事件同步与反向拉起暂时暂停。错误：${detail}。请检查多维表格是否被删除，并使用 /board init --force 重新挂载。`,
+        `⚠️ 任务看板「${this.currentStorage?.name || "ThreadPilot 任务看板"}」已失效，事件同步与反向拉起暂时暂停。错误：${detail}。请检查多维表格是否被删除，并使用 /board init --force 重新挂载。`,
       );
     } catch (sendError) {
       console.error("[看板] 发送失效提醒失败:", (sendError as Error).message);

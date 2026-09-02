@@ -186,7 +186,7 @@ test("ObservabilityStore 正确聚合多维度指标与 Token 消耗", () => {
 
   // Markdown 格式化检查
   const md = store.formatSummaryMarkdown(summary);
-  assert.match(md, /Agent OS 可观测性大盘/);
+  assert.match(md, /ThreadPilot 可观测性大盘/);
   assert.match(md, /developer/);
   assert.match(md, /claude/);
   assert.match(md, /read_file/);

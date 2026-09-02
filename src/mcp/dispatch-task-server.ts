@@ -7,7 +7,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerDispatchTaskTool } from "./dispatch-task-tools.js";
 
 const server = new McpServer({
-  name: "agent-os",
+  name: "threadpilot",
   version: "1.0.0",
 });
 registerDispatchTaskTool(server);

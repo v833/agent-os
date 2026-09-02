@@ -1,5 +1,5 @@
 /**
- * host 集成测试：用真实服务插件 + 假平台/假执行引擎组装一个最小 Agent OS，
+ * host 集成测试：用真实服务插件 + 假平台/假执行引擎组装一个最小 ThreadPilot，
  * 验证事件路由、命令派发、任务生命周期、停止与协作交接的完整链路。
  * 这里是“一切皆为插件”装配方式的端到端验证：替换 lark/cli 实现即可测试。
  */
@@ -463,7 +463,7 @@ interface Host {
   calls: ReturnType<typeof createFakeBot>["calls"];
 }
 
-/** 组装一个最小 Agent OS 宿主：真实服务插件 + 假 cli/lark/config。 */
+/** 组装一个最小 ThreadPilot 宿主：真实服务插件 + 假 cli/lark/config。 */
 async function createHost(
   bots: BotConfig[] = [baseBotConfig],
   connectionState: BotConnectionState = "connected",

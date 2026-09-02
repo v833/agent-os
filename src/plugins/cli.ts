@@ -107,7 +107,7 @@ export const name = "cli";
 
 export function apply(ctx: Context) {
   const service = new CliService(ctx);
-  // 卸载插件时回收常驻 ACP 进程，避免 Agent OS 退出后遗留 dim acp 子进程；
+  // 卸载插件时回收常驻 ACP 进程，避免 ThreadPilot 退出后遗留 dim acp 子进程；
   // cordis 会等待清理函数完成。
   return () => service.dispose();
 }
