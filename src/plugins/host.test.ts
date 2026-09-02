@@ -1280,7 +1280,7 @@ test("任务准备失败时释放运行实例并把会话恢复为 idle", async 
   });
 
   assert.equal(started, false);
-  assert.equal(host.root.tasks.activeRuns.size, 0);
+  assert.equal(host.root.tasks.activeRunCount, 0);
   assert.equal(manager.get(resolved.session.id)?.status, "idle");
   assert.equal(host.calls.cards.length, 0);
   assert.equal(host.cli.captures.length, 0);
@@ -2220,6 +2220,16 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
   await host.root.plugin(productCommentsPlugin);
   await waitForAllActive(host.root);
   const runtimeConfig = host.root.config.bot("testbot")!;
+  const backgroundEvents = { started: 0, results: 0, failed: 0 };
+  host.root.on("task/started", (payload) => {
+    if (payload.origin === "background") backgroundEvents.started += 1;
+  });
+  host.root.on("task/result", (payload) => {
+    if (payload.origin === "background") backgroundEvents.results += 1;
+  });
+  host.root.on("task/failed", (payload) => {
+    if (payload.origin === "background") backgroundEvents.failed += 1;
+  });
 
   await host.root.parallel(
     "bot/message",
@@ -2246,6 +2256,11 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
     "testbot",
     "CommentDoc123",
   ) !== undefined);
+  const commentFlow = host.root.productSpec.flows.findPendingByDocument(
+    "testbot",
+    "CommentDoc123",
+  )!;
+  const commentSessionId = commentFlow.sessionId;
 
   await host.root.parallel(
     "bot/document-comment",
@@ -2265,6 +2280,17 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
   await waitFor(() => host.cli.captures.length === 2);
   assert.equal(host.cli.captures[1]?.sessionId, "sess-comment");
   assert.match(host.cli.captures[1]?.prompt ?? "", /评论 ID：comment-1/);
+  assert.match(host.cli.captures[1]?.prompt ?? "", /你所在的 Agent 团队/);
+  assert.equal(host.root.tasks.activeRunCount, 1);
+  assert.equal(host.cli.captures[1]?.onEvent !== undefined, true);
+  host.cli.captured?.onEvent?.({
+    type: "session",
+    sessionId: "sess-comment-live",
+  });
+  await waitFor(() =>
+    host.root.sessions.manager.get(commentSessionId)?.cliSessionId ===
+    "sess-comment-live",
+  );
 
   await host.root.parallel(
     "bot/document-comment",
@@ -2284,12 +2310,21 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(host.cli.captures.length, 2);
 
-  host.cli.finish({ answer: "已补充用户不存在时的空状态和重试规则。", sessionId: "sess-comment" });
+  host.cli.finish({
+    answer: "已补充用户不存在时的空状态和重试规则。",
+    sessionId: "sess-comment",
+    stats: { contextWindowTokens: 128 },
+  });
   await waitFor(() => host.cli.captures.length === 3);
   host.cli.finish({ answer: "已合并排队评论。", sessionId: "sess-comment" });
   await waitFor(() => host.calls.documentCommentReplies.length === 2);
   assert.match(host.calls.documentCommentReplies[0]!, /空状态和重试规则/);
   assert.match(host.calls.documentCommentReplies[1]!, /合并排队评论/);
+  assert.equal(backgroundEvents.started, 2);
+  assert.equal(backgroundEvents.results, 2);
+  assert.equal(backgroundEvents.failed, 0);
+  assert.equal(host.root.tasks.contextWindowFor(commentSessionId), 128);
+  assert.equal(host.root.tasks.activeRunCount, 0);
   assert.deepEqual(host.calls.documentCommentReactions, [
     { active: true },
     { active: true },
@@ -2315,7 +2350,7 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
   );
   await waitFor(() => host.calls.documentCommentReplies.length === 3);
   assert.equal(
-    host.root.sessions.manager.get("sess-comment")?.cliSessionId,
+    host.root.sessions.manager.get(commentSessionId)?.cliSessionId,
     undefined,
   );
   assert.equal(
@@ -2323,6 +2358,9 @@ test("云文档 @产品经理评论恢复原 CLI 会话并回复同一条评论"
     "这条评论暂时无法处理，请稍后重试或在原话题联系产品经理。",
   );
   assert.doesNotMatch(host.calls.documentCommentReplies[2]!, /private details/);
+  assert.equal(backgroundEvents.started, 3);
+  assert.equal(backgroundEvents.results, 2);
+  assert.equal(backgroundEvents.failed, 1);
 });
 
 test("同一话题提交更新方案后，旧产品确认卡变为失效状态", async () => {
@@ -3800,10 +3838,10 @@ test("topic 模式：同一 bot 的多个子任务经真实 bot/message 路由�
     developerConfig,
   );
 
-  // 两个独立话题都能进入 active：activeRuns 以会话 id 为键，两个不同键即两个不同会话。
-  await waitFor(() => host.root.tasks.activeRuns.size >= 2);
+  // 两个独立话题都能进入 active：TasksService 按会话 id 统计运行轮次。
+  await waitFor(() => host.root.tasks.activeRunCount >= 2);
   assert.equal(
-    host.root.tasks.activeRuns.size,
+    host.root.tasks.activeRunCount,
     2,
     "同一 bot 的两个子任务必须并行进入 active",
   );
@@ -3821,7 +3859,7 @@ test("topic 模式：同一 bot 的多个子任务经真实 bot/message 路由�
 
   // 收尾：完成两个并行任务，让任务收尾清理心跳与卡片节流定时器，避免进程悬挂不退出。
   host.cli.finishAll({ answer: "完成", sessionId: "sess-1" });
-  await waitFor(() => host.root.tasks.activeRuns.size === 0);
+  await waitFor(() => host.root.tasks.activeRunCount === 0);
 });
 
 test("编排 runs 表有界：超过 MAX_RUNS 个完成的 run 后淘汰最旧", async () => {

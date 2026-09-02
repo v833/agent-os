@@ -140,7 +140,7 @@ test("tasks 不依赖 team 插件也能独立装配", async () => {
     const root = new Context();
     await root.plugin(loader, { path: ymlPath });
     await root.inject(["tasks"], (ctx) => {
-      assert.equal(ctx.tasks.activeRuns.size, 0);
+      assert.equal(ctx.tasks.activeRunCount, 0);
     });
   });
 });

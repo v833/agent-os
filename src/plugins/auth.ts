@@ -139,7 +139,7 @@ export class AuthService extends Service {
    * 同一会话已有待完成的登录流程时不重复发卡（失败重试不会刷屏）。
    */
   async handleTaskFailed(payload: TaskResultPayload): Promise<void> {
-    if (!payload.error) return;
+    if (payload.origin === "background" || !payload.error) return;
     const { botId } = payload.session;
     const adapter = this.ctx.cli.get(
       payload.session.cliId,

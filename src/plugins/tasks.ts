@@ -2,13 +2,19 @@
  * tasks 任务编排服务插件：从原 index.ts 抽取的一轮 CLI 执行编排——
  * 启动 active 状态、资源下载、任务卡片、进度流式更新、取消收尾与结果事件。
  * 实际执行前广播 task/started，成功卡片前广播 task/completion-check，
- * 任务结束后按结果广播 result/failed/paused/cancelled，
+ * 任务结束后按结果广播 result/failed/paused/cancelled；普通消息与后台入口
+ * 通过事件 origin 区分，后台入口不触发普通 QA/协作副作用。
  * 由业务插件完成必要的运行时校验与后续接力。
  */
 import { Service, type Context } from "cordis";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import type { CliAdapter, CliEvent, CliRunStats } from "../cli/types.js";
+import type {
+  CliAdapter,
+  CliEvent,
+  CliRunResult,
+  CliRunStats,
+} from "../cli/types.js";
 import {
   CliRunError,
   cliExecutionTimeoutMs,
@@ -43,6 +49,31 @@ import type {
 
 export { cliExecutionTimeoutMs } from "../cli/runner.js";
 
+/**
+ * 在已有会话上执行一次无卡片的 CLI 任务；调用方负责准备最终提示词，
+ * TasksService 负责会话占用、运行实例登记、恢复指针和状态清理。
+ */
+export interface ExecuteOnSessionInput {
+  bot: TaskResultPayload["bot"];
+  botConfig: BotConfig;
+  sessionId: string;
+  prompt: string;
+  /** 会话已占用后生成最终提示词，确保提示词扩展可读取一致的会话快照。 */
+  composePrompt?: (session: Session) => string | Promise<string>;
+  /** 未包装的任务文本；未提供时退回最终 prompt，仅供观察者展示。 */
+  requestedPrompt?: string;
+  ownerOpenId: string;
+  replyToMessageId: string;
+  hasThread: boolean;
+  taskId?: string;
+  interaction?: InteractionPolicy;
+}
+
+type BackgroundOutcome =
+  | { kind: "result"; result: CliRunResult }
+  | { kind: "failed"; error: string; stats?: CliRunStats }
+  | { kind: "cancelled"; stats?: CliRunStats };
+
 // Token、轮次和 CLI 耗时按执行轮累加；上下文占用与窗口大小是快照，只保留最新值。
 function accumulateCliStats(
   current: CliRunStats | undefined,
@@ -75,12 +106,27 @@ function accumulateCliStats(
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
 export class TasksService extends Service {
   /** 每轮运行额外记录发起人和唯一 ID，供卡片按钮鉴权并隔离旧卡片。 */
-  readonly activeRuns = new Map<string, ActiveRun>();
+  private readonly activeRuns = new Map<string, ActiveRun>();
   /** Claude 的模型窗口通常到本轮结束才返回，按会话记忆后供下一轮实时展示。 */
-  readonly contextWindows = new Map<string, number>();
+  private readonly contextWindows = new Map<string, number>();
 
   constructor(ctx: Context) {
     super(ctx, "tasks");
+  }
+
+  /** 当前正在执行的轮数；只读查询供状态命令和测试使用。 */
+  get activeRunCount(): number {
+    return this.activeRuns.size;
+  }
+
+  /** 判断指定会话是否存在正在执行的轮次。 */
+  hasActiveRun(sessionId: string): boolean {
+    return this.activeRuns.has(sessionId);
+  }
+
+  /** 返回会话最近一次观察到的模型上下文窗口大小。 */
+  contextWindowFor(sessionId: string): number | undefined {
+    return this.contextWindows.get(sessionId);
   }
 
   /** 请求停止指定的一轮任务；发起人鉴权与旧卡片隔离见 task-abort。 */
@@ -101,8 +147,272 @@ export class TasksService extends Service {
     }
   }
 
+  /**
+   * 在已有会话上执行后台 CLI 任务。
+   * 评论等非普通消息入口不能复制任务生命周期，统一通过此入口运行。
+   */
+  async executeOnSession(
+    input: ExecuteOnSessionInput,
+  ): Promise<CliRunResult> {
+    const session = await this.claimSession(input.sessionId);
+    const activeRun: ActiveRun = {
+      controller: new AbortController(),
+      ownerOpenId: input.ownerOpenId,
+      runId: randomUUID(),
+    };
+    this.activeRuns.set(session.id, activeRun);
+    const taskStartTime = Date.now();
+    const requestedPrompt = input.requestedPrompt ?? input.prompt;
+    const traceId = activeRun.runId;
+    let observedStats: CliRunStats | undefined;
+    let outcomeEmitted = false;
+    const rememberCliSession = this.createCliSessionRecorder(session.id);
+    const handleCliEvent = (event: CliEvent) => {
+      if (event.type === "session") {
+        // 会话 ID 先于最终结果到达；立即写入，后台任务被停止或进程重启后仍可 resume。
+        void rememberCliSession(event.sessionId).catch((error) => {
+          console.error(
+            "[会话] 保存后台任务的 CLI 会话 ID 失败:",
+            (error as Error).message,
+          );
+        });
+        return;
+      }
+      if (event.type === "result" && event.stats) {
+        observedStats = event.stats;
+      }
+    };
+    try {
+      const prompt = input.composePrompt
+        ? await input.composePrompt(session)
+        : input.prompt;
+      const cliAdapter = this.getSessionAdapter(session);
+      const cliEnv = this.getCliEnvironment(
+        input.botConfig,
+        session,
+        undefined,
+        input.ownerOpenId,
+      );
+      await this.ctx
+        .parallel("task/started", {
+          botConfig: input.botConfig,
+          session: this.ctx.sessions.manager.get(session.id) ?? session,
+          taskId: input.taskId,
+          interaction: input.interaction,
+          traceId,
+          startedAt: taskStartTime,
+          requestedPrompt,
+          senderOpenId: input.ownerOpenId,
+          origin: "background",
+        })
+        .catch((error) => {
+          console.error("[任务] 广播后台开始事件失败:", (error as Error).message);
+        });
+      try {
+        const result = await this.runCliTask(
+          cliAdapter,
+          prompt,
+          session,
+          activeRun.controller.signal,
+          cliEnv,
+          handleCliEvent,
+        );
+        if (result.sessionId) {
+          await rememberCliSession(result.sessionId);
+        }
+        if (result.stats?.contextWindowTokens) {
+          this.contextWindows.set(session.id, result.stats.contextWindowTokens);
+        }
+        if (activeRun.controller.signal.aborted) {
+          await this.emitBackgroundOutcome(
+            input,
+            session,
+            activeRun,
+            requestedPrompt,
+            taskStartTime,
+            { kind: "cancelled", stats: observedStats ?? result.stats },
+          );
+          outcomeEmitted = true;
+          throw new Error(`${cliAdapter.displayName} 执行已取消`);
+        }
+        await this.emitBackgroundOutcome(
+          input,
+          session,
+          activeRun,
+          requestedPrompt,
+          taskStartTime,
+          { kind: "result", result },
+        );
+        outcomeEmitted = true;
+        return result;
+      } catch (error) {
+        const sessionUnavailable =
+          error instanceof CliRunError &&
+          Boolean(cliAdapter.isSessionUnavailable?.(error.message)) &&
+          Boolean(session.cliSessionId);
+        if (sessionUnavailable) {
+          await this.ctx.sessions.manager.clearCliSessionId(session.id);
+        }
+        if (
+          error instanceof CliRunError &&
+          error.sessionId &&
+          !sessionUnavailable
+        ) {
+          await rememberCliSession(error.sessionId);
+        }
+        if (!outcomeEmitted) {
+          if (activeRun.controller.signal.aborted) {
+            await this.emitBackgroundOutcome(
+              input,
+              session,
+              activeRun,
+              requestedPrompt,
+              taskStartTime,
+              { kind: "cancelled", stats: observedStats },
+            );
+          } else {
+            await this.emitBackgroundOutcome(
+              input,
+              session,
+              activeRun,
+              requestedPrompt,
+              taskStartTime,
+              { kind: "failed", error: (error as Error).message, stats: observedStats },
+            );
+          }
+          outcomeEmitted = true;
+        }
+        throw error;
+      }
+    } finally {
+      if (this.activeRuns.get(session.id) === activeRun) {
+        this.activeRuns.delete(session.id);
+      }
+      try {
+        await this.markSessionIdle(session.id);
+      } catch (error) {
+        console.error(
+          "[会话] 后台任务收尾时恢复空闲状态失败:",
+          (error as Error).message,
+        );
+      }
+    }
+  }
+
+  /** 等待并原子占用已有会话；后台入口与普通任务共用同一状态边界。 */
+  private async claimSession(sessionId: string): Promise<Session> {
+    while (true) {
+      const session = this.ctx.sessions.manager.get(sessionId);
+      if (!session || session.status === "closed") {
+        throw new Error("会话已经失效");
+      }
+      if (session.status === "idle") {
+        if (!session.cliSessionId) {
+          throw new Error("会话对应的 CLI 会话不存在");
+        }
+        try {
+          return await this.ctx.sessions.manager.transition(session.id, "active");
+        } catch (error) {
+          // 另一个入口可能刚刚抢占会话；仍是 active 时回到队列等待。
+          if (this.ctx.sessions.manager.get(sessionId)?.status === "active") {
+            await new Promise<void>((resolve) => setTimeout(resolve, 100));
+            continue;
+          }
+          throw error;
+        }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
   private getSessionAdapter(session: Session): CliAdapter {
     return this.ctx.cli.get(session.cliId, session.accessMode ?? "headless");
+  }
+
+  /** 创建统一的 CLI 会话 ID 记录器，覆盖流式事件、成功结果和失败结果。 */
+  private createCliSessionRecorder(
+    sessionId: string,
+    onObserved?: (cliSessionId: string) => void,
+  ): (cliSessionId: string) => Promise<void> {
+    let pendingCliSessionSave: Promise<void> | undefined;
+    return async (cliSessionId: string) => {
+      onObserved?.(cliSessionId);
+      if (
+        this.ctx.sessions.manager.get(sessionId)?.cliSessionId === cliSessionId
+      ) {
+        await pendingCliSessionSave;
+        return;
+      }
+      const save = this.ctx.sessions.manager.setCliSessionId(
+        sessionId,
+        cliSessionId,
+      );
+      pendingCliSessionSave = save.then(() => undefined);
+      await pendingCliSessionSave;
+    };
+  }
+
+  /** 广播后台任务终态；观察者异常不能改变 CLI 任务本身的成功或失败。 */
+  private async emitBackgroundOutcome(
+    input: ExecuteOnSessionInput,
+    session: Session,
+    activeRun: ActiveRun,
+    requestedPrompt: string,
+    startedAt: number,
+    outcome: BackgroundOutcome,
+  ): Promise<void> {
+    const payload: TaskResultPayload = {
+      bot: input.bot,
+      botConfig: input.botConfig,
+      session: this.ctx.sessions.manager.get(session.id) ?? session,
+      requestedPrompt,
+      answer: outcome.kind === "result" ? outcome.result.answer : "",
+      replyToMessageId: input.replyToMessageId,
+      hasThread: input.hasThread,
+      taskId: input.taskId,
+      interaction: input.interaction,
+      senderOpenId: input.ownerOpenId,
+      origin: "background",
+      durationMs: Date.now() - startedAt,
+      stats:
+        outcome.kind === "result"
+          ? outcome.result.stats
+          : outcome.stats,
+      toolCalls: outcome.kind === "result" ? outcome.result.toolCalls : undefined,
+      traceId: activeRun.runId,
+      ...(outcome.kind === "failed" ? { error: outcome.error } : {}),
+    };
+    try {
+      if (outcome.kind === "result") {
+        await this.ctx.parallel("task/result", payload);
+      } else if (outcome.kind === "failed") {
+        await this.ctx.parallel("task/failed", payload);
+      } else {
+        await this.ctx.parallel("task/cancelled", payload);
+      }
+    } catch (error) {
+      console.error(
+        `[任务] 广播后台${outcome.kind === "result" ? "结果" : outcome.kind === "failed" ? "失败" : "取消"}事件失败:`,
+        (error as Error).message,
+      );
+    }
+  }
+
+  /** 统一合并 bot 代理和应用工具插件提供的 CLI 环境。 */
+  private getCliEnvironment(
+    botConfig: BotConfig,
+    session: Session,
+    collaboration: StartTaskInput["collaboration"],
+    senderOpenId: string,
+  ): Record<string, string> {
+    return {
+      ...(botCliEnvironment(botConfig) ?? {}),
+      ...(this.ctx.bail("task/cli-environment", {
+        session,
+        collaboration,
+        senderOpenId,
+      }) ?? {}),
+    };
   }
 
   private async markSessionIdle(sessionId: string): Promise<void> {
@@ -279,7 +589,7 @@ export class TasksService extends Service {
 
     const progress = new TaskProgressTracker(
       Date.now,
-      this.contextWindows.get(session.id),
+      this.contextWindowFor(session.id),
       !session.cliSessionId,
     );
     let observedCliSessionId = session.cliSessionId;
@@ -306,22 +616,12 @@ export class TasksService extends Service {
           { ...metrics },
         ]),
       );
-    let pendingCliSessionSave: Promise<void> | undefined;
-    const rememberCliSession = async (cliSessionId: string) => {
-      observedCliSessionId = cliSessionId;
-      if (
-        this.ctx.sessions.manager.get(session.id)?.cliSessionId === cliSessionId
-      ) {
-        await pendingCliSessionSave;
-        return;
-      }
-      const save = this.ctx.sessions.manager.setCliSessionId(
-        session.id,
-        cliSessionId,
-      );
-      pendingCliSessionSave = save.then(() => undefined);
-      await pendingCliSessionSave;
-    };
+    const rememberCliSession = this.createCliSessionRecorder(
+      session.id,
+      (cliSessionId) => {
+        observedCliSessionId = cliSessionId;
+      },
+    );
     const cardUpdater = this.ctx.cards.throttled(async (card) => {
       try {
         await bot.updateCard(cardId, card);
@@ -383,6 +683,7 @@ export class TasksService extends Service {
             stats: observedStats,
             toolMetrics: snapshotToolMetrics(),
             traceId: activeRun.runId,
+            origin: "message",
           });
         }
       }
@@ -395,14 +696,12 @@ export class TasksService extends Service {
     // bot 配置了网络代理（如 agy 访问云端服务）时，把标准代理变量注入 CLI 子进程并
     // 覆盖全局配置（bots.json 的 proxy 优先于 .env 的 HTTP_PROXY 等）；
     // 不配置则继承父进程环境，.env 的全局代理变量自然生效。
-    const cliEnv = {
-      ...(botCliEnvironment(botConfig) ?? {}),
-      ...(this.ctx.bail("task/cli-environment", {
-        session,
-        collaboration,
-        senderOpenId,
-      }) ?? {}),
-    };
+    const cliEnv = this.getCliEnvironment(
+      botConfig,
+      session,
+      collaboration,
+      senderOpenId,
+    );
     const handleCliEvent = (event: CliEvent) => {
       if (
         event.type === "result" &&
@@ -482,6 +781,7 @@ export class TasksService extends Service {
           requestedPrompt: originalRequestedPrompt ?? requestedPrompt,
           ...(senderOpenId ? { senderOpenId } : {}),
           ...(collaboration ? { collaboration } : {}),
+          origin: "message",
         })
         .catch((error) => {
           const detail =
@@ -581,6 +881,7 @@ export class TasksService extends Service {
           suppressHandoff: effectiveSuppressHandoff,
           interaction,
           senderOpenId,
+          origin: "message",
           senderUnionId,
           durationMs: Date.now() - taskStartTime,
           stats: observedStats ?? result.stats,
@@ -835,6 +1136,7 @@ export class TasksService extends Service {
             stats: observedStats,
             toolMetrics: snapshotToolMetrics(),
             traceId: activeRun.runId,
+            origin: "message",
           });
         }
       })

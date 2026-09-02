@@ -305,6 +305,9 @@ export type TaskToolMetrics = Record<
   { invocations: number; failures: number }
 >;
 
+/** 任务入口来源，用于区分普通消息和不应触发业务接力的后台任务。 */
+export type TaskOrigin = "message" | "background";
+
 /** 一轮普通任务开始时广播的稳定链路上下文。 */
 export interface TaskStartedPayload {
   botConfig: BotConfig;
@@ -320,6 +323,8 @@ export interface TaskStartedPayload {
   senderOpenId?: string;
   /** 协作交接单；QA 轮携带 qaReview，观察者可据此标记“QA验收中”。 */
   collaboration?: CollaborationMessage;
+  /** 入口来源；后台任务只供观察者消费，不触发普通 QA/协作副作用。 */
+  origin?: TaskOrigin;
 }
 
 /** 一轮任务成功完成时随 task/result 事件广播给协作插件的信息。 */
@@ -353,6 +358,8 @@ export interface TaskResultPayload {
   toolMetrics?: TaskToolMetrics;
   /** 关联的链路追踪 ID。 */
   traceId?: string;
+  /** 入口来源；后台任务只供观察者消费，不触发普通 QA/协作副作用。 */
+  origin?: TaskOrigin;
 }
 
 /** QA Gate 从普通 CLI 文本中解析出的结构化、可路由结论。 */
