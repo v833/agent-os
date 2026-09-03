@@ -149,6 +149,8 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/bitable-bootstrap.ts`：多维表格建表流水线——原子化创建 App、10 个标准业务字段、6 色状态枚举与看板视图
 - `src/core/bitable-bootstrap.test.ts`：建表流水线单元测试——覆盖标准字段、单选枚举、流水线编排与降级处理
 - `src/cli/types.ts`：多引擎统一适配器、事件和运行结果契约
+- `src/cli/args.ts`：全局 CLI 启动参数解析与语义化版本比对
+- `src/cli/args.test.ts`：全局 CLI 参数与版本比对单元测试
 - `src/cli/acp-adapter.ts`：通用 ACP 适配器——把任意提供 ACP server 的 CLI（id/command/args/session 配置驱动）以标准接入方式登记，与具体供应商解耦
 - `src/cli/acp-adapter.test.ts`：标准 ACP 接入参数、会话配置、展示名回退、compact 与失效会话识别测试
 - `src/cli/registry.ts`：多引擎注册表（registerCliAdapter 供引擎插件登记）、查找与 CLI ID 校验
