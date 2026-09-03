@@ -99,31 +99,6 @@ async function handleCardAction(
     }
   }
 
-  if (action.value.action === "retry_task") {
-    const sessionId =
-      typeof action.value.sessionId === "string" ? action.value.sessionId : "";
-    const retryToken =
-      typeof action.value.retryToken === "string" ? action.value.retryToken : "";
-    const outcome = await ctx.tasks.retryTask(
-      sessionId,
-      retryToken,
-      action.operatorOpenId,
-    );
-    if (outcome.ok) {
-      return { toast: { type: "success", content: "已重新发起任务，正在执行..." } };
-    }
-    if (outcome.reason === "forbidden") {
-      return { toast: { type: "warning", content: "只有任务发起人可以重试任务。" } };
-    }
-    if (outcome.reason === "already_running") {
-      return { toast: { type: "info", content: "该任务已经在执行中，请勿重复点击。" } };
-    }
-    if (outcome.reason === "start_failed") {
-      return { toast: { type: "error", content: outcome.message ?? "重新启动任务失败。" } };
-    }
-    return { toast: { type: "info", content: "该重试请求已失效，请在话题中直接发消息。" } };
-  }
-
   if (action.value.action !== "abort_task") return undefined;
   const sessionId =
     typeof action.value.sessionId === "string" ? action.value.sessionId : "";

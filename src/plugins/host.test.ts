@@ -35,6 +35,8 @@ import * as clarificationPlugin from "./clarification.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as dispatchTaskPlugin from "./dispatch-task.js";
 import * as commandsPlugin from "./commands.js";
+import * as closeCommand from "./commands/close.js";
+import * as compactCommand from "./commands/compact.js";
 import * as docCommand from "./commands/doc.js";
 import * as orchestrationPlugin from "./orchestration.js";
 import * as orchestrationActions from "./orchestration/actions.js";
@@ -50,6 +52,7 @@ import * as teamCommand from "./commands/team.js";
 import * as routerPlugin from "./router.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
+import * as taskRetryPlugin from "./task-retry.js";
 import * as teamPlugin from "./team.js";
 import * as workspacesPlugin from "./workspaces.js";
 import { waitForAllActive } from "./loader.js";
@@ -226,6 +229,7 @@ function createFakeBot(
   connectionState: BotConnectionState = "connected",
   failOptions: {
     replyCard?: boolean;
+    failReplyCardAt?: number;
     emptyReplyCard?: boolean;
     updateCard?: boolean;
     failUpdateCardAt?: number;
@@ -250,6 +254,7 @@ function createFakeBot(
     documentCommentReactions: [] as { active: boolean }[],
   };
   let updateCardAttempts = 0;
+  let replyCardAttempts = 0;
   const bot = {
     client: {},
     getConnectionState: () => connectionState,
@@ -260,7 +265,13 @@ function createFakeBot(
       return `msg-${calls.replies.length}`;
     },
     replyCard: async (_id: string, card: Record<string, unknown>) => {
-      if (failOptions.replyCard) throw new Error("模拟：首次挂卡片失败");
+      replyCardAttempts += 1;
+      if (
+        failOptions.replyCard ||
+        failOptions.failReplyCardAt === replyCardAttempts
+      ) {
+        throw new Error("模拟：首次挂卡片失败");
+      }
       calls.cards.push(card);
       if (failOptions.emptyReplyCard) return undefined;
       return `card-${calls.cards.length}`;
@@ -412,6 +423,29 @@ function productSpecValueOf(
   throw new Error("卡片里找不到产品方案确认按钮");
 }
 
+/** 从失败任务卡片里取出 task-retry 插件贡献的一次性重试参数。 */
+function retryTaskValueOf(
+  card: Record<string, unknown>,
+): Record<string, unknown> {
+  const elements = (card.body as { elements?: unknown[] } | undefined)
+    ?.elements ?? [];
+  for (const element of elements) {
+    const behaviors = (element as { behaviors?: { value?: unknown }[] })
+      ?.behaviors ?? [];
+    for (const behavior of behaviors) {
+      const value = behavior.value;
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        (value as { action?: string }).action === "retry_task"
+      ) {
+        return value as Record<string, unknown>;
+      }
+    }
+  }
+  throw new Error("卡片里找不到任务重试按钮");
+}
+
 /** 从编排面板卡片里取出「重试」按钮携带的 runId/subTaskId/retryToken。 */
 function retrySubtaskValueOf(
   card: Record<string, unknown>,
@@ -472,6 +506,7 @@ async function createHost(
   actions = false,
   botFailOptions: {
     replyCard?: boolean;
+    failReplyCardAt?: number;
     emptyReplyCard?: boolean;
     updateCard?: boolean;
     failUpdateCardAt?: number;
@@ -479,6 +514,7 @@ async function createHost(
     emptyReplyMention?: boolean;
     emptySendMention?: boolean;
   } = {},
+  taskRetryConfig: Record<string, unknown> | false = false,
 ): Promise<Host> {
   const root = new Context();
   const fakeBot = createFakeBot(connectionState, botFailOptions);
@@ -539,6 +575,9 @@ async function createHost(
     root.plugin(orchestrateCommand),
     root.plugin(panelCommand),
     root.plugin(tasksPlugin),
+    ...(taskRetryConfig === false
+      ? []
+      : [root.plugin(taskRetryPlugin, taskRetryConfig ?? {})]),
     root.plugin(clarificationPlugin),
     root.plugin(routerPlugin),
   ]);
@@ -4937,8 +4976,451 @@ test("重试派发经真实 bot/message 路由再次执行，重放同一消息�
   );
 });
 
-test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并重新拉起任务", async () => {
+test("task-retry 未装配时失败卡不渲染按钮且动作无人认领", async () => {
   const host = await createHost([baseBotConfig]);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("API Error: 402"));
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "无插件失败任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const failedCard = host.calls.updates.find(
+    (card: any) => card.header?.template === "red",
+  )!;
+  assert.equal(JSON.stringify(failedCard).includes("retry_task"), false);
+  const response = await host.root.serial(
+    "bot/card-action",
+    {
+      operatorOpenId: "ou_owner",
+      messageId: "m_card",
+      value: {
+        action: "retry_task",
+        sessionId: "forged",
+        runId: "forged",
+        retryToken: "forged",
+      },
+    },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(response, undefined);
+});
+
+test("任务重试在操作者身份缺失时严格拒绝", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("API Error: 402"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "严格鉴权任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await waitFor(() => !host.root.tasks.hasActiveRun(value.sessionId as string));
+
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(response?.toast?.type, "warning");
+  assert.equal(host.cli.captures.length, 1);
+});
+
+test("同会话新任务进入执行链后旧失败卡立即失效", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("API Error: 402"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      threadId: "thread-retry-stale",
+      text: "旧任务 A",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await waitFor(() => !host.root.tasks.hasActiveRun(value.sessionId as string));
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m2",
+      threadId: "thread-retry-stale",
+      text: "新任务 B",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.ok(host.cli.captures[1]?.prompt.includes("新任务 B"));
+
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.match(response?.toast?.content ?? "", /已失效/);
+  assert.equal(host.cli.captures.length, 2);
+  host.cli.finish({ answer: "B 完成", sessionId: "sess-b" });
+});
+
+test("上下文整理认领会话后旧失败卡立即失效", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  await host.root.plugin(compactCommand);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("compact stale failure"), [
+    { type: "session", sessionId: "sess-before-compact" },
+  ]);
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      threadId: "thread-compact-retry",
+      text: "整理前失败任务",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await waitFor(() => !host.root.tasks.hasActiveRun(value.sessionId as string));
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-compact",
+      threadId: "thread-compact-retry",
+      text: "/compact",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.compactOptions !== undefined);
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.match(response?.toast?.content ?? "", /已失效/);
+  host.cli.finishCompact();
+});
+
+test("任务重试启动前置失败后保留原按钮再次尝试", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    { failReplyCardAt: 2 },
+    {},
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("API Error: 402"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "可恢复任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await waitFor(() => !host.root.tasks.hasActiveRun(value.sessionId as string));
+
+  const failed = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(failed?.toast?.type, "error");
+  assert.equal(host.cli.captures.length, 1);
+
+  const retried = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(retried?.toast?.type, "success");
+  await waitFor(() => host.cli.captures.length === 2);
+  host.cli.finish({ answer: "恢复成功", sessionId: "sess-recovered" });
+});
+
+test("任务重试上下文按 TTL 主动释放并受容量上限约束", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    { ttlMs: 250, maxContexts: 1 },
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("API Error: 402"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "短期失败任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.match(response?.toast?.content ?? "", /已失效/);
+  assert.equal(host.cli.captures.length, 1);
+});
+
+test("任务重试上下文达到容量上限时淘汰最旧失败卡", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    { ttlMs: 1_000, maxContexts: 1 },
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  host.cli.failNext(new Error("first failure"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-capacity-1",
+      threadId: "thread-capacity-1",
+      text: "容量任务一",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.filter((card: any) => card.header?.template === "red")
+      .length === 1,
+  );
+  const firstValue = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+
+  host.cli.failNext(new Error("second failure"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-capacity-2",
+      threadId: "thread-capacity-2",
+      text: "容量任务二",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.filter((card: any) => card.header?.template === "red")
+      .length === 2,
+  );
+  const failedCards = host.calls.updates.filter(
+    (card: any) => card.header?.template === "red",
+  );
+  const secondValue = retryTaskValueOf(failedCards[failedCards.length - 1]!);
+
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value: firstValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.match(response?.toast?.content ?? "", /已失效/);
+  assert.equal(host.cli.captures.length, 2);
+  const secondResponse = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_stranger", messageId: "m_card", value: secondValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(secondResponse?.toast?.type, "warning");
+});
+
+test("会话关闭事件立即释放任务重试上下文", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  await host.root.plugin(closeCommand);
+  await waitForAllActive(host.root);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("close failure"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      threadId: "thread-close-retry",
+      text: "关闭前失败任务",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const failedCard = host.calls.updates.find(
+    (card: any) => card.header?.template === "red",
+  )!;
+  const value = retryTaskValueOf(failedCard);
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "m-close",
+      threadId: "thread-close-retry",
+      text: "/close",
+      senderOpenId: "ou_owner",
+    }),
+    host.bot,
+    runtimeConfig,
+  );
+  assert.ok(host.calls.replies.some((text) => text.includes("当前会话已关闭")));
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.match(response?.toast?.content ?? "", /已失效/);
+});
+
+test("任务重试并发双击只启动一次", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  host.cli.failNext(new Error("double click failure"));
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "并发重试任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => card.header?.template === "red"),
+  );
+  const value = retryTaskValueOf(
+    host.calls.updates.find((card: any) => card.header?.template === "red")!,
+  );
+  await waitFor(() => !host.root.tasks.hasActiveRun(value.sessionId as string));
+
+  const [first, second] = await Promise.all([
+    host.root.serial(
+      "bot/card-action",
+      { operatorOpenId: "ou_owner", messageId: "m_card", value },
+      host.bot,
+      runtimeConfig,
+    ),
+    host.root.serial(
+      "bot/card-action",
+      { operatorOpenId: "ou_owner", messageId: "m_card", value },
+      host.bot,
+      runtimeConfig,
+    ),
+  ]);
+  assert.deepEqual(
+    [first?.toast?.type, second?.toast?.type].sort(),
+    ["info", "success"],
+  );
+  assert.equal(host.cli.captures.length, 2);
+  host.cli.finish({ answer: "并发重试完成", sessionId: "sess-concurrent" });
+});
+
+test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并重新拉起任务", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   // 1. 设置下一次执行报错（模拟 402 API Error）
@@ -4961,17 +5443,15 @@ test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并�
     (card: any) => (card as any).header?.template === "red",
   ) as any;
   assert.ok(failedCard, "必须更新失败卡片");
-  const retryBtn = failedCard.body.elements.find(
-    (el: any) => el.tag === "button" && el.text?.content === "重试任务",
-  );
-  assert.ok(retryBtn, "失败卡片必须渲染重试任务按钮");
-  const retryValue = retryBtn.behaviors[0]?.value;
+  const retryValue = retryTaskValueOf(failedCard);
   assert.equal(retryValue?.action, "retry_task");
   assert.ok(retryValue?.sessionId);
   assert.ok(retryValue?.retryToken);
 
   // 等待上一轮活跃任务释放
-  await waitFor(() => !host.root.tasks.hasActiveRun(retryValue.sessionId));
+  await waitFor(() =>
+    !host.root.tasks.hasActiveRun(retryValue.sessionId as string),
+  );
 
   // 4. 旁观者点击重试，必须被拒绝
   const forbiddenRes = await host.root.serial(

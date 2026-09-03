@@ -52,6 +52,7 @@ import * as routerPlugin from "./router.js";
 import * as schedulePlugin from "./schedule.js";
 import * as sessionsPlugin from "./sessions.js";
 import * as tasksPlugin from "./tasks.js";
+import * as taskRetryPlugin from "./task-retry.js";
 import * as teamPlugin from "./team.js";
 import * as workspacesPlugin from "./workspaces.js";
 
@@ -100,6 +101,7 @@ const pluginRegistry: Record<string, Plugin> = {
   "product-comments": productCommentsPlugin,
   observability: observabilityPlugin,
   tasks: tasksPlugin,
+  "task-retry": taskRetryPlugin,
   team: teamPlugin,
   schedule: schedulePlugin,
   router: routerPlugin,

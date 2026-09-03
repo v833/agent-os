@@ -15,7 +15,7 @@ import type { ProductSpecFlow } from "../core/product-spec.js";
 import type { QAResult } from "../core/qa-result.js";
 import type { Session } from "../core/session-manager.js";
 import type { CliAdapter, CliRunResult, CliRunStats } from "../cli/types.js";
-import type { CardJson } from "../im/card.js";
+import type { CardJson, TaskCardAction } from "../im/card.js";
 import type { MessageResource } from "../im/message-parser.js";
 import type {
   Bot,
@@ -141,8 +141,18 @@ declare module "cordis" {
     "task/message"(
       payload: TaskMessagePayload,
     ): Promise<TaskMessageOutcome | undefined>;
+    /** 任意任务已经原子占用会话；会话级临时能力据此使旧动作失效。 */
+    "task/claimed"(payload: TaskClaimedPayload): void;
     /** 一轮普通任务已进入实际执行阶段；可观测性插件据此建立运行中 Trace。 */
     "task/started"(payload: TaskStartedPayload): void | Promise<void>;
+    /**
+     * 普通任务失败卡片生成前的扩展点；可选插件通过 collector.add 贡献卡片动作，
+     * 同时保存动作所需的一次性上下文。插件下线时收集器为空，失败主流程不受影响。
+     */
+    "task/failure-actions"(
+      collector: TaskFailureActionCollector,
+      payload: TaskFailureActionPayload,
+    ): void | Promise<void>;
     /** 一轮任务成功完成；tasks 服务发出，协作插件监听并决定是否继续交接。 */
     "task/result"(payload: TaskResultPayload): void | Promise<void>;
     /**
@@ -154,6 +164,8 @@ declare module "cordis" {
     "task/paused"(payload: TaskResultPayload): void | Promise<void>;
     /** 一轮任务由发起人主动停止；与失败事件分开，避免误触发认证或编排失败处理。 */
     "task/cancelled"(payload: TaskResultPayload): void | Promise<void>;
+    /** 会话已关闭；保存会话级临时状态的插件应据此立即清理。 */
+    "session/closed"(sessionId: string): void | Promise<void>;
     /** 产品方案由真人确认；可选团队派发插件据此把结果交回原编排者。 */
     "product-spec/approved"(
       payload: ProductSpecApprovedPayload,
@@ -225,6 +237,21 @@ export interface StartTaskInput {
   resources: MessageResource[];
   /** 应用工具恢复任务可禁止普通协作与 QA 自动交接，但仍广播结果供编排汇总。 */
   suppressHandoff?: boolean;
+}
+
+/** 普通任务失败后可选插件收到的不可变执行快照。 */
+export interface TaskFailureActionPayload {
+  input: StartTaskInput;
+  sessionId: string;
+  runId: string;
+}
+
+/** 失败卡片动作的共享契约。 */
+export type TaskFailureAction = TaskCardAction;
+
+/** 失败卡片动作收集器；插件通过 add 贡献按钮，tasks 只负责渲染结果。 */
+export interface TaskFailureActionCollector {
+  add(action: TaskFailureAction): void;
 }
 
 /** 业务插件生成本轮应用工具环境时所需的最小公共上下文。 */
@@ -307,6 +334,12 @@ export type TaskToolMetrics = Record<
 
 /** 任务入口来源，用于区分普通消息和不应触发业务接力的后台任务。 */
 export type TaskOrigin = "message" | "background";
+
+/** 任意任务成功占用会话后广播的运行标识。 */
+export interface TaskClaimedPayload {
+  sessionId: string;
+  runId: string;
+}
 
 /** 一轮普通任务开始时广播的稳定链路上下文。 */
 export interface TaskStartedPayload {

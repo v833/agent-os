@@ -150,16 +150,24 @@ test("长回答生成安全预览、折叠全文并把超限部分切成文本�
   assert.equal(chunks.every(Boolean), true);
 });
 
-test("失败卡片在提供 retryAction 时渲染重试任务按钮", () => {
+test("失败卡片渲染插件贡献的通用动作按钮", () => {
   const cardWithRetry = buildTaskCard({
     title: "Claude (ACP)",
     status: "failed",
     detail: "执行没有完成。你可以点击下方按钮重试。",
     technicalDetail: "API Error: 402",
-    retryAction: {
-      sessionId: "session-402",
-      retryToken: "token-402",
-    },
+    actions: [
+      {
+        label: "重试任务",
+        type: "primary",
+        value: {
+          action: "retry_task",
+          sessionId: "session-402",
+          runId: "run-402",
+          retryToken: "token-402",
+        },
+      },
+    ],
   }) as any;
 
   const retryButton = cardWithRetry.body.elements.find(
@@ -170,6 +178,7 @@ test("失败卡片在提供 retryAction 时渲染重试任务按钮", () => {
   assert.deepEqual(retryButton.behaviors[0]?.value, {
     action: "retry_task",
     sessionId: "session-402",
+    runId: "run-402",
     retryToken: "token-402",
   });
 });

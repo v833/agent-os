@@ -51,7 +51,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 
 - `src/index.ts`：引导入口——创建根 Context 并挂载 loader 插件，然后由 cordis.yml 声明式装配全部能力
 - `cordis.yml`：插件装配文件，声明启用哪些插件及其参数；移除条目或设置 `disabled: true` 即可下线对应能力
-- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/schedule/productSpec/productComments/prompts）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-compose、task/cli-environment、task/completion-check、task/tool-calls、task/result）以及路由/命令/任务/协作共享的输入类型
+- `src/plugins/types.ts`：插件公共契约——集中声明 Cordis 服务（ctx.config/team/sessions/cli/applicationTools/lark/cards/commands/collaboration/tasks/schedule/productSpec/productComments/prompts）与事件（bot/message、bot/card-action、bot/document-comment、task/message、task/prompt-compose、task/cli-environment、task/completion-check、task/tool-calls、task/claimed、task/failure-actions、task/result、session/closed）以及路由/命令/任务/协作共享的输入类型
 - `src/plugins/loader.ts`：装配插件——读取 cordis.yml，按插件名从注册表挂载；等待全部插件进入 ACTIVE（含深层 inject 级联）
 - `src/plugins/config.ts`：config 服务——加载并校验 bot 注册表（config/bots.json + 环境变量凭证），只提供配置数据
 - `src/plugins/team.ts`：team 服务——提供 TeamRegistry、团队上下文与 Skill 诊断，并通过 task/prompt-compose 向提示词流水线贡献团队上下文片段
@@ -71,6 +71,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/cards.ts`：cards 服务——任务/会话/协作卡片渲染与节流更新器的统一出口
 - `src/plugins/commands.ts`：commands 服务——斜杠命令注册表
 - `src/plugins/tasks.ts`：tasks 服务——一轮 CLI 执行的编排（可配置超时、active 状态、资源下载、任务卡片、进度、取消收尾），完成后广播 task/result
+- `src/plugins/task-retry.ts`：task-retry 可选插件——订阅失败动作扩展点，为失败卡片贡献一次性重试按钮，并管理严格鉴权、轮次隔离、TTL/容量清理与启动失败恢复
 - `src/plugins/collaboration.ts`：collaboration 服务——通用交接单、轮次去重、协作卡片与结果回传；普通成员完成后固定交回 reportToBotId
 - `src/plugins/dispatch-task.ts`：通用团队派发插件——注册 `dispatch_task`、校验 Team Leader/目标/轮次、监听产品确认事件，并通过 collaboration 服务真实派发
 - `src/plugins/dispatch-task-tool.ts`：dispatch-task 插件提供给 stdio/ACP MCP 注入的 Server 描述

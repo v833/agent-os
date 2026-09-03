@@ -85,6 +85,7 @@ test("loader 按 cordis.yml 挂载插件并注入服务", async () => {
         `  - name: commands`,
         `  - name: commands/status`,
         `  - name: tasks`,
+        `  - name: task-retry`,
       ].join("\n"),
     );
 

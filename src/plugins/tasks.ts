@@ -41,6 +41,8 @@ import { TaskProgressTracker } from "../core/task-progress.js";
 import type {
   StartTaskInput,
   TaskCompletionCheckPayload,
+  TaskFailureAction,
+  TaskFailureActionCollector,
   TaskResultPayload,
   TaskToolMetrics,
   TaskToolCallsOutcome,
@@ -103,30 +105,12 @@ function accumulateCliStats(
   };
 }
 
-/** 失败任务的重试上下文快照，供卡片一键重试复用原始输入。 */
-export interface TaskRetryContext {
-  input: StartTaskInput;
-  retryToken: string;
-  createdAt: number;
-}
-
-/** 重试任务请求的处理结果。 */
-export type RetryTaskOutcome =
-  | { ok: true }
-  | {
-      ok: false;
-      reason: "not_found" | "forbidden" | "already_running" | "start_failed";
-      message?: string;
-    };
-
 /** 一轮任务的运行实例与上下文记忆，供停止、进度和后续任务读取。 */
 export class TasksService extends Service {
   /** 每轮运行额外记录发起人和唯一 ID，供卡片按钮鉴权并隔离旧卡片。 */
   private readonly activeRuns = new Map<string, ActiveRun>();
   /** Claude 的模型窗口通常到本轮结束才返回，按会话记忆后供下一轮实时展示。 */
   private readonly contextWindows = new Map<string, number>();
-  /** 会话最近一次失败任务的重试上下文，供卡片一键重试。 */
-  private readonly retryContexts = new Map<string, TaskRetryContext>();
 
   constructor(ctx: Context) {
     super(ctx, "tasks");
@@ -165,55 +149,6 @@ export class TasksService extends Service {
     }
   }
 
-  /** 请求重试指定会话上失败的任务；发起人鉴权与防重校验。 */
-  async retryTask(
-    sessionId: string,
-    retryToken: string,
-    operatorOpenId: string,
-  ): Promise<RetryTaskOutcome> {
-    const retryContext = this.retryContexts.get(sessionId);
-    if (!retryContext || retryContext.retryToken !== retryToken) {
-      return { ok: false, reason: "not_found" };
-    }
-    // 超过 1 小时的重试上下文视为过期失效
-    if (Date.now() - retryContext.createdAt > 3600_000) {
-      this.retryContexts.delete(sessionId);
-      return { ok: false, reason: "not_found" };
-    }
-    if (
-      operatorOpenId &&
-      retryContext.input.senderOpenId &&
-      operatorOpenId !== retryContext.input.senderOpenId
-    ) {
-      return { ok: false, reason: "forbidden" };
-    }
-    if (this.hasActiveRun(sessionId)) {
-      return { ok: false, reason: "already_running" };
-    }
-    // 一次性消费，防止重复点击触发多个并发任务
-    this.retryContexts.delete(sessionId);
-
-    // 确保使用最新的 session 状态，若上一轮刚收尾残留 active 则置为 idle
-    const latestSession = this.ctx.sessions.manager.get(sessionId);
-    if (latestSession) {
-      if (latestSession.status === "active") {
-        await this.markSessionIdle(sessionId);
-      }
-      retryContext.input.session =
-        this.ctx.sessions.manager.get(sessionId) ?? latestSession;
-    }
-
-    const started = await this.startTask(retryContext.input);
-    if (!started) {
-      return {
-        ok: false,
-        reason: "start_failed",
-        message: "重新拉起任务失败，请检查会话状态。",
-      };
-    }
-    return { ok: true };
-  }
-
   /**
    * 在已有会话上执行后台 CLI 任务。
    * 评论等非普通消息入口不能复制任务生命周期，统一通过此入口运行。
@@ -229,7 +164,7 @@ export class TasksService extends Service {
     };
     this.activeRuns.set(session.id, activeRun);
     const taskStartTime = Date.now();
-    this.retryContexts.delete(session.id);
+    this.emitTaskClaimed(session.id, activeRun.runId);
     const requestedPrompt = input.requestedPrompt ?? input.prompt;
     const traceId = activeRun.runId;
     let observedStats: CliRunStats | undefined;
@@ -483,6 +418,15 @@ export class TasksService extends Service {
     };
   }
 
+  /** 广播会话已被本轮占用；可选监听器异常不能回滚已经成功的状态迁移。 */
+  private emitTaskClaimed(sessionId: string, runId: string): void {
+    try {
+      this.ctx.emit("task/claimed", { sessionId, runId });
+    } catch (error) {
+      console.error("[任务] 广播会话占用事件失败:", (error as Error).message);
+    }
+  }
+
   private async markSessionIdle(sessionId: string): Promise<void> {
     // /close 可能与后台 finally 同时发生；已关闭会话不能被迟到的清理逻辑改回 idle。
     if (this.ctx.sessions.manager.get(sessionId)?.status !== "active") return;
@@ -549,6 +493,7 @@ export class TasksService extends Service {
     this.activeRuns.set(session.id, activeRun);
     try {
       await claim;
+      this.emitTaskClaimed(session.id, activeRun.runId);
     } catch (error) {
       if (this.activeRuns.get(session.id) === activeRun) {
         this.activeRuns.delete(session.id);
@@ -1167,13 +1112,30 @@ export class TasksService extends Service {
           return;
         }
         console.error(`[CLI] 执行失败 engine=${cliAdapter.id}:`, errorMessage);
-        const retryToken = !isCompacting ? randomUUID() : undefined;
-        if (retryToken) {
-          this.retryContexts.set(session.id, {
-            input,
-            retryToken,
-            createdAt: Date.now(),
-          });
+        const failureActions: TaskFailureAction[] = [];
+        const failureActionCollector: TaskFailureActionCollector = {
+          add(action) {
+            failureActions.push(action);
+          },
+        };
+        if (!isCompacting) {
+          try {
+            await this.ctx.parallel(
+              "task/failure-actions",
+              failureActionCollector,
+              {
+                input,
+                sessionId: session.id,
+                runId: activeRun.runId,
+              },
+            );
+          } catch (actionError) {
+            // 失败动作是可选增强；插件异常不能覆盖原任务的失败收尾。
+            console.error(
+              "[任务] 收集失败卡片动作失败:",
+              (actionError as Error).message,
+            );
+          }
         }
         await cardUpdater.finish(
           this.ctx.cards.task({
@@ -1182,10 +1144,10 @@ export class TasksService extends Service {
             detail: isCompacting
               ? "上下文整理失败，当前 CLI 会话没有改变。"
               : sessionUnavailable
-                ? "会话已失效。点击“重试任务”或发送“继续执行”将重新建立会话并继续原任务。"
-                : "执行没有完成。你可以调整指令后在当前话题重试，或点击下方直接重试。",
+                ? "会话已失效。发送“继续执行”将重新建立会话并继续原任务。"
+                : "执行没有完成。你可以调整指令后在当前话题重试。",
             technicalDetail: errorMessage,
-            ...(retryToken ? { retryAction: { sessionId: session.id, retryToken } } : {}),
+            ...(failureActions.length ? { actions: failureActions } : {}),
             ...(!isCompacting ? { progress: progress.snapshot() } : {}),
           }),
         );

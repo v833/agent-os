@@ -106,6 +106,12 @@ plugins:
       # pull: true            # 反向任务拉起（Bitable ➔ ThreadPilot）
       # pollIntervalMs: 30000 # 反向拉起轮询间隔（毫秒）
   - name: tasks
+  # 普通任务失败后一键重试：保存有界内存快照、严格鉴权、轮次隔离和一次性消费。
+  # 移除此插件即不再渲染或响应重试按钮，普通失败卡与手动发消息重试不受影响。
+  - name: task-retry
+    config:
+      ttlMs: 3600000
+      maxContexts: 500
   # 结构化澄清：移除此插件即可停止 MCP 注入、问题卡片和回答恢复链路。
   - name: clarification
   # CLI 登录：任务因认证失败时发飞书卡片收集登录 key，并驱动引擎完成登录。

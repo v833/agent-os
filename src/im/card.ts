@@ -16,6 +16,13 @@ import type {
 export type CardJson = Record<string, unknown>;
 export type TaskStatus = "running" | "success" | "failed" | "cancelled";
 
+/** 失败任务卡片可选动作；具体能力插件负责生成 value 并处理回调。 */
+export interface TaskCardAction {
+  label: string;
+  type?: "default" | "primary" | "danger";
+  value: Record<string, unknown>;
+}
+
 export interface TaskCardOptions {
   title: string;
   status: TaskStatus;
@@ -26,10 +33,7 @@ export interface TaskCardOptions {
   technicalDetail?: string;
   abortSessionId?: string;
   abortRunId?: string;
-  retryAction?: {
-    sessionId: string;
-    retryToken: string;
-  };
+  actions?: TaskCardAction[];
 }
 
 export interface ClarificationCardOptions {
@@ -469,24 +473,22 @@ function buildFinishedElements(
     });
   }
 
-  if (options.status === "failed" && options.retryAction) {
-    elements.push({
-      tag: "button",
-      text: { tag: "plain_text", content: "重试任务" },
-      type: "primary",
-      width: "default",
-      size: "medium",
-      behaviors: [
-        {
-          type: "callback",
-          value: {
-            action: "retry_task",
-            sessionId: options.retryAction.sessionId,
-            retryToken: options.retryAction.retryToken,
+  if (options.status === "failed") {
+    for (const action of options.actions ?? []) {
+      elements.push({
+        tag: "button",
+        text: { tag: "plain_text", content: action.label },
+        type: action.type ?? "default",
+        width: "default",
+        size: "medium",
+        behaviors: [
+          {
+            type: "callback",
+            value: action.value,
           },
-        },
-      ],
-    });
+        ],
+      });
+    }
   }
 
   return elements;
