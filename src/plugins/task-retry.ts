@@ -6,6 +6,8 @@
  */
 import { randomUUID } from "node:crypto";
 import { type Context } from "cordis";
+import { topicTaskId } from "../core/topic-task.js";
+import { createInteractionPolicy } from "../core/interaction-policy.js";
 import { z } from "zod";
 import type { CardActionResponse } from "../im/lark.js";
 import type {
@@ -146,6 +148,38 @@ class TaskRetryController {
       context.retryToken !== retryToken ||
       context.input.botConfig.id !== botId
     ) {
+      const persisted = this.ctx.sessions.manager.get(sessionId);
+            if (
+        persisted &&
+        (persisted.status === "idle" || persisted.status === "creating") &&
+        persisted.retryPrompt &&
+        (!persisted.botId || persisted.botId === botId || persisted.botId === "default") &&
+        !this.ctx.tasks.hasActiveRun(sessionId)
+      ) {
+        const botConfig = this.ctx.config.bot(botId);
+        const runtime = this.ctx.lark.bot(botId);
+        if (botConfig && runtime) {
+          const started = await this.ctx.tasks.startTask({
+            bot: runtime.bot,
+            botConfig,
+            session: persisted,
+            hasThread: Boolean(persisted.threadId),
+            replyToMessageId: persisted.threadId || persisted.chatId,
+            senderOpenId: operatorOpenId,
+            taskId: topicTaskId({
+              messageId: persisted.threadId || persisted.chatId,
+              chatId: persisted.chatId,
+              threadId: persisted.threadId,
+              rootId: "",
+            }),
+            interaction: createInteractionPolicy(persisted.threadId ? "team" : "direct", false),
+            requestedPrompt: persisted.retryPrompt,
+            isCompacting: false,
+            resources: [],
+          });
+          if (started) return { ok: true };
+        }
+      }
       return { ok: false, reason: "not_found" };
     }
     // 身份只能来自飞书回调。缺失身份也必须拒绝，不能因为解析为空串而绕过鉴权。
@@ -256,7 +290,7 @@ class TaskRetryController {
 }
 
 export const name = "task-retry";
-export const inject = ["tasks", "sessions"];
+export const inject = ["tasks", "sessions", "config", "lark"];
 
 export function apply(ctx: Context, config: Config = {}) {
   const service = new TaskRetryController(ctx, config);

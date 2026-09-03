@@ -5497,3 +5497,46 @@ test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并�
   assert.match(replayRes?.toast?.content ?? "", /已失效/);
   assert.equal(host.cli.captures.length, 2, "重放旧重试按钮不能再次启动任务");
 });
+
+test("内存上下文丢失时（如服务重启或补发卡片），点击重试按钮可从持久化会话兜底恢复", async () => {
+  const host = await createHost(
+    [baseBotConfig],
+    "connected",
+    {},
+    false,
+    false,
+    {},
+    {},
+  );
+  const runtimeConfig = host.root.config.bot("testbot")!;
+  const session = await host.root.sessions.manager.resolve({
+    messageId: "m_init",
+    chatId: "chat1",
+    threadId: "thread_fallback",
+    rootId: "",
+  });
+  await host.root.sessions.manager.setRetryPrompt(
+    session.session.id,
+    "兜底重试提示词",
+  );
+
+  // 点击一个内存中完全不存在的 retryToken
+  const value = {
+    action: "retry_task",
+    sessionId: session.session.id,
+    retryToken: "random_token_not_in_memory",
+  };
+
+  const response = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(response?.toast?.type, "success");
+  assert.match(response?.toast?.content ?? "", /已重新发起任务/);
+
+  await waitFor(() => host.cli.captures.length === 1);
+  assert.ok(host.cli.captures[0]?.prompt.includes("兜底重试提示词"));
+  host.cli.finish({ answer: "兜底重试完成", sessionId: "sess-done" });
+});
