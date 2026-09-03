@@ -139,6 +139,7 @@ class TaskRetryController {
     retryToken: string,
     operatorOpenId: string,
     botId: string,
+    messageId?: string,
   ): Promise<RetryTaskOutcome> {
     this.pruneExpired();
     const context = this.contexts.get(sessionId);
@@ -164,7 +165,7 @@ class TaskRetryController {
             botConfig,
             session: persisted,
             hasThread: Boolean(persisted.threadId),
-            replyToMessageId: persisted.threadId || persisted.chatId,
+            replyToMessageId: messageId || persisted.threadId || persisted.chatId,
             senderOpenId: operatorOpenId,
             taskId: topicTaskId({
               messageId: persisted.threadId || persisted.chatId,
@@ -232,7 +233,7 @@ class TaskRetryController {
 
   /** 将重试结果映射为飞书 toast；非本插件动作返回 undefined 继续 serial 分发。 */
   async handleCardAction(
-    action: { operatorOpenId: string; value: Record<string, unknown> },
+    action: { operatorOpenId: string; messageId?: string; value: Record<string, unknown> },
     botId: string,
   ): Promise<CardActionResponse | undefined> {
     if (action.value.action !== "retry_task") return undefined;
@@ -248,6 +249,7 @@ class TaskRetryController {
       retryToken,
       action.operatorOpenId,
       botId,
+      action.messageId,
     );
     if (outcome.ok) {
       return { toast: { type: "success", content: "已重新发起任务，正在执行..." } };
