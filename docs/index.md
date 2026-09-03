@@ -4,32 +4,38 @@ layout: home
 hero:
   name: "ThreadPilot"
   text: "在飞书话题里，指挥你的 AI 编程团队"
-  tagline: "调度 Claude Code、Codex、DimAgent 与 Antigravity，让不同角色的 Agent 协同完成研发任务。"
+  tagline: "常驻后台连接飞书长连接，为每个话题拉起独立 CLI（Codex / Claude Code / DimAgent / Antigravity），流式卡片实时回传，手机电脑多端同步。"
   image:
     src: /logo.png
     alt: ThreadPilot Logo
   actions:
     - theme: brand
-      text: 快速上手 →
+      text: 5 分钟快速上手 →
       link: /guide/getting-started
     - theme: alt
-      text: 查看使用说明书
-      link: /guide/user-manual
+      text: 飞书应用配置
+      link: /guide/feishu-setup
     - theme: alt
-      text: 团队协作模式
+      text: 团队协作流程
       link: /guide/team-agents
 
 features:
   - icon: 💬
-    title: 飞书话题驱动
-    details: 在话题群中 @机器人 提交需求并保留上下文，无需在本地终端手动输入。
+    title: 话题即隔离会话
+    details: 在飞书话题群中 @机器人 提交任务，自动保持上下文连贯；不同话题独立隔离，随时追问或新建会话。
   - icon: 🎛️
-    title: 实时执行卡片
-    details: 卡片实时更新工具调用、耗时与 Token 消耗，支持发起人随时停止与澄清表单交互。
-  - icon: 🤝
-    title: 角色化分工协作
-    details: CEO 助理拆解目标、产品经理编写文档、开发工程师写代码、QA 工程师在快照环境执行测试。
+    title: 实时流式卡片
+    details: 每轮执行原样回传工具轨迹、命令输出、运行耗时与 Token 消耗，发起人可在卡片上随时停止任务。
+  - icon: 👥
+    title: 虚拟产研协作
+    details: 支持配置多台不同职责的 Bot（助理、产品、开发、QA），支持需求澄清表单、方案确认与隔离快照验收。
+  - icon: ⏱️
+    title: 定时任务与看板
+    details: 用自然语言配置周期巡检任务，一键初始化飞书多维表格看板，自动双向同步任务生命周期。
   - icon: 🔌
-    title: 插件化装配
-    details: 执行引擎、斜杠命令与协作机制均以插件形式提供，通过 cordis.yml 声明配置。
+    title: 一切皆为插件
+    details: 基于 Cordis 插件架构，执行引擎、平台、斜杠命令与协作逻辑完全解耦，通过 cordis.yml 声明式启用。
+  - icon: 🔒
+    title: 内网安全与鉴权
+    details: 基于 WebSocket 长连接接收事件，无需公网 IP 与 Webhook；内置严格发起人鉴权，防止多人协同越权。
 ---
