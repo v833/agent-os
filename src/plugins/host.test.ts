@@ -4936,3 +4936,84 @@ test("重试派发经真实 bot/message 路由再次执行，重放同一消息�
     "重放同一消息不能再次启动任务",
   );
 });
+
+test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并重新拉起任务", async () => {
+  const host = await createHost([baseBotConfig]);
+  const runtimeConfig = host.root.config.bot("testbot")!;
+
+  // 1. 设置下一次执行报错（模拟 402 API Error）
+  host.cli.failNext(new Error("API Error: 402 deepseek-v4-flash-free需先充值后调用"));
+
+  // 2. 发起任务
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({ text: "运行测试任务", senderOpenId: "ou_owner" }),
+    host.bot,
+    runtimeConfig,
+  );
+  await waitFor(() => host.cli.captures.length === 1);
+
+  // 3. 等待卡片更新到失败状态，并提取重试按钮
+  await waitFor(() =>
+    host.calls.updates.some((card: any) => (card as any).header?.template === "red"),
+  );
+  const failedCard = host.calls.updates.find(
+    (card: any) => (card as any).header?.template === "red",
+  ) as any;
+  assert.ok(failedCard, "必须更新失败卡片");
+  const retryBtn = failedCard.body.elements.find(
+    (el: any) => el.tag === "button" && el.text?.content === "重试任务",
+  );
+  assert.ok(retryBtn, "失败卡片必须渲染重试任务按钮");
+  const retryValue = retryBtn.behaviors[0]?.value;
+  assert.equal(retryValue?.action, "retry_task");
+  assert.ok(retryValue?.sessionId);
+  assert.ok(retryValue?.retryToken);
+
+  // 等待上一轮活跃任务释放
+  await waitFor(() => !host.root.tasks.hasActiveRun(retryValue.sessionId));
+
+  // 4. 旁观者点击重试，必须被拒绝
+  const forbiddenRes = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_stranger", messageId: "m_card", value: retryValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(forbiddenRes?.toast?.type, "warning");
+  assert.match(forbiddenRes?.toast?.content ?? "", /只有任务发起人/);
+  assert.equal(host.cli.captures.length, 1, "旁观者点击不能启动新任务");
+
+  // 5. 任务发起人点击重试
+  const successRes = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value: retryValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(successRes?.toast?.type, "success");
+  assert.match(successRes?.toast?.content ?? "", /已重新发起任务/);
+
+  // 6. 等待第二次任务启动
+  await waitFor(() => host.cli.captures.length === 2);
+  assert.ok(host.cli.captures[1]?.prompt.includes("运行测试任务"));
+
+  // 7. 第二次执行成功
+  host.cli.finish({ answer: "充值后重试成功", sessionId: "sess-retried" });
+  await waitFor(() =>
+    host.calls.updates.some((card: any) =>
+      cardSummaryContains(card, "充值后重试成功"),
+    ),
+  );
+
+  // 8. 再次点击旧的重试按钮（Token 已被消费，不可重复执行）
+  const replayRes = await host.root.serial(
+    "bot/card-action",
+    { operatorOpenId: "ou_owner", messageId: "m_card", value: retryValue },
+    host.bot,
+    runtimeConfig,
+  );
+  assert.equal(replayRes?.toast?.type, "info");
+  assert.match(replayRes?.toast?.content ?? "", /已失效/);
+  assert.equal(host.cli.captures.length, 2, "重放旧重试按钮不能再次启动任务");
+});

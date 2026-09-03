@@ -150,6 +150,30 @@ test("长回答生成安全预览、折叠全文并把超限部分切成文本�
   assert.equal(chunks.every(Boolean), true);
 });
 
+test("失败卡片在提供 retryAction 时渲染重试任务按钮", () => {
+  const cardWithRetry = buildTaskCard({
+    title: "Claude (ACP)",
+    status: "failed",
+    detail: "执行没有完成。你可以点击下方按钮重试。",
+    technicalDetail: "API Error: 402",
+    retryAction: {
+      sessionId: "session-402",
+      retryToken: "token-402",
+    },
+  }) as any;
+
+  const retryButton = cardWithRetry.body.elements.find(
+    (el: any) => el.tag === "button" && el.text?.content === "重试任务",
+  );
+  assert.ok(retryButton, "应渲染重试任务按钮");
+  assert.equal(retryButton.type, "primary");
+  assert.deepEqual(retryButton.behaviors[0]?.value, {
+    action: "retry_task",
+    sessionId: "session-402",
+    retryToken: "token-402",
+  });
+});
+
 test("失败与取消卡片使用独立样式并折叠技术错误", () => {
   const failed = buildTaskCard({
     title: "Codex",

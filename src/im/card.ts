@@ -26,6 +26,10 @@ export interface TaskCardOptions {
   technicalDetail?: string;
   abortSessionId?: string;
   abortRunId?: string;
+  retryAction?: {
+    sessionId: string;
+    retryToken: string;
+  };
 }
 
 export interface ClarificationCardOptions {
@@ -460,6 +464,26 @@ function buildFinishedElements(
         {
           tag: "markdown",
           content: `${meta || options.detail}${activityText}`,
+        },
+      ],
+    });
+  }
+
+  if (options.status === "failed" && options.retryAction) {
+    elements.push({
+      tag: "button",
+      text: { tag: "plain_text", content: "重试任务" },
+      type: "primary",
+      width: "default",
+      size: "medium",
+      behaviors: [
+        {
+          type: "callback",
+          value: {
+            action: "retry_task",
+            sessionId: options.retryAction.sessionId,
+            retryToken: options.retryAction.retryToken,
+          },
         },
       ],
     });
