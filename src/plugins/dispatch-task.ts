@@ -36,18 +36,20 @@ export async function handleDispatchTask(
   if (request.targetBotId === payload.botConfig.id) {
     throw new Error(`不能把团队任务派发给当前 bot: ${payload.botConfig.id}`);
   }
+  const maxRounds =
+    payload.botConfig.collaborationMaxRounds ??
+    payload.collaboration?.maxRounds ??
+    16;
   if (
     payload.collaboration &&
-    payload.collaboration.round >= payload.collaboration.maxRounds
+    payload.collaboration.round >= maxRounds
   ) {
     throw new Error(
-      `协作任务已达到轮次上限 ${payload.collaboration.maxRounds}，不能继续派发`,
+      `协作任务已达到轮次上限 ${maxRounds}，不能继续派发`,
     );
   }
 
   const round = payload.collaboration ? payload.collaboration.round + 1 : 1;
-  const maxRounds =
-    payload.collaboration?.maxRounds ?? payload.botConfig.collaborationMaxRounds;
   const reportToBotId =
     payload.collaboration?.reportToBotId ?? payload.botConfig.id;
   return {

@@ -367,7 +367,11 @@ export class QAGate {
       ].join("\n\n"),
       expectedOutput: "解除阻塞并决定继续审查、返工或人工收口。",
       round: 1,
-      maxRounds: 1,
+      maxRounds:
+        payload.collaboration?.maxRounds ??
+        this.ctx.config.bot(leaderId)?.collaborationMaxRounds ??
+        payload.botConfig.collaborationMaxRounds ??
+        16,
       workspaceDir: review.sourceWorkspaceDir,
     });
   }
