@@ -54,6 +54,8 @@ export type RetryTaskOutcome =
 /** 任务重试插件内部控制器；状态不挂到 ctx，插件间只通过事件和 tasks 服务协作。 */
 class TaskRetryController {
   private readonly contexts = new Map<string, TaskRetryContext>();
+  /** 已主动作废的重试令牌：TTL 过期、容量淘汰、会话关闭、新任务认领后，同令牌不可再走持久化兜底。 */
+  private readonly invalidatedTokens = new Set<string>();
   private readonly ttlMs: number;
   private readonly maxContexts: number;
 
@@ -70,6 +72,7 @@ class TaskRetryController {
   stop(): void {
     for (const context of this.contexts.values()) clearTimeout(context.timer);
     this.contexts.clear();
+    this.invalidatedTokens.clear();
   }
 
   /** 记录最新失败轮次，并向失败卡片贡献通用回调按钮。 */
@@ -149,6 +152,10 @@ class TaskRetryController {
       context.retryToken !== retryToken ||
       context.input.botConfig.id !== botId
     ) {
+      // 主动作废过的令牌（TTL 过期、容量淘汰、会话关闭等）不允许走持久化兜底恢复。
+      if (this.invalidatedTokens.has(retryToken)) {
+        return { ok: false, reason: "not_found" };
+      }
       const persisted = this.ctx.sessions.manager.get(sessionId);
             if (
         persisted &&
@@ -281,6 +288,7 @@ class TaskRetryController {
     for (const [sessionId, context] of this.contexts) {
       if (context.expiresAt <= now) this.deleteContext(sessionId);
     }
+    // invalidatedTokens 由 deleteContext 按 maxContexts×4 上限淘汰，无需时间戳清理。
   }
 
   private deleteContext(sessionId: string): void {
@@ -288,6 +296,15 @@ class TaskRetryController {
     if (!context) return;
     clearTimeout(context.timer);
     this.contexts.delete(sessionId);
+    // 主动作废的令牌不允许再经持久化会话兜底恢复；集合有上限，超限淘汰最旧。
+    this.invalidatedTokens.add(context.retryToken);
+    while (this.invalidatedTokens.size > this.maxContexts * 4) {
+      const oldest = this.invalidatedTokens.values().next().value as
+        | string
+        | undefined;
+      if (oldest === undefined) break;
+      this.invalidatedTokens.delete(oldest);
+    }
   }
 }
 
