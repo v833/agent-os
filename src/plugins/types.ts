@@ -46,6 +46,7 @@ import type { ProductCommentsService } from "./product-comments.js";
 import type { ObservabilityService } from "./observability.js";
 import type { BitableBoardService } from "./bitable-board.js";
 import type { PromptsService, PromptComposeCollector } from "./prompts.js";
+import type { IngressService } from "./ingress.js";
 import type { PromptFragment } from "../core/prompts.js";
 
 declare module "cordis" {
@@ -90,6 +91,8 @@ declare module "cordis" {
     observability: ObservabilityService;
     /** 飞书多维表格任务看板：双向任务同步与反向拉起服务。 */
     bitableBoard: BitableBoardService;
+    /** 外部事件 Ingress：Webhook 网关、路由规则与实体→话题映射。 */
+    ingress: IngressService;
   }
 
   interface Events {

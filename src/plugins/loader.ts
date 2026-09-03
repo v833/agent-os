@@ -16,6 +16,8 @@ import * as clarificationPlugin from "./clarification.js";
 import * as cliPlugin from "./cli.js";
 import * as collaborationPlugin from "./collaboration.js";
 import * as dispatchTaskPlugin from "./dispatch-task.js";
+import * as egressPlugin from "./egress.js";
+import * as ingressPlugin from "./ingress.js";
 import * as commandsPlugin from "./commands.js";
 import * as configPlugin from "./config.js";
 import * as boardCommand from "./commands/board.js";
@@ -92,6 +94,8 @@ const pluginRegistry: Record<string, Plugin> = {
   "commands/panel": panelCommand,
   collaboration: collaborationPlugin,
   "dispatch-task": dispatchTaskPlugin,
+  ingress: ingressPlugin,
+  egress: egressPlugin,
   workspaces: workspacesPlugin,
   "qa-gate": qaGatePlugin,
   orchestration: orchestrationPlugin,

@@ -57,6 +57,29 @@ test("sendMentionToChat 构造向群发送新根消息的 @ post 请求", () => 
   });
 });
 
+test("sendMentionToChat 支持一次 @ 多个目标 bot", () => {
+  const message = buildChatMentionMessage(
+    "oc_chat",
+    [
+      { openId: "ou_developer", name: "开发者" },
+      { openId: "ou_reviewer", name: "审查助手" },
+    ],
+    "请处理",
+  );
+  assert.deepEqual(JSON.parse(message.data.content), {
+    zh_cn: {
+      title: "",
+      content: [
+        [
+          { tag: "at", user_id: "ou_developer", user_name: "开发者" },
+          { tag: "at", user_id: "ou_reviewer", user_name: "审查助手" },
+          { tag: "text", text: " 请处理" },
+        ],
+      ],
+    },
+  });
+});
+
 test("提取 text 消息正文", () => {
   assert.equal(
     extractMessageText("text", JSON.stringify({ text: "你好" })),

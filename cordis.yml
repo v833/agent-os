@@ -128,4 +128,29 @@ plugins:
     config:
       # storePath: data/schedules.json      # 计划文件（缺省）
       # runStorePath: data/schedule-runs.json # 运行记录文件（缺省）
+  # 外部事件 Ingress：Webhook 网关（HMAC 验签/防重放/payload 规范化）、路由规则、
+  # 外部实体→飞书话题 1:1 映射。缺省关闭（无规则与密钥时不对外提供服务）。
+  # 启用示例：填入路由规则与来源密钥后，外部事件会按规则建话题并 @ 目标 bot。
+  - name: ingress
+    config:
+      # storePath: data/entity-topics.json   # 实体→话题映射文件（缺省）
+      # host: 0.0.0.0                       # 监听地址（缺省 0.0.0.0；反向代理同机可 127.0.0.1）
+      # port: 3102                           # Webhook 网关端口（缺省 INGRESS_API_PORT）
+      # senderBotId: developer               # 事件消息发送 bot（缺省第一个 bot）
+      # rules:
+      #   - id: github-pulls
+      #     match: { source: github, eventType: "pull_request.*", entity: "v833/*" }
+      #     chatId: oc_xxx
+      #     mentionBots: [developer]
+      #     priority: 10
+      # auth:
+      #   github: { secret: "换成本机 github webhook secret" }
+      #   sentry: { secret: "换成本机 sentry secret" }
+      #   generic: { expectedToken: "换成本机 bearer token" }
+  # 全双工 Egress 回传：监听任务生命周期与 QA 结论，向 GitHub PR 评论或外部
+  # Webhook 回传进展。缺省关闭（未配置 token/url 时静默跳过）。
+  - name: egress
+    config:
+      # github: { token: "ghp_xxx" }        # 有 token 才回传 GitHub 评论
+      # webhook: { url: "https://..." }     # 有 url 才回传通用 Webhook
   - name: router

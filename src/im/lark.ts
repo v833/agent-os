@@ -113,10 +113,10 @@ export interface Bot {
     text: string,
     replyInThread?: boolean,
   ) => Promise<string | undefined>;
-  /** 向指定群发一条新的根 post 消息并 @ 目标 bot；用于编排跨话题派发子任务。 */
+  /** 向指定群发一条新的根 post 消息并 @ 一个或多个目标 bot；用于编排跨话题派发子任务。 */
   sendMentionToChat: (
     chatId: string,
-    target: BotIdentity,
+    targets: BotIdentity | BotIdentity[],
     text: string,
   ) => Promise<string | undefined>;
   /** 给指定目标发送完成提醒；通知失败不影响任务结果。 */
@@ -156,21 +156,22 @@ export function fitFeishuText(text: string, limit: number): string {
   return `${normalized.slice(0, Math.max(0, limit - 1))}…`;
 }
 
-/** 构造飞书 post 消息的语言节点和二维内容数组，确保 @ 真正触达目标 bot。 */
+/** 构造飞书 post 消息的语言节点和二维内容数组，确保 @ 真正触达一个或多个目标 bot。 */
 export function buildMentionPostContent(
-  target: BotIdentity,
+  targets: BotIdentity | BotIdentity[],
   text: string,
 ): Record<string, unknown> {
+  const list = Array.isArray(targets) ? targets : [targets];
   return {
     zh_cn: {
       title: "",
       content: [
         [
-          {
+          ...list.map((target) => ({
             tag: "at",
             user_id: target.openId,
             ...(target.name ? { user_name: target.name } : {}),
-          },
+          })),
           { tag: "text", text: ` ${text}` },
         ],
       ],
@@ -178,11 +179,11 @@ export function buildMentionPostContent(
   };
 }
 
-/** 构造向指定群发送新根消息（msg_type=post、@ 目标 bot）的 create 请求参数；
+/** 构造向指定群发送新根消息（msg_type=post、@ 一个或多个目标 bot）的 create 请求参数；
  * 独立成纯函数便于单测直接断言，startBot 与测试共用同一份构造逻辑。 */
 export function buildChatMentionMessage(
   chatId: string,
-  target: BotIdentity,
+  targets: BotIdentity | BotIdentity[],
   text: string,
 ): {
   params: { receive_id_type: "chat_id" };
@@ -193,7 +194,7 @@ export function buildChatMentionMessage(
     data: {
       receive_id: chatId,
       msg_type: "post",
-      content: JSON.stringify(buildMentionPostContent(target, text)),
+      content: JSON.stringify(buildMentionPostContent(targets, text)),
     },
   };
 }
@@ -406,10 +407,10 @@ export function startBot(options: BotOptions): Bot {
       });
       return response.data?.message_id;
     },
-    async sendMentionToChat(chatId, target, text) {
+    async sendMentionToChat(chatId, targets, text) {
       // 发新根消息（非回复）才会在群内形成独立话题，供目标 bot 跨话题并行承接子任务。
       const response = await client.im.v1.message.create(
-        buildChatMentionMessage(chatId, target, text),
+        buildChatMentionMessage(chatId, targets, text),
       );
       return response.data?.message_id;
     },

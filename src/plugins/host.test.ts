@@ -242,7 +242,11 @@ function createFakeBot(
     replies: [] as string[],
     cards: [] as Record<string, unknown>[],
     mentions: [] as string[],
-    sentToChat: [] as { chatId: string; target: BotIdentity; text: string }[],
+    sentToChat: [] as {
+      chatId: string;
+      target: BotIdentity | BotIdentity[];
+      text: string;
+    }[],
     updates: [] as Record<string, unknown>[],
     downloads: [] as {
       messageId: string;
@@ -283,7 +287,7 @@ function createFakeBot(
     },
     sendMentionToChat: async (
       chatId: string,
-      target: BotIdentity,
+      target: BotIdentity | BotIdentity[],
       text: string,
     ) => {
       if (failOptions.sendMention) throw new Error("模拟：@ 派发消息失败");
