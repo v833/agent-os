@@ -184,9 +184,17 @@ export async function bootstrapBitableBoard(
 /** 飞书 API 请求间隔（控制在 10 QPS 以内）。 */
 const REQUEST_INTERVAL_MS = 100;
 const MAX_RETRIES = 3;
+const RETRY_DELAYS_MS = [500, 1_000, 2_000] as const;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 建表客户端计时依赖；测试可注入虚拟时钟，生产默认保持真实限流与退避。 */
+export interface BitableBootstrapTiming {
+  requestIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 /**
@@ -194,7 +202,11 @@ function sleep(ms: number): Promise<void> {
  */
 export function createLarkBootstrapClient(
   lark: Lark.Client,
+  timing: BitableBootstrapTiming = {},
 ): BitableBootstrapClient {
+  const requestIntervalMs = timing.requestIntervalMs ?? REQUEST_INTERVAL_MS;
+  const wait = timing.sleep ?? sleep;
+  const now = timing.now ?? Date.now;
   let requestTail = Promise.resolve();
   let lastRequestStartedAt = 0;
 
@@ -214,13 +226,13 @@ export function createLarkBootstrapClient(
     operation: () => Promise<T>,
   ): Promise<T> => {
     let remaining =
-      REQUEST_INTERVAL_MS - (Date.now() - lastRequestStartedAt);
+      requestIntervalMs - (now() - lastRequestStartedAt);
     while (remaining > 0) {
-      await sleep(remaining);
+      await wait(remaining);
       remaining =
-        REQUEST_INTERVAL_MS - (Date.now() - lastRequestStartedAt);
+        requestIntervalMs - (now() - lastRequestStartedAt);
     }
-    lastRequestStartedAt = Date.now();
+    lastRequestStartedAt = now();
     return operation();
   };
 
@@ -260,12 +272,12 @@ export function createLarkBootstrapClient(
         if (!isRateLimitResponse(response)) return response;
         attempt += 1;
         if (attempt > MAX_RETRIES) return response;
-        await sleep(500 * 2 ** (attempt - 1));
+        await wait(RETRY_DELAYS_MS[attempt - 1]);
       } catch (error) {
         if (!isRateLimitError(error)) throw error;
         attempt += 1;
         if (attempt > MAX_RETRIES) throw error;
-        await sleep(500 * 2 ** (attempt - 1));
+        await wait(RETRY_DELAYS_MS[attempt - 1]);
       }
     }
   };

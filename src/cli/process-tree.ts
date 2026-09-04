@@ -23,6 +23,12 @@ export interface ProcessTreeSnapshot {
   startedAt: number;
 }
 
+/** 进程树收尾边界；生产使用完整实现，协议测试可注入轻量直属进程清理。 */
+export type ProcessTreeStopper = (
+  child: ChildProcess,
+  snapshot?: ProcessTreeSnapshot,
+) => Promise<void>;
+
 /**
  * 在调用 spawn 前记录 startedAt，再与返回的 PID 组成进程实例快照。
  * 这里不查询系统进程表，避免每轮 CLI 启动都产生一次昂贵的 WMI/CIM 扫描。
@@ -107,7 +113,8 @@ export function stopProcessTree(
 
     void (async () => {
       // 主进程仍存活时 /T 能直接遍历当前进程树，无需扫描系统进程表。
-      // 只有父进程提前退出时，才按本次启动的时间窗口查询残留后代。
+      // 若它在本回调开始前已经退出，则必须按本次启动的时间窗口查询；
+      // 否则会把“主进程刚退出、后代仍在运行”误判成无需清理。
       const pids =
         child.exitCode === null
           ? []
@@ -116,18 +123,18 @@ export function stopProcessTree(
               snapshot && snapshot.rootPid === child.pid
                 ? snapshot.startedAt
                 : Date.now(),
-              Date.now(),
             );
       if (finished) return;
 
+      const childAlive = child.exitCode === null;
       const args = [
-        ...(child.exitCode === null
+        ...(childAlive
           ? ["/PID", String(child.pid), "/T"]
           : []),
         ...pids.flatMap((pid) => ["/PID", String(pid)]),
         "/F",
       ];
-      if (child.exitCode !== null && pids.length === 0) {
+      if (!childAlive && pids.length === 0) {
         killerDone = true;
         maybeFinish();
         return;
@@ -154,7 +161,6 @@ export function stopProcessTree(
 async function queryWindowsProcessTree(
   rootPid: number,
   startedAt: number,
-  stoppedAt: number,
 ): Promise<readonly number[]> {
   const wmic = await runWindowsQuery("wmic.exe", [
     "process",
@@ -163,7 +169,12 @@ async function queryWindowsProcessTree(
     "/value",
   ]);
   if (wmic.code === 0 && wmic.output.trim().length > 0) {
-    return descendantPidsFromWmic(wmic.output, rootPid, startedAt, stoppedAt);
+    return descendantPidsFromWmic(
+      wmic.output,
+      rootPid,
+      startedAt,
+      Date.now(),
+    );
   }
 
   // WMIC 在较新的 Windows 安装中可能不存在；保留 PowerShell/CIM 降级。
@@ -182,7 +193,7 @@ async function queryWindowsProcessTree(
     powershell.output,
     rootPid,
     startedAt,
-    stoppedAt,
+    Date.now(),
   );
 }
 
@@ -269,7 +280,7 @@ function collectDescendantPids(
     .map((record) => ({
       pid: asPid(record.ProcessId),
       parentPid: asPid(record.ParentProcessId),
-      createdAt: asCreationTime(record.CreationDate),
+      createdAt: parseWindowsCreationTime(record.CreationDate),
     }))
     .filter(
       (record): record is { pid: number; parentPid: number; createdAt: number } =>
@@ -313,15 +324,25 @@ function asPid(value: unknown): number | undefined {
   return Number.isInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-function asCreationTime(value: unknown): number | undefined {
+/** 解析 WMIC DMTF、PowerShell 5.1 JSON Date 与 PowerShell 7 ISO 时间。 */
+export function parseWindowsCreationTime(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
-  const isoTime = Date.parse(value);
+  const normalized = value.trim();
+  // Windows PowerShell 5.1 的 ConvertTo-Json 使用 /Date(epochMs)/；可选的
+  // 时区后缀只是展示信息，epoch 本身已经是 UTC 毫秒，不能再次偏移。
+  const dotNetDate = /^\/Date\((-?\d+)(?:[+-]\d{4})?\)\/$/.exec(normalized);
+  if (dotNetDate) {
+    const epochMs = Number(dotNetDate[1]);
+    return Number.isFinite(epochMs) ? epochMs : undefined;
+  }
+
+  const isoTime = Date.parse(normalized);
   if (Number.isFinite(isoTime)) return isoTime;
 
   // WMIC 使用 DMTF 时间：yyyyMMddHHmmss.mmmmmm+UUU，UUU 为 UTC 偏移分钟。
   const match =
     /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.(\d{3})\d{3}([+-])(\d{3})$/.exec(
-      value.trim(),
+      normalized,
     );
   if (!match) return undefined;
   const localTime = Date.UTC(

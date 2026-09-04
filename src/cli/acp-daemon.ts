@@ -13,6 +13,7 @@ import {
   stopProcessTree,
 } from "./process-tree.js";
 import type { ProcessTreeSnapshot } from "./process-tree.js";
+import type { ProcessTreeStopper } from "./process-tree.js";
 import { cliTimeoutMs } from "./timeout.js";
 import {
   acpMcpServers,
@@ -392,6 +393,8 @@ export class AcpDaemon {
     private readonly idleTimeoutMs: number = DEFAULT_IDLE_TIMEOUT_MS,
     /** 常驻进程启动环境；同一 daemon 生命周期内保持不变。 */
     private readonly env?: Record<string, string>,
+    /** 进程树收尾边界；生产默认完整清理，测试可替换以聚焦 ACP 协议。 */
+    private readonly stopTree: ProcessTreeStopper = stopProcessTree,
   ) {}
 
   /** 当前常驻子进程 PID；未启动或已回收时为 undefined（也用于测试断言）。 */
@@ -485,7 +488,7 @@ export class AcpDaemon {
           ),
         );
       }
-      void stopProcessTree(child, processTreeSnapshot);
+      void this.stopTree(child, processTreeSnapshot);
     });
     // 连接层关闭（主动 close 或传输断开）同样标记失效；非主动断开时
     // 旧子进程仍可能存活，必须连同启动时快照一起回收。
@@ -494,7 +497,7 @@ export class AcpDaemon {
       const staleChild = this.child;
       const processTreeSnapshot = this.processTreeSnapshot;
       if (!this.markBroken({ connection })) return;
-      if (staleChild) void stopProcessTree(staleChild, processTreeSnapshot);
+      if (staleChild) void this.stopTree(staleChild, processTreeSnapshot);
     };
     void connection.closed.then(handleConnectionClosed, handleConnectionClosed);
 
@@ -536,7 +539,7 @@ export class AcpDaemon {
       const processTreeSnapshot = this.processTreeSnapshot;
       this.markBroken({ child, connection });
       if (stale === connection) stale.close(asError(error));
-      await stopProcessTree(child, processTreeSnapshot);
+      await this.stopTree(child, processTreeSnapshot);
       throw error;
     }
   }
@@ -566,6 +569,9 @@ export class AcpDaemon {
     if (this.closed) {
       throw new Error(`${this.adapter.displayName} ACP 常驻进程已关闭`);
     }
+    // spawnConnection 在 initialize 完成前就会设置 client；并发任务必须先
+    // 复用同一个 acquiring Promise，不能绕过握手直接发送 session/new。
+    if (this.acquiring) return this.acquiring;
     if (this.client && !this.broken) return this.client;
     this.acquiring ??= this.spawnConnection().finally(() => {
       this.acquiring = undefined;
@@ -1046,7 +1052,7 @@ export class AcpDaemon {
         connection.close(new Error(`${this.adapter.displayName} ACP 常驻进程已关闭`));
       }
       if (child) {
-        await stopProcessTree(child, processTreeSnapshot);
+        await this.stopTree(child, processTreeSnapshot);
       }
     })();
     try {

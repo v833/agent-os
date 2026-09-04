@@ -11,6 +11,7 @@ import {
   captureProcessTree,
   stopProcessTree,
 } from "./process-tree.js";
+import type { ProcessTreeStopper } from "./process-tree.js";
 import { cliTimeoutMs } from "./timeout.js";
 import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
@@ -68,7 +69,10 @@ export class CliRunError extends Error {
 }
 
 /** 执行一次首次对话或续聊，并返回最终回答及执行引擎会话 ID。 */
-export function runCli(options: RunCliOptions): Promise<CliRunResult> {
+export function runCli(
+  options: RunCliOptions,
+  stopTree: ProcessTreeStopper = stopProcessTree,
+): Promise<CliRunResult> {
   const {
     adapter,
     prompt,
@@ -184,7 +188,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       );
     };
     const stopOnce = () => {
-      stopPromise ??= stopProcessTree(child, processTreeSnapshot);
+      stopPromise ??= stopTree(child, processTreeSnapshot);
       return stopPromise;
     };
     const resolveSuccess = () => {
@@ -365,16 +369,26 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
   // 配置准备失败时不启动 CLI，错误直接回到任务层展示；重试时会再次执行幂等准备。
   const preparation = Promise.resolve().then(() => adapter.prepareRun?.(cwd));
   let preparationTimer: NodeJS.Timeout | undefined;
+  let abortPreparation: (() => void) | undefined;
   const preparationTimeout = new Promise<never>((_, reject) => {
     preparationTimer = setTimeout(
       () => reject(new Error(`${adapter.displayName} 执行超时`)),
       effectiveTimeoutMs,
     );
   });
+  const preparationCancelled = new Promise<never>((_, reject) => {
+    abortPreparation = () =>
+      reject(new Error(`${adapter.displayName} 执行已取消`));
+    signal?.addEventListener("abort", abortPreparation, { once: true });
+    if (signal?.aborted) abortPreparation();
+  });
   const startedAt = Date.now();
-  return Promise.race([preparation, preparationTimeout])
+  return Promise.race([preparation, preparationTimeout, preparationCancelled])
     .finally(() => {
       if (preparationTimer) clearTimeout(preparationTimer);
+      if (abortPreparation) {
+        signal?.removeEventListener("abort", abortPreparation);
+      }
     })
     .then(() => {
       const remainingMs = effectiveTimeoutMs - (Date.now() - startedAt);
@@ -424,6 +438,7 @@ function waitForRetry(
  */
 export async function runCliWithTransientRetry(
   options: RunCliOptions,
+  stopTree: ProcessTreeStopper = stopProcessTree,
 ): Promise<CliRunResult> {
   let currentSessionId = options.sessionId;
   const timeoutMs = cliTimeoutMs(options.timeoutMs);
@@ -440,15 +455,18 @@ export async function runCliWithTransientRetry(
     const remainingMs = deadlineAt - Date.now();
     if (remainingMs <= 0) throw timeoutError();
     try {
-      return await runCli({
-        ...options,
-        timeoutMs: remainingMs,
-        ...(currentSessionId ? { sessionId: currentSessionId } : {}),
-        onEvent: (event) => {
-          if (event.type === "session") currentSessionId = event.sessionId;
-          options.onEvent?.(event);
+      return await runCli(
+        {
+          ...options,
+          timeoutMs: remainingMs,
+          ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+          onEvent: (event) => {
+            if (event.type === "session") currentSessionId = event.sessionId;
+            options.onEvent?.(event);
+          },
         },
-      });
+        stopTree,
+      );
     } catch (error) {
       if (
         options.adapter.retryOnDisconnect !== true ||

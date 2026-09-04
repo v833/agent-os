@@ -44,6 +44,8 @@ plugins:
   - name: commands
   - name: commands/help
   - name: commands/board
+    config:
+      bootstrapRequestIntervalMs: 100 # 一键建表 OpenAPI 请求间隔；测试覆盖为 0
   - name: commands/metrics
   # /login：为当前会话引擎（或 "/<engine> login"）发起登录卡片；依赖 auth 插件。
   - name: commands/login

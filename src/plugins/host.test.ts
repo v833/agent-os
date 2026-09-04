@@ -499,6 +499,7 @@ interface Host {
   lark: FakeLarkService;
   bot: ReturnType<typeof createFakeBot>["bot"];
   calls: ReturnType<typeof createFakeBot>["calls"];
+  runtimeDir: string;
 }
 
 /** 组装一个最小 ThreadPilot 宿主：真实服务插件 + 假 cli/lark/config。 */
@@ -600,7 +601,16 @@ async function createHost(
     lark,
     bot: fakeBot.bot,
     calls: fakeBot.calls,
+    runtimeDir: sessionsDir,
   };
+}
+
+/** 挂载使用用例私有存储的产品方案插件，避免并行测试争用生产数据文件。 */
+async function mountProductSpec(host: Host): Promise<void> {
+  await host.root.plugin(productSpecPlugin, {
+    storePath: join(host.runtimeDir, "product-spec-flows.json"),
+  });
+  await waitForAllActive(host.root);
 }
 
 test("bot/message 把 /status 派发给命令插件", async () => {
@@ -770,8 +780,7 @@ test("私聊普通任务忽略 bot 业务提示词和产品文档流程", async 
     systemPrompt: "必须先写产品方案并提交审批。",
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   await host.root.parallel(
@@ -832,8 +841,7 @@ test("私聊 /doc 显式开启文档交付，但不触发团队或产品审批",
     systemPrompt: "必须先写产品方案并提交审批。",
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
   let resultPayload: TaskResultPayload | undefined;
   host.root.on("task/result", (payload) => {
@@ -886,8 +894,7 @@ test("私聊 /doc 澄清恢复后仍保留文档交付语义", async () => {
     systemPrompt: "必须先写产品方案并提交审批。",
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
 
   await host.root.parallel(
     "bot/message",
@@ -1566,8 +1573,7 @@ test("产品经理直接生成真实 Spec 与 Tickets 后可由发起人确认",
     skills: ["grill-me", "to-spec", "to-tickets"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const taskResults: Array<{ answer: string; suppressHandoff?: boolean }> = [];
   host.root.on("task/result", (payload) => {
     taskResults.push(payload);
@@ -1669,8 +1675,7 @@ test("产品经理提交飞书云文档时无需本地产物即可确认", async
     skills: ["grill-me", "lark-doc"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   await host.root.parallel(
@@ -2096,8 +2101,7 @@ test("产品方案没有工具调用时沿用同一 CLI 会话纠正并生成确
     skills: ["grill-me", "lark-doc"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
   let resultPayload: TaskResultPayload | undefined;
   host.root.on("task/result", (payload) => {
@@ -2154,8 +2158,7 @@ test("产品方案只有其他工具调用时仍强制补交 request_spec_approv
     skills: ["grill-me", "lark-doc"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   await host.root.parallel(
@@ -2201,8 +2204,7 @@ test("产品方案纠正轮仍未提交时进入失败收尾且不发送成功�
     skills: ["grill-me", "lark-doc"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   await host.root.parallel(
@@ -2232,8 +2234,7 @@ test("产品方案纠正轮仍未提交时进入失败收尾且不发送成功�
 
 test("普通开发 bot 不触发产品方案提交纠正", async () => {
   const host = await createHost([baseBotConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
 
   await host.root.parallel(
@@ -2413,8 +2414,7 @@ test("同一话题提交更新方案后，旧产品确认卡变为失效状态",
     skills: ["grill-me", "to-spec", "to-tickets"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
   const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "approval-revision");
   const ticketsDir = join(featureDir, "issues");
@@ -2509,8 +2509,7 @@ test("新产品确认卡发布失败时，旧确认卡仍可确认", async () =>
     false,
     { failUpdateCardAt: 2 },
   );
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
   const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "publish-failure");
   const ticketsDir = join(featureDir, "issues");
@@ -2585,8 +2584,7 @@ test("完成澄清后沿用原 CLI 会话提交产品文档", async () => {
     skills: ["grill-me", "to-spec", "to-tickets"],
   };
   const host = await createHost([productConfig]);
-  await host.root.plugin(productSpecPlugin);
-  await waitForAllActive(host.root);
+  await mountProductSpec(host);
   const runtimeConfig = host.root.config.bot("testbot")!;
   const featureDir = join(runtimeConfig.workspaceDir, ".scratch", "priority");
   const ticketsDir = join(featureDir, "issues");
@@ -3060,14 +3058,15 @@ test("任务完成后 task/result 事件驱动 reviewBy 协作交接", async () 
     reviewBy: "reviewer",
   };
   const host = await createHost([reviewConfig]);
+  const runtimeConfig = host.root.config.bot(reviewConfig.id)!;
   host.lark.runtimes.set("reviewer", {
-    config: reviewConfig,
+    config: runtimeConfig,
     bot: host.bot,
     identity: { openId: "reviewer_open", name: "Reviewer" },
   });
 
   const message = incomingMessage({ text: "写一个模块" });
-  await host.root.parallel("bot/message", message, host.bot, reviewConfig);
+  await host.root.parallel("bot/message", message, host.bot, runtimeConfig);
   await waitFor(() => host.cli.captured !== undefined);
   host.cli.finish({ answer: "完成", sessionId: "sess-1" });
 
@@ -3117,7 +3116,11 @@ async function beginQaReview(
   await host.root.parallel("task/result", {
     bot: host.bot,
     botConfig: developer,
-    session: { ...fakeSession(), botId: developer.id },
+    session: {
+      ...fakeSession(),
+      botId: developer.id,
+      workspaceDir: developer.workspaceDir,
+    },
     requestedPrompt: "实现用户注册功能",
     answer: "开发完成",
     replyToMessageId: "m1",
@@ -3153,14 +3156,22 @@ async function qaGateHost() {
   };
   const qa: BotConfig = { ...baseBotConfig, id: "qa" };
   const host = await createHost([leader, developer, qa]);
-  for (const config of [leader, developer, qa]) {
+  const runtimeConfigs = [leader, developer, qa].map(
+    (config) => host.root.config.bot(config.id)!,
+  );
+  for (const config of runtimeConfigs) {
     host.lark.runtimes.set(config.id, {
       config,
       bot: host.bot,
       identity: { openId: `${config.id}_open`, name: config.id },
     });
   }
-  return { host, leader, developer, qa };
+  return {
+    host,
+    leader: runtimeConfigs[0],
+    developer: runtimeConfigs[1],
+    qa: runtimeConfigs[2],
+  };
 }
 
 test("QAResult pass 立即结束 reviewBy，不再交回 Developer", async () => {
@@ -4169,8 +4180,7 @@ test("live-panel：run 被淘汰后停止更新已淘汰 run 的卡片", async (
   await host.root.parallel("orchestration/update", {
     run: fakeRun("run-001", ["done", "done"]),
   });
-  // 等一个节流窗口，确认淘汰后没有新的 updateCard 发出。
-  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  // evicted 处理会等待 updater.cancel 完成；返回后即可确认后续事件没有重建卡片。
   assert.equal(
     host.calls.updates.length,
     1,
@@ -5218,7 +5228,7 @@ test("任务重试上下文按 TTL 主动释放并受容量上限约束", async 
     false,
     false,
     {},
-    { ttlMs: 250, maxContexts: 1 },
+    { ttlMs: 20, maxContexts: 1 },
   );
   const runtimeConfig = host.root.config.bot("testbot")!;
   host.cli.failNext(new Error("API Error: 402"));
@@ -5234,7 +5244,7 @@ test("任务重试上下文按 TTL 主动释放并受容量上限约束", async 
   const value = retryTaskValueOf(
     host.calls.updates.find((card: any) => card.header?.template === "red")!,
   );
-  await new Promise((resolve) => setTimeout(resolve, 350));
+  await new Promise((resolve) => setTimeout(resolve, 30));
   const response = await host.root.serial(
     "bot/card-action",
     { operatorOpenId: "ou_owner", messageId: "m_card", value },

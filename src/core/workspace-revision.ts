@@ -68,10 +68,15 @@ export async function workspaceRevision(workspaceDir: string): Promise<string> {
     }
     return `git:${head.trim()}:${hash.digest("hex")}`;
   } catch {
-    const hash = createHash("sha256");
-    await hashDirectory(workspaceDir, workspaceDir, hash);
-    return `tree:${hash.digest("hex")}`;
+    return workspaceTreeRevision(workspaceDir);
   }
+}
+
+/** 已知目录不是 Git 根目录时直接计算树指纹，避免重复启动必然失败的 Git 进程。 */
+export async function workspaceTreeRevision(workspaceDir: string): Promise<string> {
+  const hash = createHash("sha256");
+  await hashDirectory(workspaceDir, workspaceDir, hash);
+  return `tree:${hash.digest("hex")}`;
 }
 
 async function hashDirectory(

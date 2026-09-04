@@ -14,6 +14,11 @@ import {
 } from "./bitable-bootstrap.js";
 import { BOARD_STATES } from "./bitable-board.js";
 
+const instantTiming = {
+  requestIntervalMs: 0,
+  sleep: async (_ms: number) => undefined,
+};
+
 test("bitable-bootstrap: 定义了 10 个标准业务字段与 6 色状态枚举", () => {
   assert.equal(DEFAULT_BOOTSTRAP_FIELDS.length, 10);
   assert.equal(BOARD_STATUS_OPTIONS.length, 6);
@@ -233,7 +238,7 @@ test("bitable-bootstrap: 99991400 频控响应按指数退避后重试成功", a
         },
       },
     },
-  } as never);
+  } as never, instantTiming);
 
   const result = await bootstrapBitableBoard(client, { fields: [] });
   assert.equal(result.appToken, "bascnApp");
@@ -243,12 +248,14 @@ test("bitable-bootstrap: 99991400 频控响应按指数退避后重试成功", a
 
 test("bitable-bootstrap: 频控重试按 500/1000/2000ms 指数退避且每次尝试都过 10 QPS 节流", async () => {
   const timestamps: number[] = [];
+  const waits: number[] = [];
+  let now = 10_000;
   const client = createLarkBootstrapClient({
     bitable: {
       v1: {
         app: {
           create: async () => {
-            timestamps.push(Date.now());
+            timestamps.push(now);
             if (timestamps.length < 4) return { code: 99991400, msg: "频控" };
             return {
               code: 0,
@@ -277,20 +284,19 @@ test("bitable-bootstrap: 频控重试按 500/1000/2000ms 指数退避且每次�
         },
       },
     },
-  } as never);
+  } as never, {
+    now: () => now,
+    sleep: async (ms) => {
+      waits.push(ms);
+      now += ms;
+    },
+  });
 
   await bootstrapBitableBoard(client, { fields: [] });
   assert.equal(timestamps.length, 4, "初始请求 + 3 次重试");
-  const gaps = [
-    timestamps[1] - timestamps[0],
-    timestamps[2] - timestamps[1],
-    timestamps[3] - timestamps[2],
-  ];
-  // 每次实际尝试前都过 10 QPS 节流（最多加 100ms），退避间隔 500/1000/2000ms，
-  // 用宽松区间验证，避免 CI 计时抖动导致误报。
-  assert.ok(gaps[0] >= 480 && gaps[0] < 900, `首次重试间隔 ${gaps[0]}ms 应约 500ms`);
-  assert.ok(gaps[1] >= 980 && gaps[1] < 1600, `二次重试间隔 ${gaps[1]}ms 应约 1000ms`);
-  assert.ok(gaps[2] >= 1980 && gaps[2] < 2800, `三次重试间隔 ${gaps[2]}ms 应约 2000ms`);
+  // 三次指数退避后，字段扫描与视图创建各再经过一次 100ms 请求节流。
+  assert.deepEqual(waits, [500, 1_000, 2_000, 100, 100]);
+  assert.deepEqual(timestamps, [10_000, 10_500, 11_500, 13_500]);
 });
 
 test("bitable-bootstrap: 有字段更新能力时重命名默认主键并跳过重复创建", async () => {
@@ -318,7 +324,7 @@ test("bitable-bootstrap: 有字段更新能力时重命名默认主键并跳过�
         },
       },
     },
-  } as never);
+  } as never, instantTiming);
 
   await client.prepareFields?.("bascnApp", "tblTable", [
     { fieldName: "任务ID", type: BITABLE_FIELD_TYPES.TEXT },
@@ -350,7 +356,7 @@ test("bitable-bootstrap: SDK 没有字段更新接口时安全追加任务ID字�
         },
       },
     },
-  } as never);
+  } as never, instantTiming);
 
   await client.prepareFields?.("bascnApp", "tblTable", [
     { fieldName: "任务ID", type: BITABLE_FIELD_TYPES.TEXT },
@@ -391,7 +397,7 @@ test("bitable-bootstrap: 兼容字符串形式的成功码并保留失败错误�
         },
       },
     },
-  } as never);
+  } as never, instantTiming);
 
   const result = await bootstrapBitableBoard(client, { fields: [] });
   assert.equal(result.appToken, "bascnApp");
@@ -404,7 +410,7 @@ test("bitable-bootstrap: 兼容字符串形式的成功码并保留失败错误�
         appTableView: { create: async () => ({ code: "0", data: {} }) },
       },
     },
-  } as never);
+  } as never, instantTiming);
   await assert.rejects(
     failingClient.createApp("失败看板"),
     /Forbidden \(code: 99991663\)/,

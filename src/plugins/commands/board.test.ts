@@ -3,7 +3,7 @@
  * /board status 以及 /board init 的全自动建表、热挂载与冲突保护。
  */
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import { Context, Service } from "cordis";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -17,6 +17,13 @@ import type { Session } from "../../core/session-manager.js";
 import type { CardJson } from "../../im/card.js";
 import type { Bot, CardAction, IncomingMessage } from "../../im/lark.js";
 import type { CommandHandler } from "../types.js";
+
+const activeBoardServices = new Set<BitableBoardService>();
+
+afterEach(() => {
+  for (const service of activeBoardServices) service.stop();
+  activeBoardServices.clear();
+});
 
 class MockCommandsService extends Service {
   readonly handlers = new Map<string, CommandHandler>();
@@ -73,6 +80,7 @@ function setupTestEnvironment(options: {
     pull: false,
     storagePath: options.storagePath ?? join(tmpdir(), `threadpilot-board-command-${randomUUID()}.json`),
   });
+  activeBoardServices.add(bitableBoard);
 
   const replies: string[] = [];
   const repliedCards: CardJson[] = [];
@@ -155,7 +163,7 @@ function setupTestEnvironment(options: {
 
   new MockLarkService(root, botInstance);
 
-  applyBoardCommand(root);
+  applyBoardCommand(root, { bootstrapRequestIntervalMs: 0 });
 
   const botConfig: BotConfig = {
     id: "developer",

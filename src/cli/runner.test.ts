@@ -4,9 +4,43 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CliRunError, runCli, runCliWithTransientRetry } from "./runner.js";
+import type { ChildProcess } from "node:child_process";
+import { parseWindowsCreationTime } from "./process-tree.js";
+import {
+  CliRunError,
+  runCli as runCliWithProcessTree,
+  runCliWithTransientRetry as runCliWithTransientRetryAndProcessTree,
+  type RunCliOptions,
+} from "./runner.js";
 import { DEFAULT_CLI_TIMEOUT_MS, cliTimeoutMs } from "./timeout.js";
 import type { CliAdapter, CliEvent } from "./types.js";
+
+/** 协议测试只需收割直属假 CLI；真实 Windows 进程树由文件末尾三条专项用例覆盖。 */
+function stopRootProcess(child: ChildProcess): Promise<void> {
+  if (!child.pid || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      child.removeListener("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 2_000);
+    timer.unref();
+    child.once("close", finish);
+    child.kill();
+  });
+}
+
+function runCli(options: RunCliOptions) {
+  return runCliWithProcessTree(options, stopRootProcess);
+}
+
+function runCliWithTransientRetry(options: RunCliOptions) {
+  return runCliWithTransientRetryAndProcessTree(options, stopRootProcess);
+}
 
 class ScriptAdapter implements CliAdapter {
   readonly id: CliAdapter["id"];
@@ -57,7 +91,10 @@ class ScriptAdapter implements CliAdapter {
 
 function runScript(
   script: string,
-  options: { sessionId?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+  options: Pick<
+    RunCliOptions,
+    "sessionId" | "signal" | "timeoutMs" | "onEvent"
+  > = {},
 ) {
   return runCli({
     adapter: new ScriptAdapter(script),
@@ -646,7 +683,7 @@ test("正常 close 也会清理主进程留下的后代", async () => {
   };
 
   try {
-    const running = runCli({
+    const running = runCliWithProcessTree({
       adapter,
       prompt: "测试",
       cwd: process.cwd(),
@@ -673,10 +710,15 @@ test("正常 close 也会清理主进程留下的后代", async () => {
 
 test("AbortController 会终止子进程并返回稳定取消文案", async () => {
   const controller = new AbortController();
-  const running = runScript(`setInterval(() => {}, 1000);`, {
+  const running = runScript(`
+    console.log(JSON.stringify({ type: "session", sessionId: "started-session" }));
+    setInterval(() => {}, 1000);
+  `, {
     signal: controller.signal,
+    onEvent: (event) => {
+      if (event.type === "session") setImmediate(() => controller.abort());
+    },
   });
-  setTimeout(() => controller.abort(), 20);
 
   await assert.rejects(running, /测试 CLI 执行已取消/);
 });
@@ -688,9 +730,13 @@ test("取消时保留已经观察到的 CLI 会话 ID", async () => {
       console.log(JSON.stringify({ type: "session", sessionId: "cancelled-session" }));
       setInterval(() => {}, 1000);
     `,
-    { signal: controller.signal },
+    {
+      signal: controller.signal,
+      onEvent: (event) => {
+        if (event.type === "session") setImmediate(() => controller.abort());
+      },
+    },
   );
-  setTimeout(() => controller.abort(), 20);
 
   await assert.rejects(running, (error: unknown) => {
     assert.ok(error instanceof CliRunError);
@@ -715,6 +761,21 @@ test("未配置时使用有限默认超时，显式值保持不变", () => {
   assert.throws(() => cliTimeoutMs(0), /正整数毫秒值/);
 });
 
+test("Windows 进程创建时间兼容 PowerShell 5.1、PowerShell 7 与 WMIC", () => {
+  const expected = Date.parse("2026-09-04T09:22:34.914+08:00");
+  assert.equal(parseWindowsCreationTime("/Date(1788484954914)/"), expected);
+  assert.equal(parseWindowsCreationTime("/Date(1788484954914+0800)/"), expected);
+  assert.equal(
+    parseWindowsCreationTime("2026-09-04T09:22:34.914628+08:00"),
+    expected,
+  );
+  assert.equal(
+    parseWindowsCreationTime("20260904092234.914628+480"),
+    expected,
+  );
+  assert.equal(parseWindowsCreationTime("not-a-date"), undefined);
+});
+
 test("prepareRun 挂起时也受执行硬超时保护", async () => {
   const adapter = new ScriptAdapter("");
   adapter.prepareRun = async () => {
@@ -730,6 +791,23 @@ test("prepareRun 挂起时也受执行硬超时保护", async () => {
     }),
     /测试 CLI 执行超时/,
   );
+});
+
+test("prepareRun 挂起时可由 AbortController 立即取消", async () => {
+  const controller = new AbortController();
+  const adapter = new ScriptAdapter(`throw new Error("不应启动子进程");`);
+  adapter.prepareRun = async () => {
+    await new Promise<void>(() => undefined);
+  };
+  const running = runCli({
+    adapter,
+    prompt: "测试",
+    cwd: process.cwd(),
+    signal: controller.signal,
+  });
+
+  controller.abort();
+  await assert.rejects(running, /测试 CLI 执行已取消/);
 });
 
 test("业务完成后主进程退出但后代持有 stdout 时仍能收尾并清理后代", async () => {
@@ -763,7 +841,7 @@ test("业务完成后主进程退出但后代持有 stdout 时仍能收尾并清
 
   try {
     const startedAt = Date.now();
-    const running = runCli({
+    const running = runCliWithProcessTree({
       adapter,
       prompt: "测试",
       cwd: process.cwd(),
@@ -828,7 +906,7 @@ test("Windows 取消会终止 CLI 启动的整个进程树", async () => {
     }
     return originalParseEvents(line);
   };
-  const running = runCli({
+  const running = runCliWithProcessTree({
     adapter,
     prompt: "测试",
     cwd: process.cwd(),

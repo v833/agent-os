@@ -12,6 +12,11 @@ import type { CardAction, CardActionResponse, Bot } from "../../im/lark.js";
 import type { BotConfig } from "../../core/bot-registry.js";
 import type { CommandHandler } from "../types.js";
 
+export interface Config {
+  /** 仅控制一键建表时的 OpenAPI 请求间隔；默认 100ms。 */
+  bootstrapRequestIntervalMs?: number;
+}
+
 function parseInitArgs(argsString: string): { force: boolean; name: string } {
   const tokens = argsString.trim().split(/\s+/).filter(Boolean);
   const force = tokens.includes("--force") || tokens.includes("-f");
@@ -27,6 +32,7 @@ async function runBoardInit(
   hasThread: boolean,
   name: string,
   chatId?: string,
+  bootstrapRequestIntervalMs?: number,
 ): Promise<void> {
   if (!ctx.bitableBoard.beginInitialization()) {
     await bot.reply(messageId, "⏳ 当前已有任务看板正在初始化，请等待完成后再重试。", hasThread);
@@ -44,7 +50,9 @@ async function runBoardInit(
     let createdApp: Awaited<ReturnType<typeof bootstrapBitableBoard>> | undefined;
     let mountedResult = false;
     try {
-      const bootstrapClient = createLarkBootstrapClient(bot.client);
+      const bootstrapClient = createLarkBootstrapClient(bot.client, {
+        requestIntervalMs: bootstrapRequestIntervalMs,
+      });
       const result = await bootstrapBitableBoard(bootstrapClient, { name });
       // 建表已成功：记录 appToken，mount 后续失败时仍能提示已创建的孤立表格。
       createdApp = result;
@@ -132,7 +140,7 @@ async function runBoardInit(
   }
 }
 
-function createHandler(pluginCtx: Context): CommandHandler {
+function createHandler(pluginCtx: Context, config: Config): CommandHandler {
   return async ({
   ctx: _commandCtx,
   bot,
@@ -167,7 +175,16 @@ function createHandler(pluginCtx: Context): CommandHandler {
       return;
     }
 
-    await runBoardInit(ctx, bot, botConfig, message.messageId, hasThread, name, message.chatId);
+    await runBoardInit(
+      ctx,
+      bot,
+      botConfig,
+      message.messageId,
+      hasThread,
+      name,
+      message.chatId,
+      config.bootstrapRequestIntervalMs,
+    );
     return;
   }
 
@@ -235,6 +252,7 @@ async function handleBoardCardAction(
   action: CardAction,
   bot: Bot,
   botConfig: BotConfig,
+  config: Config,
 ): Promise<CardActionResponse | undefined> {
   const actionName = typeof action.value.action === "string" ? action.value.action : "";
   if (actionName === "board_status") {
@@ -276,7 +294,16 @@ async function handleBoardCardAction(
       : "ThreadPilot 任务看板";
     // 覆盖场景沿用当前看板绑定的回退群聊，避免新表失去反向拉起目标群。
     const fallbackChatId = storage?.fallbackChatId;
-    await runBoardInit(ctx, bot, botConfig, action.messageId, false, name, fallbackChatId);
+    await runBoardInit(
+      ctx,
+      bot,
+      botConfig,
+      action.messageId,
+      false,
+      name,
+      fallbackChatId,
+      config.bootstrapRequestIntervalMs,
+    );
     return { toast: { type: "success", content: "已开始覆盖创建任务看板。" } };
   }
   if (actionName === "board_retry_init") {
@@ -292,7 +319,16 @@ async function handleBoardCardAction(
       ? action.value.name.trim()
       : "ThreadPilot 任务看板";
     const fallbackChatId = storage?.fallbackChatId;
-    await runBoardInit(ctx, bot, botConfig, action.messageId, false, name, fallbackChatId);
+    await runBoardInit(
+      ctx,
+      bot,
+      botConfig,
+      action.messageId,
+      false,
+      name,
+      fallbackChatId,
+      config.bootstrapRequestIntervalMs,
+    );
     return { toast: { type: "success", content: "已开始重试初始化任务看板。" } };
   }
   return undefined;
@@ -301,9 +337,9 @@ async function handleBoardCardAction(
 export const name = "commands/board";
 export const inject = ["commands", "cards", "bitableBoard", "config", "lark"];
 
-export function apply(ctx: Context) {
-  ctx.commands.register("board", createHandler(ctx));
+export function apply(ctx: Context, config: Config = {}) {
+  ctx.commands.register("board", createHandler(ctx, config));
   ctx.on("bot/card-action", (action, bot, botConfig) =>
-    handleBoardCardAction(ctx, action, bot, botConfig),
+    handleBoardCardAction(ctx, action, bot, botConfig, config),
   );
 }

@@ -18,7 +18,10 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { workspaceRevision } from "./workspace-revision.js";
+import {
+  workspaceRevision,
+  workspaceTreeRevision,
+} from "./workspace-revision.js";
 
 const execFileAsync = promisify(execFile);
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -163,7 +166,10 @@ export async function createWorkspaceSnapshot(
   sourceWorkspaceDir: string,
 ): Promise<WorkspaceSnapshot> {
   const sourceDir = resolve(sourceWorkspaceDir);
-  const revision = await workspaceRevision(sourceDir);
+  const gitWorkspace = await isGitWorkspace(sourceDir);
+  const revision = gitWorkspace
+    ? await workspaceRevision(sourceDir)
+    : await workspaceTreeRevision(sourceDir);
   const parentDir = await mkdtemp(join(tmpdir(), "threadpilot-qa-"));
   const targetDir = join(parentDir, "workspace");
   let gitWorktree = false;
@@ -181,7 +187,7 @@ export async function createWorkspaceSnapshot(
   };
 
   try {
-    if (await isGitWorkspace(sourceDir)) {
+    if (gitWorkspace) {
       const [head, diff, untrackedOutput] = await Promise.all([
         gitOutput(sourceDir, ["rev-parse", "HEAD"]),
         gitOutput(sourceDir, ["diff", "HEAD", "--binary", "--no-ext-diff"]),
@@ -226,9 +232,10 @@ export async function createWorkspaceSnapshot(
       dependenciesLinked = await linkDependencies(sourceDir, targetDir);
     }
 
+    const revisionOf = gitWorkspace ? workspaceRevision : workspaceTreeRevision;
     const [sourceAfter, snapshotRevision] = await Promise.all([
-      workspaceRevision(sourceDir),
-      workspaceRevision(targetDir),
+      revisionOf(sourceDir),
+      revisionOf(targetDir),
     ]);
     if (sourceAfter !== revision || snapshotRevision !== revision) {
       throw new Error(

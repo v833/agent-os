@@ -216,6 +216,11 @@ pnpm test
 pnpm start
 ```
 
+测试默认由最多 6 个独立进程按实测长文件优先并行执行，耗时较长的进程生命周期、
+ACP 守护进程与宿主集成测试会拆成逻辑分片，并按静态 manifest 逐片校验测试数量。CLI 分组默认使用 3 个进程，其他分组使用 4 个；开发中可用
+`pnpm test:fast`、`pnpm test:cli` 或 `pnpm test:plugins` 缩短反馈时间；排查顺序污染时
+使用 `pnpm test:serial`。可通过 `THREADPILOT_TEST_WORKERS` 临时调整并发数。
+
 看到 `ws client ready` 后，在测试话题群里 `@机器人` 发送消息。
 
 ## CLI 引擎配置

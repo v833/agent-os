@@ -4,8 +4,8 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawn } from "node:child_process";
-import { AcpDaemon } from "./acp-daemon.js";
+import { spawn, type ChildProcess } from "node:child_process";
+import { AcpDaemon as ProductionAcpDaemon } from "./acp-daemon.js";
 import type { ApplicationToolServer } from "./app-tools.js";
 import type {
   AcpMcpTransport,
@@ -14,6 +14,35 @@ import type {
   CliAdapter,
   CliEvent,
 } from "./types.js";
+
+/** ACP 协议测试的假 server 没有后代，直属进程清理可避免每条用例扫描 WMI。 */
+function stopRootProcess(child: ChildProcess): Promise<void> {
+  if (!child.pid || child.exitCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      child.removeListener("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, 2_000);
+    timer.unref();
+    child.once("close", finish);
+    child.kill();
+  });
+}
+
+class AcpDaemon extends ProductionAcpDaemon {
+  constructor(
+    adapter: CliAdapter,
+    idleTimeoutMs?: number,
+    env?: Record<string, string>,
+  ) {
+    super(adapter, idleTimeoutMs, env, stopRootProcess);
+  }
+}
 
 /** 常驻进程测试用脚本：session/new 返回递增 id，prompt 应答包含自身 sessionId，
  *  用于验证同一进程上多轮/并发 turn 的通知路由互不串扰。 */
@@ -25,16 +54,27 @@ let mcpCount = 0;
 let mcpHeaders = [];
 let setupLog = [];
 let sessionCwd = "";
+let initialized = false;
 const heldPrompts = new Map();
 const cancelledSessions = new Set();
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\n");
 lines.on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "initialize") {
-    send({ id: message.id, result: { protocolVersion: 1, agentInfo: { name: "fake", version: process.env.THREADPILOT_TEST_VERSION || "0.3.16" }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } } } });
+    const respond = () => {
+      initialized = true;
+      send({ id: message.id, result: { protocolVersion: 1, agentInfo: { name: "fake", version: process.env.THREADPILOT_TEST_VERSION || "0.3.16" }, agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {}, close: {} } } } });
+    };
+    const delayMs = Number(process.env.THREADPILOT_TEST_INITIALIZE_DELAY_MS || "0");
+    if (delayMs > 0) setTimeout(respond, delayMs);
+    else respond();
     return;
   }
   if (message.method === "session/new") {
+    if (!initialized) {
+      send({ id: message.id, error: { code: -32000, message: "session/new before initialize" } });
+      return;
+    }
     if (process.env.THREADPILOT_TEST_HOLD_SESSION_NEW === "1") return;
     mcpCount = Array.isArray(message.params && message.params.mcpServers) ? message.params.mcpServers.length : 0;
     mcpHeaders = message.params && message.params.mcpServers && message.params.mcpServers[0] && message.params.mcpServers[0].headers || [];
@@ -190,6 +230,17 @@ class MissingCommandAdapter implements CliAdapter {
 
   parseEvents(): CliEvent[] {
     return [];
+  }
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("等待 ACP 状态变化超时");
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
@@ -453,13 +504,32 @@ test("AcpDaemon 并发：同一进程上多个 session 并行执行且通知不�
   }
 });
 
+test("AcpDaemon 并发启动：后续任务等待 initialize 握手完成", async () => {
+  const daemon = new AcpDaemon(
+    new AcpScriptAdapter(),
+    undefined,
+    { THREADPILOT_TEST_INITIALIZE_DELAY_MS: "100" },
+  );
+  try {
+    const [a, b] = await Promise.all([
+      daemon.runTurn({ prompt: "握手后一", cwd: process.cwd() }),
+      daemon.runTurn({ prompt: "握手后二", cwd: process.cwd() }),
+    ]);
+    assert.notEqual(a.sessionId, b.sessionId);
+    assert.equal(a.answer, `答-${a.sessionId}`);
+    assert.equal(b.answer, `答-${b.sessionId}`);
+  } finally {
+    await daemon.close();
+  }
+});
+
 test("AcpDaemon 空闲回收：无任务超过阈值后自动关闭进程", async () => {
-  const daemon = new AcpDaemon(new AcpScriptAdapter(), 1_000);
+  const daemon = new AcpDaemon(new AcpScriptAdapter(), 20);
   try {
     await daemon.runTurn({ prompt: "跑一轮", cwd: process.cwd() });
     const pidBeforeIdle = daemon.pid;
     assert.ok(daemon.pid, "刚跑完任务应仍持有进程");
-    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    await waitFor(() => daemon.pid === undefined);
     assert.equal(daemon.pid, undefined, "空闲超时后应回收进程");
     const result = await daemon.runTurn({ prompt: "回收后再跑", cwd: process.cwd() });
     assert.equal(result.answer, "答-acp-session-1");
@@ -525,7 +595,7 @@ test("AcpDaemon prompt 超时会发送 session/cancel，远端 turn 可继续复
   );
   try {
     await assert.rejects(
-      () => daemon.runTurn({ prompt: "超时轮", cwd: process.cwd(), timeoutMs: 5_000 }),
+      () => daemon.runTurn({ prompt: "超时轮", cwd: process.cwd(), timeoutMs: 500 }),
       /执行超时/,
     );
     const result = await daemon.runTurn({
@@ -572,7 +642,7 @@ test("AcpDaemon 崩溃重连：进程退出后下一轮自动重建", async () =
       );
       killer.once("exit", () => resolve());
     });
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await waitFor(() => daemon.pid === undefined);
 
     const second = await daemon.runTurn({
       prompt: "崩溃后重试",

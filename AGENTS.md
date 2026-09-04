@@ -25,7 +25,7 @@
 - `pnpm start`：同 `pnpm dev`
 - `pnpm start:once`：不启用 watch，直接启动飞书机器人
 - `pnpm build`：执行 TypeScript 编译检查并输出到 `dist/`
-- `pnpm test`：运行 CLI、飞书消息、卡片与会话模型测试
+- `pnpm test`：以独立进程并行运行完整测试并逐文件校验摘要；`test:fast`、`test:cli`、`test:plugins` 按模块验证，`test:serial` 用于顺序污染诊断
 - `pnpm probe:cli`：从标准输入读取 Codex/Claude/DimAgent JSONL 并输出时间线
 - `pnpm probe:tool <claude|codex|dimagent|agy> [工作目录]`：不经飞书直接驱动 CLI 调用 `request_clarification`，验证 MCP 工具链与 Schema 校验
 
@@ -183,6 +183,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli-events.ts`：Codex/Claude/DimAgent 事件解析
 - `src/probe-cli.ts`：JSONL 标准输入时间线探针
 - `src/probe-app-tool.ts`：应用工具探针——不经飞书驱动 Claude/Codex/agy 调用澄清工具并校验结果
+- `scripts/test-runner.mjs`、`scripts/test-runner.test.mjs`：跨平台测试调度器及自检——自动发现测试、实测长文件优先、超大测试逻辑分片、逐文件隔离与静态 manifest 完整性校验
 - `src/cli-events.test.ts`：事件解析器测试
 - `src/mcp/clarification-server.ts`：本地 stdio MCP Server——向 Claude Code、Codex、DimAgent headless 与 agy 提供 `request_clarification` 工具
 - `src/mcp/clarification-tools.ts`：stdio 与 HTTP MCP 复用的 `request_clarification` 注册定义
