@@ -274,6 +274,7 @@ test("AgyAdapter 解析终态 result（response 为最终回答）", () => {
       {
         type: "result",
         answer: "命令 `echo hello` 的输出：hello\n",
+        complete: true,
         sessionId: "conv-abc",
         stats: { inputTokens: 120, outputTokens: 60, totalTokens: 180, cacheReadTokens: 10 },
       },

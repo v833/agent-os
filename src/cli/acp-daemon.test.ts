@@ -35,6 +35,7 @@ lines.on("line", (line) => {
     return;
   }
   if (message.method === "session/new") {
+    if (process.env.THREADPILOT_TEST_HOLD_SESSION_NEW === "1") return;
     mcpCount = Array.isArray(message.params && message.params.mcpServers) ? message.params.mcpServers.length : 0;
     mcpHeaders = message.params && message.params.mcpServers && message.params.mcpServers[0] && message.params.mcpServers[0].headers || [];
     sessionCwd = message.params.cwd;
@@ -524,7 +525,7 @@ test("AcpDaemon prompt 超时会发送 session/cancel，远端 turn 可继续复
   );
   try {
     await assert.rejects(
-      () => daemon.runTurn({ prompt: "超时轮", cwd: process.cwd(), timeoutMs: 50 }),
+      () => daemon.runTurn({ prompt: "超时轮", cwd: process.cwd(), timeoutMs: 5_000 }),
       /执行超时/,
     );
     const result = await daemon.runTurn({
@@ -534,6 +535,22 @@ test("AcpDaemon prompt 超时会发送 session/cancel，远端 turn 可继续复
       timeoutMs: 500,
     });
     assert.equal(result.answer, "cancel-seen");
+  } finally {
+    await daemon.close();
+  }
+});
+
+test("AcpDaemon session/new 挂起时也受本轮总超时保护", async () => {
+  const daemon = new AcpDaemon(
+    new AcpScriptAdapter(),
+    undefined,
+    { THREADPILOT_TEST_HOLD_SESSION_NEW: "1" },
+  );
+  try {
+    await assert.rejects(
+      () => daemon.runTurn({ prompt: "创建会话", cwd: process.cwd(), timeoutMs: 100 }),
+      /执行超时/,
+    );
   } finally {
     await daemon.close();
   }

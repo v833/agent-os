@@ -320,6 +320,7 @@ export class AgyAdapter implements CliAdapter {
         events.push({
           type: "result",
           answer: result.response ?? "",
+          complete: true,
           ...(sessionId ? { sessionId } : {}),
           ...(stats ? { stats } : {}),
         });

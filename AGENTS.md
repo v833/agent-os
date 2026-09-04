@@ -159,6 +159,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/cli/app-tools.ts`：应用工具公共契约——把插件注册的 MCP Server 转换为各 CLI/ACP 的启动参数并识别工具调用
 - `src/cli/command-resolver.ts`：Windows 下安全定位 CLI 的真实可执行入口
 - `src/cli/runner.ts`：通用无头 CLI 子进程、流式事件回调、超时、取消和退出处理
+- `src/cli/timeout.ts`：headless、ACP 与启动准备阶段共用的默认 CLI 硬超时策略
 - `src/cli/acp-daemon.ts`：通用 ACP 常驻进程——绝对 cwd、会话权限/模式/模型配置、单进程多会话并发、空闲回收、崩溃重连与软取消
 - `src/cli/acp-daemon.test.ts`：会话配置顺序、绝对 cwd、常驻复用、并发路由、空闲回收与崩溃重连测试
 - `src/cli/acp-runner.ts`：在 AcpDaemon 上执行一轮 ACP 的入口；无注入时创建临时 daemon 跑完即回收

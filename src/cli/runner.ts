@@ -7,7 +7,11 @@ import { createInterface } from "node:readline";
 import type { AcpDaemon } from "./acp-daemon.js";
 import { runAcp } from "./acp-runner.js";
 import { resolveCliCommand } from "./command-resolver.js";
-import { stopProcessTree } from "./process-tree.js";
+import {
+  captureProcessTree,
+  stopProcessTree,
+} from "./process-tree.js";
+import { cliTimeoutMs } from "./timeout.js";
 import type { CliAdapter, CliEvent, CliRunResult } from "./types.js";
 
 const TRANSIENT_STREAM_RETRY_DELAYS_MS = [
@@ -24,7 +28,7 @@ export interface RunCliOptions {
   cwd: string;
   sessionId?: string;
   signal?: AbortSignal;
-  /** 可选执行时限；未传入时不自动超时。 */
+  /** 可选执行时限；未传入时使用统一默认硬超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
   /** 运行时注入子进程的额外环境变量（如 bot 配置的网络代理），与父进程环境合并。 */
@@ -80,11 +84,13 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     return Promise.reject(new Error(`${adapter.displayName} 执行已取消`));
   }
 
+  const effectiveTimeoutMs = cliTimeoutMs(timeoutMs);
+
   if (adapter.accessMode === "acp") {
     // 常驻路径用调用方注入的 daemon；无注入时走临时 daemon（一轮后即回收）。
     const promise = options.acpDaemon
-      ? options.acpDaemon.runTurn(options)
-      : runAcp(options);
+      ? options.acpDaemon.runTurn({ ...options, timeoutMs: effectiveTimeoutMs })
+      : runAcp({ ...options, timeoutMs: effectiveTimeoutMs });
     return promise.catch((error) => {
       if (error instanceof CliRunError) throw error;
       const sessionId =
@@ -98,7 +104,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     });
   }
 
-  const startHeadless = () => {
+  const startHeadless = (headlessTimeoutMs: number) => {
     if (signal?.aborted) {
       return Promise.reject(new Error(`${adapter.displayName} 执行已取消`));
     }
@@ -109,6 +115,7 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
     return new Promise<CliRunResult>((resolve, reject) => {
     // shell=false 且参数分离，飞书文本无法逃逸成额外系统命令。
+    const processStartedAt = Date.now();
     const child = spawn(
       executable.command,
       [...executable.argsPrefix, ...adapterArgs],
@@ -120,10 +127,14 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         ...(env ? { env: { ...process.env, ...env } } : {}),
       },
     );
+    // 记录本次进程的启动边界；主进程提前退出时只清理该时间窗口内的后代，
+    // 避免 Windows 复用旧 PID 后误杀无关进程。
+    const processTreeSnapshot = captureProcessTree(child.pid, processStartedAt);
     const lines = createInterface({ input: child.stdout });
     let observedSessionId = sessionId;
     let observedAnswer: string | undefined;
     let observedStats: CliRunResult["stats"];
+    let observedComplete = false;
     // 同一 toolUseId 可能在流式输出中重复出现，用 Map 按 id 去重；
     // 收到失败的 tool_end 时把这次调用从结果中移除。
     const observedToolCalls = new Map<
@@ -137,11 +148,29 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
     let timer: NodeJS.Timeout | undefined;
     let stopPromise: Promise<void> | undefined;
+    let stopping = false;
     let stopForAbort: () => void;
     const cleanup = () => {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener("abort", stopForAbort);
       lines.close();
+    };
+    const buildResult = (): CliRunResult => {
+      const answer = observedAnswer;
+      if (answer === undefined) {
+        throw new Error(`${adapter.displayName} 没有返回最终结果`);
+      }
+      const toolCalls = [...observedToolCalls.values()].map((call) => ({
+        toolUseId: call.toolUseId,
+        toolName: call.toolName,
+        input: call.input,
+      }));
+      return {
+        answer,
+        ...(observedSessionId ? { sessionId: observedSessionId } : {}),
+        ...(observedStats ? { stats: observedStats } : {}),
+        ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      };
     };
     const fail = (error: Error) => {
       // abort、spawn error 与 close 可能先后到达，只允许第一个出口结束 Promise。
@@ -155,12 +184,55 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
       );
     };
     const stopOnce = () => {
-      stopPromise ??= stopProcessTree(child);
+      stopPromise ??= stopProcessTree(child, processTreeSnapshot);
       return stopPromise;
     };
+    const resolveSuccess = () => {
+      if (settled || stopping || observedAnswer === undefined) return;
+      const result = buildResult();
+      settled = true;
+      cleanup();
+      // 业务完成但子进程未退出时，必须先收割 CLI 及后代，再把结果交回任务层。
+      void stopOnce().finally(() => resolve(result));
+    };
     const stopThenFail = (error: Error) => {
+      if (settled || stopping) return;
+      stopping = true;
       // close 正常到达时会提前 fail；否则宽限期结束后这里保证 Promise 收尾。
       void stopOnce().finally(() => fail(error));
+    };
+    const completedResultError = (): Error | undefined => {
+      if (timedOut) return new Error(`${adapter.displayName} 执行超时`);
+      if (signal?.aborted) return new Error(`${adapter.displayName} 执行已取消`);
+      if (resultError) return resultError;
+      if (child.exitCode !== null && child.exitCode !== 0) {
+        return new Error(
+          stderr.trim() || `${adapter.displayName} 退出，状态码 ${child.exitCode}`,
+        );
+      }
+      if (sessionId && adapter.isSessionUnavailable?.(stderr)) {
+        return new CliRunError(
+          `${adapter.displayName} 会话已失效：${stderr.trim()}`,
+          observedSessionId,
+        );
+      }
+      return undefined;
+    };
+    const finishCompletedResult = () => {
+      if (
+        settled ||
+        stopping ||
+        !observedComplete ||
+        observedAnswer === undefined
+      ) return;
+      const error = completedResultError();
+      if (error) {
+        stopThenFail(error);
+        return;
+      }
+      // 协议终态已经包含完整结果，此时直接收割仍存活的主进程及其当前
+      // 后代，可走 Windows taskkill /T，避免正常任务额外扫描系统进程表。
+      resolveSuccess();
     };
     stopForAbort = () => {
       stopThenFail(new Error(`${adapter.displayName} 执行已取消`));
@@ -169,13 +241,10 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     // 覆盖 spawn 与监听器注册之间发生 abort 的极小竞态。
     if (signal?.aborted) stopForAbort();
 
-    // 默认不设执行时限；调用方显式传入 timeoutMs 时才启用自动终止。
-    if (timeoutMs !== undefined) {
-      timer = setTimeout(() => {
-        timedOut = true;
-        stopThenFail(new Error(`${adapter.displayName} 执行超时`));
-      }, timeoutMs);
-    }
+    timer = setTimeout(() => {
+      timedOut = true;
+      stopThenFail(new Error(`${adapter.displayName} 执行超时`));
+    }, headlessTimeoutMs);
 
     lines.on("line", (line) => {
       try {
@@ -200,6 +269,8 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
             // Codex 会把回答和统计拆成不同事件；空字段不能覆盖已经观察到的值。
             if (event.answer) observedAnswer = event.answer;
             if (event.stats) observedStats = event.stats;
+            if (event.complete) observedComplete = true;
+            finishCompletedResult();
           }
         }
       } catch (error) {
@@ -227,9 +298,9 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
     child.once("error", (error) => {
       if (timedOut) {
-        fail(new Error(`${adapter.displayName} 执行超时`));
+        stopThenFail(new Error(`${adapter.displayName} 执行超时`));
       } else if (signal?.aborted) {
-        fail(new Error(`${adapter.displayName} 执行已取消`));
+        stopThenFail(new Error(`${adapter.displayName} 执行已取消`));
       } else {
         fail(error);
       }
@@ -238,19 +309,19 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
     child.once("close", (code) => {
       if (settled) return;
       if (timedOut) {
-        fail(new Error(`${adapter.displayName} 执行超时`));
+        stopThenFail(new Error(`${adapter.displayName} 执行超时`));
         return;
       }
       if (signal?.aborted) {
-        fail(new Error(`${adapter.displayName} 执行已取消`));
+        stopThenFail(new Error(`${adapter.displayName} 执行已取消`));
         return;
       }
       if (resultError) {
-        fail(resultError);
+        stopThenFail(resultError);
         return;
       }
       if (code !== 0) {
-        fail(
+        stopThenFail(
           new Error(
             stderr.trim() || `${adapter.displayName} 退出，状态码 ${code}`,
           ),
@@ -261,11 +332,15 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
         fail(new Error(`${adapter.displayName} 没有返回最终结果`));
         return;
       }
+      if (!observedComplete) {
+        fail(new Error(`${adapter.displayName} 未收到业务完成信号`));
+        return;
+      }
       // 续聊时若 stderr 明确提示会话已失效（如 agy 对不存在会话降级为新会话，
       // 仍以退出码 0 返回“成功”结果），不能把静默新建会话当成功接受：
       // 必须报错让会话层清除失效指针，下一次任务重新建立会话。
       if (sessionId && adapter.isSessionUnavailable?.(stderr)) {
-        fail(
+        stopThenFail(
           new CliRunError(
             `${adapter.displayName} 会话已失效：${stderr.trim()}`,
             observedSessionId,
@@ -276,25 +351,38 @@ export function runCli(options: RunCliOptions): Promise<CliRunResult> {
 
       settled = true;
       cleanup();
-      const toolCalls = [...observedToolCalls.values()].map((call) => ({
-        toolUseId: call.toolUseId,
-        toolName: call.toolName,
-        input: call.input,
-      }));
-      resolve({
-        answer: observedAnswer,
-        ...(observedSessionId ? { sessionId: observedSessionId } : {}),
-        ...(observedStats ? { stats: observedStats } : {}),
-        ...(toolCalls.length > 0 ? { toolCalls } : {}),
-      });
+      const result = buildResult();
+      // 即使主进程已经正常 close，也可能留下脱离父树的后代；统一经过
+      // stopProcessTree，让启动时快照中的后代也得到清理。
+      void stopOnce().then(
+        () => resolve(result),
+        () => resolve(result),
+      );
     });
     });
   };
 
   // 配置准备失败时不启动 CLI，错误直接回到任务层展示；重试时会再次执行幂等准备。
-  return Promise.resolve()
-    .then(() => adapter.prepareRun?.(cwd))
-    .then(startHeadless);
+  const preparation = Promise.resolve().then(() => adapter.prepareRun?.(cwd));
+  let preparationTimer: NodeJS.Timeout | undefined;
+  const preparationTimeout = new Promise<never>((_, reject) => {
+    preparationTimer = setTimeout(
+      () => reject(new Error(`${adapter.displayName} 执行超时`)),
+      effectiveTimeoutMs,
+    );
+  });
+  const startedAt = Date.now();
+  return Promise.race([preparation, preparationTimeout])
+    .finally(() => {
+      if (preparationTimer) clearTimeout(preparationTimer);
+    })
+    .then(() => {
+      const remainingMs = effectiveTimeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        throw new Error(`${adapter.displayName} 执行超时`);
+      }
+      return startHeadless(remainingMs);
+    });
 }
 
 function isTransientStreamDisconnect(error: unknown): boolean {
@@ -338,11 +426,23 @@ export async function runCliWithTransientRetry(
   options: RunCliOptions,
 ): Promise<CliRunResult> {
   let currentSessionId = options.sessionId;
+  const timeoutMs = cliTimeoutMs(options.timeoutMs);
+  const deadlineAt = Date.now() + timeoutMs;
+
+  const timeoutError = () => {
+    const error = new Error(`${options.adapter.displayName} 执行超时`);
+    return currentSessionId
+      ? new CliRunError(error.message, currentSessionId, { cause: error })
+      : error;
+  };
 
   for (let retryIndex = 0; ; retryIndex += 1) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 0) throw timeoutError();
     try {
       return await runCli({
         ...options,
+        timeoutMs: remainingMs,
         ...(currentSessionId ? { sessionId: currentSessionId } : {}),
         onEvent: (event) => {
           if (event.type === "session") currentSessionId = event.sessionId;
@@ -363,6 +463,8 @@ export async function runCliWithTransientRetry(
       }
 
       const delayMs = TRANSIENT_STREAM_RETRY_DELAYS_MS[retryIndex];
+      // 退避同样属于单轮总预算；剩余时间不足以开始下一次尝试时直接收口。
+      if (deadlineAt - Date.now() <= delayMs) throw timeoutError();
       console.warn(
         `[CLI] 检测到流式连接中断，将在 ${delayMs}ms 后重试 (${retryIndex + 1}/${TRANSIENT_STREAM_RETRY_DELAYS_MS.length})`,
       );

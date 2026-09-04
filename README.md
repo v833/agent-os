@@ -445,7 +445,7 @@ Codex 使用 `item.started/item.completed` 中的 `command_execution`、`file_ch
 
 终端应持续出现 `[进度]`，飞书卡片应每秒最多更新一次，完成后答案出现在绿色卡片正文。同一话题继续追问仍会续接原 CLI 会话。再发送一个长任务并点击“停止任务”，发起人会收到成功 Toast，卡片随后变灰，同一话题仍可继续提问；其他群成员点击时只会收到权限警告。
 
-子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认不设执行时限；需要限制时可在 `.env` 中用 `CLI_TIMEOUT_MS` 统一配置，按引擎的 `<ENGINE_ID>_TIMEOUT_MS` 优先（例如 `CLAUDE_TIMEOUT_MS`、`CODEX_TIMEOUT_MS`）。显式超时或 `/close` 都会终止 CLI 及其整棵子进程树。
+子进程使用参数数组且不启用 shell。飞书消息中的引号、换行、反引号或 `$()` 都只会成为提示词内容，不能拼接成额外系统命令。Windows 下会绕过 npm 的 `.cmd`/无扩展名包装器，直接启动真实 Node 入口或 exe，仍然保持 `shell=false`。每轮默认最多执行 30 分钟；可在 `.env` 中用 `CLI_TIMEOUT_MS` 统一配置，按引擎的 `<ENGINE_ID>_TIMEOUT_MS` 优先（例如 `CLAUDE_TIMEOUT_MS`、`CODEX_TIMEOUT_MS`）。显式超时或 `/close` 都会终止 CLI 及其整棵子进程树。
 
 Codex 的 `app-server` 默认通过 stdio 通信，不需要额外的 `--stdio` 参数。首次 `codex exec` 使用 `--sandbox danger-full-access`；`codex exec resume` 使用 `--dangerously-bypass-approvals-and-sandbox`，因为续聊子命令不接受 `--sandbox`。Codex 返回 `stream disconnected before completion: Upstream request failed` 时，Runner 会把它视为瞬时流式断开，最多自动重试 5 次，依次等待 1 秒、1.5 秒、2 秒、2.5 秒、3 秒；已经建立 CLI 会话时优先使用续聊参数，没有会话 ID 时重新发起同一任务。Claude、认证、权限、会话失效和其他普通错误不会自动重试；用户在等待期间发送 `/close` 也会立即取消重试。
 

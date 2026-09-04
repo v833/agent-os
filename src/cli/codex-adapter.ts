@@ -355,13 +355,17 @@ export class CodexAdapter implements CliAdapter {
 
     if (event.type === "turn.completed") {
       const stats = parseStats(event.usage);
-      if (!stats) return [];
       const events: CliEvent[] = [];
       // 实时卡片仍依赖 context 事件；统计结果则由 Runner 与回答跨行合并。
-      if (stats.inputTokens !== undefined) {
+      if (stats?.inputTokens !== undefined) {
         events.push({ type: "context", usedTokens: stats.inputTokens });
       }
-      events.push({ type: "result", answer: "", stats });
+      events.push({
+        type: "result",
+        answer: "",
+        complete: true,
+        ...(stats ? { stats } : {}),
+      });
       return events;
     }
 
@@ -372,7 +376,7 @@ export class CodexAdapter implements CliAdapter {
         item.type === "agent_message" &&
         typeof item.text === "string"
       ) {
-        return [{ type: "result", answer: item.text }];
+        return [{ type: "result", answer: item.text, complete: false }];
       }
     }
 

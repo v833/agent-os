@@ -258,6 +258,7 @@ test("Claude Code 解析工具结果、最终统计和结果错误", () => {
       {
         type: "result",
         answer: "项目名是 threadpilot",
+        complete: true,
         sessionId: "claude-session",
         stats: {
           durationMs: 1_500,
@@ -401,7 +402,7 @@ test("Codex 解析会话、四类工具、上下文、统计和最终回答", ()
         item: { type: "agent_message", text: "项目名是 threadpilot" },
       }),
     ),
-    [{ type: "result", answer: "项目名是 threadpilot" }],
+    [{ type: "result", answer: "项目名是 threadpilot", complete: false }],
   );
   assert.deepEqual(
     adapter.parseEvents(
@@ -419,6 +420,7 @@ test("Codex 解析会话、四类工具、上下文、统计和最终回答", ()
       {
         type: "result",
         answer: "",
+        complete: true,
         stats: {
           totalTokens: 76_386,
           inputTokens: 76_260,

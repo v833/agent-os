@@ -8,7 +8,12 @@ import { resolve } from "node:path";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { resolveCliCommand } from "./command-resolver.js";
-import { stopProcessTree } from "./process-tree.js";
+import {
+  captureProcessTree,
+  stopProcessTree,
+} from "./process-tree.js";
+import type { ProcessTreeSnapshot } from "./process-tree.js";
+import { cliTimeoutMs } from "./timeout.js";
 import {
   acpMcpServers,
   findAcpApplicationTool,
@@ -65,7 +70,7 @@ export interface AcpTurnOptions {
   cwd: string;
   sessionId?: string;
   signal?: AbortSignal;
-  /** 可选执行时限；未传入时不自动超时。 */
+  /** 可选执行时限；未传入时使用统一默认硬超时。 */
   timeoutMs?: number;
   onEvent?: (event: CliEvent) => void;
   /** 当前轮工具上下文；只用于生成 MCP 动态参数，不改变常驻子进程环境。 */
@@ -106,6 +111,24 @@ function statsFromUsage(usage: acp.Usage | null | undefined): CliRunStats | unde
       ? { cacheCreationTokens: usage.cachedWriteTokens }
       : {}),
   };
+}
+
+/** 等待 ACP 操作，并在本轮取消或超时时立即释放调用方。底层请求另行接收同一 signal。 */
+function withInterruption<T>(
+  operation: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(asError(signal.reason ?? "ACP 执行已取消"));
+  }
+  let onAbort: (() => void) | undefined;
+  const interrupted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(asError(signal.reason ?? "ACP 执行已取消"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  return Promise.race([operation, interrupted]).finally(() => {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  });
 }
 
 function permissionResponse(
@@ -274,6 +297,7 @@ async function applySessionConfig(
   response: AcpSessionResponse,
   config: AcpSessionConfig | undefined,
   displayName: string,
+  signal: AbortSignal,
 ): Promise<void> {
   if (!config) return;
 
@@ -295,6 +319,7 @@ async function applySessionConfig(
       const updated = await client.request(
         acp.methods.agent.session.setConfigOption,
         { sessionId, configId, value },
+        { cancellationSignal: signal },
       );
       configOptions = updated.configOptions;
     }
@@ -306,10 +331,11 @@ async function applySessionConfig(
           `${displayName} ACP session 不支持模式 ${config.modeId}`,
         );
       }
-      await client.request(acp.methods.agent.session.setMode, {
-        sessionId,
-        modeId: config.modeId,
-      });
+      await client.request(
+        acp.methods.agent.session.setMode,
+        { sessionId, modeId: config.modeId },
+        { cancellationSignal: signal },
+      );
     }
 
     if (config.model) {
@@ -320,10 +346,11 @@ async function applySessionConfig(
         );
       }
       // DimCode 扩展：模型 ID 来自 session/new 的 models.availableModels。
-      await client.request("session/set_model", {
-        sessionId,
-        modelId: config.model,
-      });
+      await client.request(
+        "session/set_model",
+        { sessionId, modelId: config.model },
+        { cancellationSignal: signal },
+      );
     }
   } catch (error) {
     throw new Error(
@@ -339,6 +366,8 @@ async function applySessionConfig(
  */
 export class AcpDaemon {
   private child: ChildProcess | undefined;
+  /** 启动时记录的进程树；主 ACP 进程提前退出后仍用于清理脱离父树的后代。 */
+  private processTreeSnapshot: ProcessTreeSnapshot | undefined;
   private connection: acp.ClientConnection | undefined;
   private client: acp.ClientContext | undefined;
   private capabilities: acp.InitializeResponse["agentCapabilities"] | undefined;
@@ -396,6 +425,7 @@ export class AcpDaemon {
   /** 建立子进程与 ACP 连接并完成握手；仅由 acquire 在无可用连接时调用。 */
   private async spawnConnection(): Promise<acp.ClientContext> {
     const executable = resolveCliCommand(this.adapter.command);
+    const processStartedAt = Date.now();
     const child = spawn(
       executable.command,
       [...executable.argsPrefix, ...this.adapter.buildArgs("")],
@@ -406,6 +436,7 @@ export class AcpDaemon {
       },
     );
     this.child = child;
+    this.processTreeSnapshot = captureProcessTree(child.pid, processStartedAt);
     this.stderr = "";
     child.stderr.on("data", (chunk: Buffer | string) => {
       this.stderr += chunk.toString();
@@ -445,6 +476,7 @@ export class AcpDaemon {
       // 子进程事件可能晚于回收完成才到达；旧实例不能清理新连接。
       if (this.closed || this.child !== child) return;
       const stale = this.connection;
+      const processTreeSnapshot = this.processTreeSnapshot;
       if (!this.markBroken({ child })) return;
       if (stale) {
         stale.close(
@@ -453,18 +485,18 @@ export class AcpDaemon {
           ),
         );
       }
+      void stopProcessTree(child, processTreeSnapshot);
     });
-    // 连接层关闭（主动 close 或传输断开）同样标记失效。
-    void connection.closed.then(
-      () => {
-        if (this.closed || this.connection !== connection) return;
-        this.markBroken({ connection });
-      },
-      () => {
-        if (this.closed || this.connection !== connection) return;
-        this.markBroken({ connection });
-      },
-    );
+    // 连接层关闭（主动 close 或传输断开）同样标记失效；非主动断开时
+    // 旧子进程仍可能存活，必须连同启动时快照一起回收。
+    const handleConnectionClosed = () => {
+      if (this.closed || this.connection !== connection) return;
+      const staleChild = this.child;
+      const processTreeSnapshot = this.processTreeSnapshot;
+      if (!this.markBroken({ connection })) return;
+      if (staleChild) void stopProcessTree(staleChild, processTreeSnapshot);
+    };
+    void connection.closed.then(handleConnectionClosed, handleConnectionClosed);
 
     try {
       const initialized = await Promise.race([
@@ -501,9 +533,10 @@ export class AcpDaemon {
       // 启动失败（命令缺失/握手超时/协议错误）：关闭连接并结束子进程，
       // 让挂起的 acquire 立即失败，后续调用可重新拉起。
       const stale = this.connection;
+      const processTreeSnapshot = this.processTreeSnapshot;
       this.markBroken({ child, connection });
       if (stale === connection) stale.close(asError(error));
-      await stopProcessTree(child);
+      await stopProcessTree(child, processTreeSnapshot);
       throw error;
     }
   }
@@ -520,6 +553,7 @@ export class AcpDaemon {
     this.connection = undefined;
     this.client = undefined;
     this.child = undefined;
+    this.processTreeSnapshot = undefined;
     this.capabilities = undefined;
     return true;
   }
@@ -549,11 +583,11 @@ export class AcpDaemon {
   ): Promise<unknown> {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await client.request(acp.methods.agent.session.load, {
-          sessionId,
-          cwd,
-          mcpServers,
-        });
+        return await client.request(
+          acp.methods.agent.session.load,
+          { sessionId, cwd, mcpServers },
+          { cancellationSignal: signal },
+        );
       } catch (error) {
         const retryDelay = LOAD_RETRY_DELAYS_MS[attempt];
         if (!isHeldSessionError(error) || retryDelay === undefined) throw error;
@@ -673,12 +707,30 @@ export class AcpDaemon {
   /** 在常驻进程上执行一轮 prompt：新建/恢复会话、收集通知、软取消与超时。 */
   async runTurn(options: AcpTurnOptions): Promise<CliRunResult> {
     const { prompt, cwd, sessionId, signal, timeoutMs, onEvent, env } = options;
+    const effectiveTimeoutMs = cliTimeoutMs(timeoutMs);
     if (signal?.aborted) {
       throw new Error(`${this.adapter.displayName} 执行已取消`);
     }
     if (!cwd.trim()) {
       throw new Error(`${this.adapter.displayName} ACP 需要工作目录 cwd`);
     }
+    const timeoutMessage = `${this.adapter.displayName} 执行超时`;
+    const turnController = new AbortController();
+    const interrupt = (error: Error) => {
+      if (!turnController.signal.aborted) turnController.abort(error);
+    };
+    const timeoutTimer = setTimeout(
+      () => interrupt(new Error(timeoutMessage)),
+      effectiveTimeoutMs,
+    );
+    timeoutTimer.unref();
+    const abortFromCaller = () =>
+      interrupt(new Error(`${this.adapter.displayName} 执行已取消`));
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
+    if (signal?.aborted) abortFromCaller();
+    const turnSignal = turnController.signal;
+    const withDeadline = <T>(operation: Promise<T>): Promise<T> =>
+      withInterruption(operation, turnSignal);
     // ACP session/new、resume、load 都要求绝对路径；调用方传相对路径时
     // 统一以 ThreadPilot 当前进程目录解析，避免 DimCode 直接拒绝请求。
     const absoluteWorkingDirectory = resolve(cwd);
@@ -700,8 +752,9 @@ export class AcpDaemon {
     };
 
     let turn: TurnCollector | undefined;
+    let promptStarted = false;
     try {
-      client = await this.acquire();
+      client = await withDeadline(this.acquire());
       const allApplicationTools = this.adapter.getApplicationTools?.() ?? [];
       const supportedTransports = this.adapter.getAcpMcpTransports?.();
       const applicationTools = supportedTransports
@@ -735,6 +788,7 @@ export class AcpDaemon {
             response,
             this.adapter.getAcpSessionConfig?.(),
             this.adapter.displayName,
+            turnSignal,
           );
         } catch (error) {
           await this.closeSessionBestEffort(client, targetSessionId);
@@ -748,24 +802,30 @@ export class AcpDaemon {
           if (!this.capabilities?.sessionCapabilities?.resume) {
             throw new Error(`${this.adapter.displayName} ACP server 不支持 session/resume`);
           }
-          const resumed = await client.request(acp.methods.agent.session.resume, {
-            sessionId: observedSessionId,
-            cwd: absoluteWorkingDirectory,
-            mcpServers,
-          });
+          const resumed = await withDeadline(
+            client.request(acp.methods.agent.session.resume, {
+              sessionId: observedSessionId,
+              cwd: absoluteWorkingDirectory,
+              mcpServers,
+            }, { cancellationSignal: turnSignal }),
+          );
           this.sessions.add(observedSessionId);
-          await applyConfigOrCleanup(observedSessionId, sessionResponse(resumed));
+          await withDeadline(
+            applyConfigOrCleanup(observedSessionId, sessionResponse(resumed)),
+          );
           sessionReady = true;
         } else if (resumeMethod === "load") {
           if (!this.capabilities?.loadSession) {
             throw new Error(`${this.adapter.displayName} ACP server 不支持 session/load`);
           }
-          await this.loadSessionWithRetry(
-            client,
-            observedSessionId,
-            absoluteWorkingDirectory,
-            mcpServers,
-            signal,
+          await withDeadline(
+            this.loadSessionWithRetry(
+              client,
+              observedSessionId,
+              absoluteWorkingDirectory,
+              mcpServers,
+              turnSignal,
+            ),
           );
           // session/load 返回的模型目录并不稳定，且已加载会话应保留原有
           // permission/mode/model；不要用 session/new 的目录规则重新校验。
@@ -775,13 +835,41 @@ export class AcpDaemon {
           throw new Error(`${this.adapter.displayName} ACP server 不支持恢复已有会话`);
         }
       } else {
-        const created = await client.request(acp.methods.agent.session.new, {
-          cwd: absoluteWorkingDirectory,
-          mcpServers,
-        });
+        const createRequest = client.request(
+          acp.methods.agent.session.new,
+          {
+            cwd: absoluteWorkingDirectory,
+            mcpServers,
+          },
+          { cancellationSignal: turnSignal },
+        );
+        // ACP 取消是协作式的；若服务端忽略取消并迟到返回，必须主动关闭
+        // 这个已不再属于任何任务的 session，避免服务端资源永久泄漏。
+        void createRequest.then(
+          (created) => {
+            if (turnSignal.aborted) {
+              void this.closeSessionBestEffort(client, created.sessionId);
+            }
+          },
+          () => undefined,
+        );
+        const created = await withDeadline(createRequest);
         observedSessionId = created.sessionId;
         this.sessions.add(created.sessionId);
-        await applyConfigOrCleanup(created.sessionId, sessionResponse(created));
+        const configureRequest = applyConfigOrCleanup(
+          created.sessionId,
+          sessionResponse(created),
+        );
+        void configureRequest.then(
+          () => {
+            if (turnSignal.aborted) {
+              void this.closeSessionBestEffort(client, created.sessionId);
+              this.sessions.delete(created.sessionId);
+            }
+          },
+          () => undefined,
+        );
+        await withDeadline(configureRequest);
         sessionReady = true;
         // 只有配置成功后才通知任务层写入恢复指针，避免半配置 session 被持久化。
         emit({ type: "session", sessionId: created.sessionId });
@@ -803,10 +891,16 @@ export class AcpDaemon {
       };
       turn = currentTurn;
       this.turns.set(observedSessionId, currentTurn);
-      const response = await this.racePrompt(client, observedSessionId, prompt, signal, timeoutMs);
+      promptStarted = true;
+      const response = await this.racePrompt(
+        client,
+        observedSessionId,
+        prompt,
+        turnSignal,
+      );
       // ACP server 可能先返回 prompt response，再发送最后一条消息分片；
       // 保留短暂窗口，避免最终答案或工具结果被 finally 提前丢弃。
-      await delay(PROMPT_NOTIFICATION_DRAIN_MS);
+      await withDeadline(delay(PROMPT_NOTIFICATION_DRAIN_MS, turnSignal));
       currentTurn.stats = { ...currentTurn.stats, ...statsFromUsage(response.usage) };
       if (observerError) throw observerError;
       if (response.stopReason === "cancelled") {
@@ -821,7 +915,12 @@ export class AcpDaemon {
           ? { toolCalls: [...currentTurn.toolCalls.values()] }
           : {}),
       };
-      emit({ type: "result", answer: result.answer, ...(result.stats ? { stats: result.stats } : {}) });
+      emit({
+        type: "result",
+        answer: result.answer,
+        complete: true,
+        ...(result.stats ? { stats: result.stats } : {}),
+      });
       return result;
     } catch (error) {
       if (observedSessionId && isSessionUnavailableError(error)) {
@@ -833,9 +932,16 @@ export class AcpDaemon {
         ? new AcpRunError(asError(error).message, observedSessionId, { cause: error })
         : error;
     } finally {
+      clearTimeout(timeoutTimer);
+      signal?.removeEventListener("abort", abortFromCaller);
       if (turn && observedSessionId) this.turns.delete(observedSessionId);
       this.activeRuns -= 1;
-      if (this.activeRuns === 0) this.scheduleIdleClose();
+      if (this.activeRuns === 0) {
+        // prompt 前的取消意味着 new/load/config 状态可能不确定；没有并发任务时
+        // 直接回收连接，确保迟到响应不会影响下一轮。prompt 阶段仍保留软取消复用。
+        if (turnSignal.aborted && !promptStarted) await this.recycleIdle();
+        else this.scheduleIdleClose();
+      }
     }
   }
 
@@ -848,15 +954,14 @@ export class AcpDaemon {
     client: acp.ClientContext,
     sessionId: string,
     prompt: string,
-    signal: AbortSignal | undefined,
-    timeoutMs: number | undefined,
+    signal: AbortSignal,
   ): Promise<acp.PromptResponse> {
-    const promptPromise = client.request(acp.methods.agent.session.prompt, {
-      sessionId,
-      prompt: [{ type: "text", text: prompt }],
-    });
+    const promptPromise = client.request(
+      acp.methods.agent.session.prompt,
+      { sessionId, prompt: [{ type: "text", text: prompt }] },
+      { cancellationSignal: signal },
+    );
 
-    let timeout: NodeJS.Timeout | undefined;
     let abort: (() => void) | undefined;
     let cancelSent = false;
     const sendCancel = () => {
@@ -878,16 +983,10 @@ export class AcpDaemon {
       };
       abort = () => {
         // 软取消：通知 agent 停止本轮，本地立即失败；prompt 响应稍后到达时已被忽略。
-        interrupt(`${this.adapter.displayName} 执行已取消`);
+        interrupt(asError(signal.reason ?? `${this.adapter.displayName} 执行已取消`).message);
       };
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-      if (timeoutMs !== undefined) {
-        timeout = setTimeout(
-          () => interrupt(`${this.adapter.displayName} 执行超时`),
-          timeoutMs,
-        );
-      }
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
     });
 
     // 本轮持有的连接意外关闭时，prompt 请求会被 SDK 拒绝；这里兜底提供稳定错误。
@@ -906,8 +1005,7 @@ export class AcpDaemon {
     try {
       return await Promise.race([promptPromise, interrupted, connectionClosed]);
     } finally {
-      if (timeout) clearTimeout(timeout);
-      if (abort) signal?.removeEventListener("abort", abort);
+      if (abort) signal.removeEventListener("abort", abort);
     }
   }
 
@@ -929,6 +1027,7 @@ export class AcpDaemon {
       const client = this.client;
       const connection = this.connection;
       const child = this.child;
+      const processTreeSnapshot = this.processTreeSnapshot;
       const sessionIds = [...this.sessions];
       if (client) {
         // ACP 规定 session/close 会取消该 session 的进行中工作并释放资源；
@@ -947,7 +1046,7 @@ export class AcpDaemon {
         connection.close(new Error(`${this.adapter.displayName} ACP 常驻进程已关闭`));
       }
       if (child) {
-        await stopProcessTree(child);
+        await stopProcessTree(child, processTreeSnapshot);
       }
     })();
     try {

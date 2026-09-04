@@ -79,6 +79,8 @@ export type CliEvent =
   | {
       type: 'result'
       answer: string
+      /** 协议已报告本轮业务完成；进程是否随后退出由 Runner 单独处理。 */
+      complete: boolean
       sessionId?: string
       stats?: CliRunStats
     }

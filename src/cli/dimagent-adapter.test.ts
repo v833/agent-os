@@ -68,6 +68,7 @@ test("DimAgent 解析会话、流式答案累积与用量统计", () => {
       {
         type: "result",
         answer: "检查完成，共 3 项",
+        complete: true,
         sessionId: sid,
         stats: { totalTokens: 25, inputTokens: 20, outputTokens: 5 },
       },
@@ -233,7 +234,7 @@ test("DimAgent 不同会话的状态互不串扰", () => {
         payload: { status: "completed" },
       }),
     ),
-    [{ type: "result", answer: "甲", sessionId: "sess_a" }],
+    [{ type: "result", answer: "甲", complete: true, sessionId: "sess_a" }],
   );
   assert.deepEqual(
     adapter.parseEvents(
@@ -243,7 +244,7 @@ test("DimAgent 不同会话的状态互不串扰", () => {
         payload: { status: "completed" },
       }),
     ),
-    [{ type: "result", answer: "乙", sessionId: "sess_b" }],
+    [{ type: "result", answer: "乙", complete: true, sessionId: "sess_b" }],
   );
 });
 

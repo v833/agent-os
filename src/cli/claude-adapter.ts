@@ -390,6 +390,7 @@ export class ClaudeAdapter implements CliAdapter {
       {
         type: "result",
         answer: event.result,
+        complete: true,
         ...(sessionId ? { sessionId } : {}),
         ...(stats ? { stats } : {}),
       },

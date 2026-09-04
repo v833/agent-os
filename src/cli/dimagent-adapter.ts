@@ -16,7 +16,7 @@ import type {
 import type { ApplicationToolProvider } from "./app-tools.js";
 import { findAcpApplicationTool } from "./app-tools.js";
 import { ensureDimagentProjectMcpConfig } from "./dim-mcp-config.js";
-import { stopProcessTree } from "./process-tree.js";
+import { captureProcessTree, stopProcessTree } from "./process-tree.js";
 import { summarizeOutput } from "./pty-login.js";
 
 /** 设备码登录的等待上限；用户在浏览器授权通常需要一两分钟，给足缓冲。 */
@@ -257,6 +257,7 @@ export class DimagentAdapter implements CliAdapter {
         events.push({
           type: "result",
           answer: state.answer,
+          complete: true,
           ...(sessionId ? { sessionId } : {}),
           ...(statsFromUsage(payload.usage) ? { stats: statsFromUsage(payload.usage) } : {}),
         });
@@ -300,12 +301,14 @@ export class DimagentAdapter implements CliAdapter {
    */
   async login(_code: string, options: CliLoginOptions = {}): Promise<void> {
     await new Promise<void>((resolve, reject) => {
+      const processStartedAt = Date.now();
       const child = spawn(this.command, ["auth", "login", "--device-login"], {
         cwd: options.cwd ?? process.cwd(),
         env: process.env,
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
       });
+      const processTreeSnapshot = captureProcessTree(child.pid, processStartedAt);
       let output = "";
       let settled = false;
       const fail = (error: Error) => {
@@ -316,7 +319,7 @@ export class DimagentAdapter implements CliAdapter {
       };
       const timer = setTimeout(() => {
         // 设备码超时后结束进程树，避免残留轮询进程。
-        void stopProcessTree(child).then(() =>
+        void stopProcessTree(child, processTreeSnapshot).then(() =>
           fail(new Error("登录超时：请在浏览器中完成授权后再试。")),
         );
       }, options.timeoutMs ?? DEVICE_LOGIN_TIMEOUT_MS);

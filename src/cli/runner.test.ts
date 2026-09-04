@@ -5,12 +5,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CliRunError, runCli, runCliWithTransientRetry } from "./runner.js";
+import { DEFAULT_CLI_TIMEOUT_MS, cliTimeoutMs } from "./timeout.js";
 import type { CliAdapter, CliEvent } from "./types.js";
 
 class ScriptAdapter implements CliAdapter {
   readonly id: CliAdapter["id"];
   readonly command = process.execPath;
   readonly displayName = "测试 CLI";
+  prepareRun?: CliAdapter["prepareRun"];
 
   constructor(
     private readonly script: string,
@@ -69,7 +71,7 @@ test("忽略日志噪音并把分段 stdout 还原成完整 JSONL", async () => 
   const result = await runScript(`
     process.stdout.write("diagnostic\\n");
     process.stdout.write('{"type":"result",');
-    setTimeout(() => process.stdout.write('"answer":"完成"}\\n'), 10);
+    setTimeout(() => process.stdout.write('"answer":"完成","complete":true}\\n'), 10);
   `);
 
   assert.deepEqual(result, { answer: "完成" });
@@ -126,7 +128,7 @@ test("调用方传入的 env 环境变量会注入子进程", async () => {
     buildArgs() {
       return [
         "-e",
-        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing", complete: true }));`,
       ];
     },
     buildResumeArgs() {
@@ -158,7 +160,7 @@ test("不传 env 时子进程继承父进程环境（.env 全局代理默认生�
   process.env.AGY_INHERIT_MARKER = "继承成功";
   try {
     const result = await runScript(
-      `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_INHERIT_MARKER ?? "missing" }));`,
+      `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_INHERIT_MARKER ?? "missing", complete: true }));`,
     );
     assert.deepEqual(result, { answer: "继承成功" });
   } finally {
@@ -173,7 +175,7 @@ test("传入的 env 覆盖父进程同名环境变量（bots.json 优先于 .env
   try {
     const result = await runCli({
       adapter: new ScriptAdapter(
-        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: process.env.AGY_TEST_MARKER ?? "missing", complete: true }));`,
       ),
       prompt: "测试",
       cwd: process.cwd(),
@@ -189,7 +191,7 @@ test("传入的 env 覆盖父进程同名环境变量（bots.json 优先于 .env
 test("会话事件与结果分开发送时返回最新会话 ID", async () => {
   const result = await runScript(`
     console.log(JSON.stringify({ type: "session", sessionId: "new-session" }));
-    console.log(JSON.stringify({ type: "result", answer: "完成" }));
+    console.log(JSON.stringify({ type: "result", answer: "完成", complete: true }));
   `);
 
   assert.deepEqual(result, { answer: "完成", sessionId: "new-session" });
@@ -197,7 +199,7 @@ test("会话事件与结果分开发送时返回最新会话 ID", async () => {
 
 test("续聊没有返回新 ID 时沿用传入的会话 ID", async () => {
   const result = await runScript(
-    `console.log(JSON.stringify({ type: "result", answer: "继续完成" }));`,
+    `console.log(JSON.stringify({ type: "result", answer: "继续完成", complete: true }));`,
     { sessionId: "existing-session" },
   );
 
@@ -221,7 +223,7 @@ test("传入会话 ID 时 Runner 使用适配器的续聊参数", async () => {
       assert.equal(sessionId, "existing-session");
       return [
         "-e",
-        `console.log(JSON.stringify({ type: "result", answer: "已续接" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: "已续接", complete: true }));`,
       ];
     },
     buildCompactPlan(sessionId) {
@@ -264,7 +266,7 @@ test("Runner 在构造 CLI 参数前等待适配器准备工作区配置", async
       assert.equal(prepared, true);
       return [
         "-e",
-        `console.log(JSON.stringify({ type: "result", answer: "配置已准备" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: "配置已准备", complete: true }));`,
       ];
     },
     buildResumeArgs() {
@@ -305,7 +307,7 @@ test("续聊时 stderr 提示会话已失效会把静默新建会话判为失败
         `
           console.error('warning: conversation "stale-session" not found');
           console.log(JSON.stringify({ type: "session", sessionId: "new-session" }));
-          console.log(JSON.stringify({ type: "result", answer: "新会话的回答" }));
+          console.log(JSON.stringify({ type: "result", answer: "新会话的回答", complete: true }));
         `,
       ];
     },
@@ -388,7 +390,7 @@ test("流式连接中断时自动重试并续接已建立的 CLI 会话", async 
       assert.equal(sessionId, "retry-session");
       return [
         "-e",
-        `console.log(JSON.stringify({ type: "result", answer: "重试成功" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: "重试成功", complete: true }));`,
       ];
     },
     buildCompactPlan(sessionId) {
@@ -482,7 +484,8 @@ test("按顺序分发一行中的多个事件并保留最终统计", async () =>
         {
           type: "result",
           answer: "完成",
-          stats: { durationMs: 500, turns: 1 }
+          stats: { durationMs: 500, turns: 1 },
+          complete: true
         }
       ]));
     `),
@@ -523,7 +526,7 @@ test("tool_call 按 id 去重并剔除失败的调用", async () => {
         input: { title: "澄清二" }
       },
       { type: "tool_end", toolUseId: "tool-b", failed: true },
-      { type: "result", answer: "完成" }
+      { type: "result", answer: "完成", complete: true }
     ]));
   `);
 
@@ -542,7 +545,8 @@ test("Codex 回答先到统计后到时合并为完整结果", async () => {
     console.log(JSON.stringify({
       type: "result",
       answer: "",
-      stats: { inputTokens: 80, outputTokens: 20, totalTokens: 100 }
+      stats: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      complete: true
     }));
   `);
 
@@ -559,7 +563,7 @@ test("Codex 统计先到回答后到时合并为完整结果", async () => {
       answer: "",
       stats: { inputTokens: 40, outputTokens: 10, totalTokens: 50 }
     }));
-    console.log(JSON.stringify({ type: "result", answer: "继续完成" }));
+    console.log(JSON.stringify({ type: "result", answer: "继续完成", complete: true }));
   `);
 
   assert.deepEqual(result, {
@@ -572,7 +576,7 @@ test("事件观察者抛错时 Runner 稳定拒绝而不产生未捕获异常", 
   await assert.rejects(
     runCli({
       adapter: new ScriptAdapter(
-        `console.log(JSON.stringify({ type: "result", answer: "完成" }));`,
+        `console.log(JSON.stringify({ type: "result", answer: "完成", complete: true }));`,
       ),
       prompt: "测试",
       cwd: process.cwd(),
@@ -596,6 +600,75 @@ test("正常退出但没有最终事件时视为协议失败", async () => {
     runScript(`process.stdout.write("{}\\n");`),
     /没有返回最终结果/,
   );
+});
+
+test("正常退出但只有答案没有业务完成信号时视为协议失败", async () => {
+  await assert.rejects(
+    runScript(`console.log(JSON.stringify({ type: "result", answer: "不完整" }));`),
+    /未收到业务完成信号/,
+  );
+});
+
+test("业务完成后硬超时不抢先打断退出宽限期", async () => {
+  const result = await runScript(
+    `console.log(JSON.stringify({ type: "result", answer: "已完成", complete: true })); setInterval(() => {}, 1000);`,
+    { timeoutMs: 1_000 },
+  );
+  assert.deepEqual(result, { answer: "已完成" });
+});
+
+test("正常 close 也会清理主进程留下的后代", async () => {
+  if (process.platform !== "win32") return;
+
+  let descendantPid: number | undefined;
+  let notifyDescendant: (() => void) | undefined;
+  const descendantStarted = new Promise<void>((resolve) => {
+    notifyDescendant = resolve;
+  });
+  const adapter = new ScriptAdapter(`
+    const { spawn } = require("node:child_process");
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    process.stdout.write(JSON.stringify({ type: "descendant", pid: descendant.pid }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", answer: "完成", complete: true }) + "\\n");
+  `);
+  const originalParseEvents = adapter.parseEvents.bind(adapter);
+  adapter.parseEvents = (line) => {
+    const value = JSON.parse(line) as { type?: string; pid?: number };
+    if (value.type === "descendant") {
+      descendantPid = value.pid;
+      notifyDescendant?.();
+      return [];
+    }
+    return originalParseEvents(line);
+  };
+
+  try {
+    const running = runCli({
+      adapter,
+      prompt: "测试",
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    await descendantStarted;
+    assert.deepEqual(await running, { answer: "完成" });
+    assert.ok(descendantPid);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.throws(
+      () => process.kill(descendantPid!, 0),
+      (error: NodeJS.ErrnoException) => error.code === "ESRCH",
+    );
+  } finally {
+    if (descendantPid) {
+      try {
+        process.kill(descendantPid);
+      } catch {
+        // 进程已经由 Runner 清理时无需重复处理。
+      }
+    }
+  }
 });
 
 test("AbortController 会终止子进程并返回稳定取消文案", async () => {
@@ -634,6 +707,87 @@ test("超过时限会终止子进程并返回超时文案", async () => {
     /测试 CLI 执行超时/,
   );
   assert.ok(Date.now() - startedAt < 3_000, "超时必须在终止宽限期内结束");
+});
+
+test("未配置时使用有限默认超时，显式值保持不变", () => {
+  assert.equal(cliTimeoutMs(undefined), DEFAULT_CLI_TIMEOUT_MS);
+  assert.equal(cliTimeoutMs(1234), 1234);
+  assert.throws(() => cliTimeoutMs(0), /正整数毫秒值/);
+});
+
+test("prepareRun 挂起时也受执行硬超时保护", async () => {
+  const adapter = new ScriptAdapter("");
+  adapter.prepareRun = async () => {
+    await new Promise<void>(() => undefined);
+  };
+
+  await assert.rejects(
+    runCli({
+      adapter,
+      prompt: "测试",
+      cwd: process.cwd(),
+      timeoutMs: 20,
+    }),
+    /测试 CLI 执行超时/,
+  );
+});
+
+test("业务完成后主进程退出但后代持有 stdout 时仍能收尾并清理后代", async () => {
+  if (process.platform !== "win32") return;
+
+  let descendantPid: number | undefined;
+  let notifyDescendant: (() => void) | undefined;
+  const descendantStarted = new Promise<void>((resolve) => {
+    notifyDescendant = resolve;
+  });
+  const adapter = new ScriptAdapter(`
+    const { spawn } = require("node:child_process");
+    const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: ["ignore", "inherit", "ignore"],
+      windowsHide: true,
+    });
+    process.stdout.write(JSON.stringify({ type: "descendant", pid: descendant.pid }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", answer: "完成", complete: true }) + "\\n");
+    setImmediate(() => process.exit(0));
+  `);
+  const originalParseEvents = adapter.parseEvents.bind(adapter);
+  adapter.parseEvents = (line) => {
+    const value = JSON.parse(line) as { type?: string; pid?: number };
+    if (value.type === "descendant") {
+      descendantPid = value.pid;
+      notifyDescendant?.();
+      return [];
+    }
+    return originalParseEvents(line);
+  };
+
+  try {
+    const startedAt = Date.now();
+    const running = runCli({
+      adapter,
+      prompt: "测试",
+      cwd: process.cwd(),
+      timeoutMs: 10_000,
+    });
+    await descendantStarted;
+    const result = await running;
+    assert.deepEqual(result, { answer: "完成" });
+    assert.ok(Date.now() - startedAt < 7_000, "完成后的宽限收尾不应等待硬超时");
+    assert.ok(descendantPid);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.throws(
+      () => process.kill(descendantPid!, 0),
+      (error: NodeJS.ErrnoException) => error.code === "ESRCH",
+    );
+  } finally {
+    if (descendantPid) {
+      try {
+        process.kill(descendantPid);
+      } catch {
+        // 进程已经由 Runner 清理时无需重复处理。
+      }
+    }
+  }
 });
 
 test("开始前已经取消时不会启动 CLI", async () => {

@@ -1398,6 +1398,7 @@ test("普通任务走完卡片、执行与结果通知的生命周期", async ()
   host.cli.captured?.onEvent?.({
     type: "result",
     answer: "",
+    complete: true,
     stats: { totalTokens: 42 },
   });
   host.cli.finish({ answer: "完成！", sessionId: "sess-1" });
@@ -1449,7 +1450,7 @@ test("任务失败时保留失败前已观察到的 Token 与工具失败指标"
       label: "运行命令",
     },
     { type: "tool_end", toolUseId: "tool-1", failed: true },
-    { type: "result", answer: "", stats: { totalTokens: 30, inputTokens: 30 } },
+    { type: "result", answer: "", complete: true, stats: { totalTokens: 30, inputTokens: 30 } },
   ]);
 
   await host.root.parallel(
