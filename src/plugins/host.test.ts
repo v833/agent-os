@@ -772,6 +772,141 @@ test("私聊成员不注入团队上下文，直接按指令干活", async () =>
   );
 });
 
+test("群聊直接 @普通成员以 standalone 模式独立执行", async () => {
+  const memberInput: BotConfig = {
+    ...baseBotConfig,
+    id: "developer",
+    role: "独立开发工程师",
+    systemPrompt: "完成实现并直接回复当前用户。",
+    skills: ["grill-me"],
+  };
+  const host = await createHost([baseBotConfig, memberInput]);
+  const member = host.root.config.bot("developer")!;
+  host.lark.runtimes.set("developer", {
+    config: member,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "developer" },
+  });
+  let resultInteraction: string | undefined;
+  let resultSuppressHandoff: boolean | undefined;
+  host.root.on("task/result", (payload) => {
+    if (payload.botConfig.id !== member.id) return;
+    resultInteraction = payload.interaction?.mode;
+    resultSuppressHandoff = payload.suppressHandoff;
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "standalone-member",
+      text: "@_user_1 实现当前需求",
+      mentions: [{ key: "@_user_1", name: "developer", openId: "developer_open" }],
+    }),
+    host.bot,
+    member,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  const prompt = host.cli.captured!.prompt;
+  assert.match(prompt, /独立开发工程师/);
+  assert.match(prompt, /完成实现并直接回复当前用户/);
+  assert.match(prompt, /<project-skill name="grill-me"/);
+  assert.doesNotMatch(prompt, /你所在的 Agent 团队/);
+  assert.doesNotMatch(prompt, /你是用户的直接执行助手/);
+
+  host.cli.finish({ answer: "独立任务完成", sessionId: "sess-standalone" });
+  await waitFor(() => resultInteraction !== undefined);
+  assert.equal(resultInteraction, "standalone");
+  assert.equal(resultSuppressHandoff, true);
+  assert.equal(
+    host.calls.mentions.some((text) => text.includes("新的协作任务")),
+    false,
+  );
+});
+
+test("群聊直接 @Leader 以 team 模式启动", async () => {
+  const host = await createHost();
+  let resultInteraction: string | undefined;
+  host.root.on("task/result", (payload) => {
+    resultInteraction = payload.interaction?.mode;
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "team-leader",
+      text: "@_user_1 组织团队完成需求",
+      mentions: [{ key: "@_user_1", name: "TestBot", openId: "bot_open" }],
+    }),
+    host.bot,
+    host.root.config.bot("testbot")!,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  assert.match(host.cli.captured!.prompt, /你所在的 Agent 团队/);
+
+  host.cli.finish({ answer: "团队任务完成", sessionId: "sess-team-leader" });
+  await waitFor(() => resultInteraction !== undefined);
+  assert.equal(resultInteraction, "team");
+});
+
+test("Leader 派发给普通成员的 Bot 消息仍以 team 模式执行", async () => {
+  const leaderInput: BotConfig = { ...baseBotConfig, id: "leader" };
+  const memberInput: BotConfig = { ...baseBotConfig, id: "developer" };
+  const host = await createHost([leaderInput, memberInput]);
+  const leader = host.root.config.bot("leader")!;
+  const member = host.root.config.bot("developer")!;
+  for (const config of [leader, member]) {
+    host.lark.runtimes.set(config.id, {
+      config,
+      bot: host.bot,
+      identity: { openId: `${config.id}_open`, name: config.id },
+    });
+  }
+  await host.root.collaboration.sendDispatch({
+    senderConfig: leader,
+    senderBot: host.bot,
+    replyToMessageId: "team-dispatch-root",
+    targetBotId: member.id,
+    taskId: "team-dispatch-task",
+    ownerOpenId: "ou_owner",
+    reportToBotId: leader.id,
+    objective: "实现需求",
+    instruction: "完成实现并回传 Leader。",
+    round: 1,
+    maxRounds: 3,
+    workspaceDir: member.workspaceDir,
+  });
+  const dispatchId = host.calls.mentions
+    .at(-1)
+    ?.match(/任务编号：([a-f0-9]{12})/)?.[1];
+  assert.ok(dispatchId);
+  let resultInteraction: string | undefined;
+  host.root.on("task/result", (payload) => {
+    if (payload.botConfig.id === member.id) {
+      resultInteraction = payload.interaction?.mode;
+    }
+  });
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      messageId: "team-member-message",
+      messageType: "post",
+      senderType: "bot",
+      senderOpenId: "leader_open",
+      text: `新的协作任务（任务编号：${dispatchId}）`,
+      mentions: [{ key: "@_user_1", name: "developer", openId: "developer_open" }],
+    }),
+    host.bot,
+    member,
+  );
+  await waitFor(() => host.cli.captured !== undefined);
+  assert.match(host.cli.captured!.prompt, /你所在的 Agent 团队/);
+
+  host.cli.finish({ answer: "实现完成", sessionId: "sess-team-member" });
+  await waitFor(() => resultInteraction !== undefined);
+  assert.equal(resultInteraction, "team");
+});
+
 test("私聊普通任务忽略 bot 业务提示词和产品文档流程", async () => {
   const productConfig: BotConfig = {
     ...baseBotConfig,
@@ -3541,20 +3676,29 @@ test("/panel 只展示当前 chatId 与 botId 的 run，不泄露其他租户内
 
   await start(baseBotConfig, "chat1", "panel-1", "CHAT1-PRIVATE", "testbot");
   await start(baseBotConfig, "chat2", "panel-2", "CHAT2-PRIVATE", "testbot");
-  await start(developerConfig, "chat1", "panel-3", "BOT-PRIVATE", "developer");
+
+  await host.root.parallel(
+    "bot/message",
+    incomingMessage({
+      chatId: "chat1",
+      messageId: "panel-3",
+      text: "@_user_1 /orchestrate BOT-PRIVATE",
+      mentions: [
+        { key: "@_user_1", name: "Developer", openId: "developer_open" },
+      ],
+    }),
+    host.bot,
+    developerConfig,
+  );
+  assert.ok(
+    host.calls.replies.some((text) => text.includes("请 @Team Leader 开启团队模式")),
+    "普通成员收到的独立任务不能启动团队编排",
+  );
+  assert.equal(host.root.orchestration.list().length, 2, "拒绝后不能创建额外 run");
+  assert.equal(host.cli.captures.length, 2, "拒绝后不能调用 CLI 拆解任务");
 
   await emitSubTaskResult(host, "run-001", "t1", "testbot", "CHAT1-ANSWER");
   await emitSubTaskResult(host, "run-002", "t1", "testbot", "CHAT2-ANSWER");
-  await host.root.parallel("task/failed", {
-    bot: host.bot,
-    botConfig: developerConfig,
-    session: fakeSession(),
-    requestedPrompt: "BOT-PRIVATE",
-    answer: "",
-    replyToMessageId: "panel-3",
-    hasThread: false,
-    collaboration: subTaskCollaboration(host, "run-003", "t1", "developer"),
-  });
 
   await host.root.parallel(
     "bot/message",
@@ -5513,9 +5657,14 @@ test("任务执行失败时在卡片上提供重试按钮，点击后鉴权并�
   assert.equal(host.cli.captures.length, 2, "重放旧重试按钮不能再次启动任务");
 });
 
-test("内存上下文丢失时（如服务重启或补发卡片），点击重试按钮可从持久化会话兜底恢复", async () => {
+test("standalone 任务在内存上下文丢失后按持久化模式重试", async () => {
+  const memberInput: BotConfig = {
+    ...baseBotConfig,
+    id: "developer",
+    role: "独立开发工程师",
+  };
   const host = await createHost(
-    [baseBotConfig],
+    [baseBotConfig, memberInput],
     "connected",
     {},
     false,
@@ -5523,13 +5672,25 @@ test("内存上下文丢失时（如服务重启或补发卡片），点击重�
     {},
     {},
   );
-  const runtimeConfig = host.root.config.bot("testbot")!;
-  const session = await host.root.sessions.manager.resolve({
-    messageId: "m_init",
-    chatId: "chat1",
-    threadId: "thread_fallback",
-    rootId: "",
+  const runtimeConfig = host.root.config.bot("developer")!;
+  host.lark.runtimes.set("developer", {
+    config: runtimeConfig,
+    bot: host.bot,
+    identity: { openId: "developer_open", name: "developer" },
   });
+  const session = await host.root.sessions.manager.resolve(
+    {
+      messageId: "m_init",
+      chatId: "chat1",
+      threadId: "thread_fallback",
+      rootId: "",
+    },
+    runtimeConfig.defaultCliId,
+    runtimeConfig.id,
+    runtimeConfig.workspaceDir,
+    runtimeConfig.accessMode,
+    "standalone",
+  );
   await host.root.sessions.manager.setRetryPrompt(
     session.session.id,
     "兜底重试提示词",
@@ -5553,5 +5714,10 @@ test("内存上下文丢失时（如服务重启或补发卡片），点击重�
 
   await waitFor(() => host.cli.captures.length === 1);
   assert.ok(host.cli.captures[0]?.prompt.includes("兜底重试提示词"));
+  assert.match(host.cli.captures[0]?.prompt ?? "", /独立开发工程师/);
+  assert.doesNotMatch(host.cli.captures[0]?.prompt ?? "", /你所在的 Agent 团队/);
   host.cli.finish({ answer: "兜底重试完成", sessionId: "sess-done" });
+  await waitFor(() =>
+    host.root.sessions.manager.get(session.session.id)?.status === "idle",
+  );
 });

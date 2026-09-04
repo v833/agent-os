@@ -4,6 +4,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { CliAccessMode, CliId } from "../cli/types.js";
+import type { InteractionMode } from "./interaction-policy.js";
 import type { SessionStore } from "./session-store.js";
 
 export type SessionStatus = "creating" | "active" | "idle" | "closed";
@@ -19,6 +20,8 @@ export interface Session {
   cliSessionId?: string;
   /** 当前话题启动 CLI 时使用的绝对工作目录。 */
   workspaceDir: string;
+  /** 最近一次任务的交互模式，供进程重启后的任务重试恢复原能力边界。 */
+  interactionMode?: InteractionMode;
   retryPrompt?: string;
   status: SessionStatus;
   createdAt: string;
@@ -121,11 +124,29 @@ export class SessionManager {
     botId = "default",
     workspaceDir = process.cwd(),
     accessMode: CliAccessMode = "headless",
+    interactionMode?: InteractionMode,
   ): Promise<ResolvedSession> {
     const threadId = topicIdOf(message);
     const key = sessionKey(botId, message.chatId, threadId);
     const existing = this.sessions.get(key);
-    if (existing) return { session: existing, isNew: false };
+    if (existing) {
+      if (!interactionMode || existing.interactionMode === interactionMode) {
+        return { session: existing, isNew: false };
+      }
+      const updated = {
+        ...existing,
+        interactionMode,
+        updatedAt: this.now().toISOString(),
+      };
+      this.sessions.set(key, updated);
+      try {
+        await this.persist();
+      } catch (error) {
+        if (this.sessions.get(key) === updated) this.sessions.set(key, existing);
+        throw error;
+      }
+      return { session: updated, isNew: false };
+    }
 
     // 会话 ID 与飞书 ID 分层：前者属于 ThreadPilot，后者只负责消息路由。
     const now = this.now().toISOString();
@@ -137,6 +158,7 @@ export class SessionManager {
       cliId,
       accessMode,
       workspaceDir,
+      ...(interactionMode ? { interactionMode } : {}),
       status: "creating",
       createdAt: now,
       updatedAt: now,

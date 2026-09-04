@@ -59,11 +59,11 @@ export async function apply(ctx: Context): Promise<void> {
 
   // 流水线组装：向 Prompt Pipeline 提供团队上下文片段（priority 20）。
   // tasks 没有硬依赖 team：插件不在名册中的 bot 返回空，避免 contextFor 抛错打断任务启动。
-  // 用户私聊指挥单个成员（interaction.mode=direct）时不再注入团队上下文——私聊是直接下达指令，
-  // 成员按“直接干活的执行者”而不是“团队协作角色”工作。
+  // 只有 Leader 发起或 bot 交接的 team 任务需要团队名单；私聊和群内直接 @成员
+  // 都不注入团队上下文，避免独立任务被模型扩展为跨 bot 协作。
   ctx.on("task/prompt-compose", (collector, botConfig, _taskPrompt, options) => {
     const interaction = interactionPolicyOf(options);
-    if (interaction.mode === "direct") return;
+    if (interaction.mode !== "team") return;
     const current = service.get(botConfig.id);
     if (!current) return;
     collector.add({

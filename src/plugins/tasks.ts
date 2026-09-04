@@ -464,7 +464,7 @@ export class TasksService extends Service {
       suppressHandoff,
     } = input;
     const interaction = interactionPolicyOf(input);
-    // direct 是任务级硬边界：无论 bot 配置了 reviewBy 还是模型调用了协作工具，
+    // direct/standalone 是任务级硬边界：无论模型调用了什么应用工具，
     // 结果事件都不能触发 QA 或其他自动交接。
     const effectiveSuppressHandoff =
       suppressHandoff || interaction.capabilities.suppressHandoff;

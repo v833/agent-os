@@ -76,7 +76,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/plugins/dispatch-task.ts`：通用团队派发插件——注册 `dispatch_task`、校验 Team Leader/目标/轮次、监听产品确认事件，并通过 collaboration 服务真实派发
 - `src/plugins/dispatch-task-tool.ts`：dispatch-task 插件提供给 stdio/ACP MCP 注入的 Server 描述
 - `src/plugins/workspaces.ts`：workspaces 服务——创建/回收 QA 隔离快照并计算稳定工作树 revision
-- `src/plugins/qa-gate.ts`：QA 质量闸门——解析 QAResult、校验实际快照 revision，并按 pass/changes_requested/blocked 闭环路由
+- `src/plugins/qa-gate.ts`：可选 QA 质量闸门实现——解析 QAResult、校验实际快照 revision，并按 pass/changes_requested/blocked 闭环路由；当前默认装配不启用
 - `src/plugins/router.ts`：router 路由插件——协作识别、会话解析、task/message 改写、命令派发与任务启动
 - `src/plugins/orchestration.ts`：orchestration 服务——把大任务拆解成子任务并行派发（topic/same-topic）、维护有界运行表、监听 task/result|failed 更新子任务状态，并提供失败子任务一键重试（retrySubTask，鉴权/去重/次数上限）
 - `src/plugins/orchestration/live-panel.ts`：实时面板子插件——订阅 orchestration/update 挂起并节流刷新面板卡片，终态定格、淘汰清理
@@ -140,7 +140,7 @@ claude --resume <session_id> -p "再加1呢？只回答数字本身" --output-fo
 - `src/core/product-spec-store.ts`：产品方案 Flow JSON 持久化——原子写盘并在重启后恢复待确认云文档与会话关联
 - `src/core/product-spec.test.ts`：产品文档 Schema、路径安全、真实落盘与确认状态测试
 - `src/core/topic-task.ts`：按群 ID 与话题 ID 生成稳定任务编号
-- `src/core/interaction-policy.ts`：集中定义 direct/team 与 /doc 的交互能力策略，跨任务/事件透传
+- `src/core/interaction-policy.ts`：集中定义 direct/standalone/team 与 /doc 的交互能力策略，跨任务/事件透传
 - `src/core/interaction-policy.test.ts`：交互策略能力矩阵与缺省归一化测试
 - `src/core/topic-task.test.ts`：同话题复用与跨话题隔离测试
 - `src/core/observability.ts`：可观测性核心领域模型——Span/Trace 拓扑、Token 消耗聚合、时延分位数与系统指标大盘

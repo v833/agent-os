@@ -91,8 +91,7 @@ Copy-Item config/bots.example.json config/bots.json
       "accessMode": "headless",
       "workspace": ".",
       "role": "开发工程师，负责理解需求并编写代码，支持单元测试",
-      "systemPrompt": "你是团队主力开发，专注以最简、可维护的代码解决问题。",
-      "reviewBy": "qa",
+      "systemPrompt": "你是团队主力开发，专注以最简、可维护的代码解决问题；团队协作任务完成后把结果交回 Team Leader，用户直接 @你的独立任务则直接向用户交付。",
       "collaborationMaxRounds": 16,
       "enabled": true
     },
@@ -103,8 +102,8 @@ Copy-Item config/bots.example.json config/bots.json
       "defaultCli": "codex",
       "accessMode": "headless",
       "workspace": ".",
-      "role": "QA 测试工程师，负责在独立快照中执行构建与测试验收",
-      "systemPrompt": "在隔离快照中执行验证，输出通过、返工或阻塞结论。",
+      "role": "QA 测试工程师，负责执行构建、测试与代码 review",
+      "systemPrompt": "执行一次质量 review；团队协作任务完成后把测试证据与结构化缺陷交回 Team Leader，用户直接 @你的独立任务则直接向用户交付。",
       "enabled": true
     }
   ]
@@ -131,7 +130,6 @@ Copy-Item config/bots.example.json config/bots.json
 | `role` | string | **是** | - | 成员的一句话职责说明，不仅会在飞书 `/team` 卡片展示，还会作为团队上下文注入协作提示词。 |
 | `systemPrompt` | string | 否 | `""` | 成员专属的系统设定，会优先注入每轮任务的提示词流水线中。 |
 | `skills` | string[] | 否 | `[]` | 必须遵守的项目技能列表（如 `["grill-me"]`），任务启动前会自动查找并加载技能定义。 |
-| `reviewBy` | string | 否 | - | 审查闭环配置：当前成员开发完成后，自动将成果物化为隔离快照交给指定的目标成员（如 `qa`）复审。 |
 | `collaborationMaxRounds`| number | 否 | `16` | 协作最大轮次限制（1~32），防止多 Bot 互相调用陷入死循环。 |
 | `proxy` | string | 否 | - | 成员专属代理 URL（如 `http://127.0.0.1:10808`），配置后覆盖 `.env` 中的全局代理。 |
 | `enabled` | boolean | 否 | `true` | 是否启用该 Bot。设为 `false` 则启动时跳过该 Bot，不建立长连接也不占用资源。 |

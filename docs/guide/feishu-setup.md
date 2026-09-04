@@ -109,4 +109,4 @@ ThreadPilot 通过飞书开放平台官方的 **WebSocket 长连接** 与你的�
   FEISHU_QA_APP_ID=cli_zzz
   FEISHU_QA_APP_SECRET=zzz
   ```
-- 把多个机器人拉进同一个群聊，群成员在话题里 `@谁` 就由谁的本地 CLI 独立承接，体验极致直观、绝不混淆！
+- 把多个机器人拉进同一个群聊：直接 `@普通成员` 时由该成员独立承接；`@Team Leader` 时开启团队模式，由 Leader 统一派发并汇总。

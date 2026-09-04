@@ -1,11 +1,11 @@
 /**
- * 交互策略核心：统一描述私聊直达、群聊/话题团队模式及显式 /doc 的能力边界。
+ * 交互策略核心：统一描述私聊直达、群聊成员独立任务、Leader 团队模式及显式 /doc 的能力边界。
  * 路由入口只解析一次，后续任务、命令、澄清、定时和事件插件只消费该策略，
  * 避免各处重新解释 chatType、threadId 或 documentRequested。
  */
 
 /** ThreadPilot 当前任务的交互模式。 */
-export type InteractionMode = "direct" | "team";
+export type InteractionMode = "direct" | "standalone" | "team";
 
 /** 一轮任务的能力开关；字段由 createInteractionPolicy 统一推导。 */
 export interface InteractionCapabilities {
@@ -53,17 +53,18 @@ export function createInteractionPolicy(
   documentRequested = false,
 ): InteractionPolicy {
   const direct = mode === "direct";
+  const team = mode === "team";
   return Object.freeze({
     mode,
     documentRequested,
     capabilities: Object.freeze({
-      acceptBotMessages: !direct,
-      collaborateWithBots: !direct,
-      // /doc 是普通文档交付，不进入产品方案审批；team 普通任务保持原能力。
+      acceptBotMessages: team,
+      collaborateWithBots: team,
+      // standalone 保留成员自己的产品能力，但不能自动交给其他 bot。
       runProductWorkflow: !direct && !documentRequested,
       deliverDocument: !direct || documentRequested,
-      // direct 是任务级隔离边界；team /doc 保持既有 team 行为。
-      suppressHandoff: direct,
+      // direct/standalone 都是任务级隔离边界；只有 team 可以自动交接。
+      suppressHandoff: !team,
     }),
   });
 }
@@ -71,10 +72,14 @@ export function createInteractionPolicy(
 /** 从入站消息解析策略；路由应在解析命令后用 documentRequested 重建一次。 */
 export function resolveInteractionPolicy(
   message: InteractionMessageLike,
-  options: { documentRequested?: boolean } = {},
+  options: {
+    documentRequested?: boolean;
+    /** 非私聊消息的模式；缺省保持向后兼容的 team。 */
+    groupMode?: "standalone" | "team";
+  } = {},
 ): InteractionPolicy {
   return createInteractionPolicy(
-    isDirectMessage(message) ? "direct" : "team",
+    isDirectMessage(message) ? "direct" : options.groupMode ?? "team",
     options.documentRequested ?? false,
   );
 }

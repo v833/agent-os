@@ -26,6 +26,8 @@ const SessionSchema = z.object({
   cliSessionId: z.string().min(1).optional(),
   // 旧快照没有待重试指令；任务启动前写入，成功后删除。
   retryPrompt: z.string().min(1).optional(),
+  // 旧快照没有交互模式；只有重试恢复需要该字段，缺失时按 direct 安全降级。
+  interactionMode: z.enum(["direct", "standalone", "team"]).optional(),
   // 旧快照可能缺少工作目录，读取时会按 bot 默认值迁移后再校验。
   workspaceDir: z.string().min(1),
   status: z.enum(["creating", "active", "idle", "closed"]),

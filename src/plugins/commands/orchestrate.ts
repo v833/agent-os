@@ -23,7 +23,9 @@ function createHandler(pluginCtx: Context): CommandHandler {
     if (!interaction.capabilities.collaborateWithBots) {
       await bot.reply(
         message.messageId,
-        "私聊模式不会与其他 bot 互动，请在群聊或话题中使用 /orchestrate。",
+        interaction.mode === "standalone"
+          ? "独立任务模式不会与其他 bot 互动，请 @Team Leader 开启团队模式。"
+          : "私聊模式不会与其他 bot 互动，请在群聊或话题中 @Team Leader 开启团队模式。",
         hasThread,
       );
       return;

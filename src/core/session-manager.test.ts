@@ -91,6 +91,30 @@ test("新会话持久化接入模式，已有话题不受新默认值覆盖", as
   assert.equal(existing.session.accessMode, "acp");
 });
 
+test("会话记录并更新最近一次交互模式", async () => {
+  const manager = new SessionManager({ createId: () => "session-mode" });
+  const created = await manager.resolve(
+    address(),
+    "codex",
+    "developer",
+    process.cwd(),
+    "headless",
+    "standalone",
+  );
+  const updated = await manager.resolve(
+    address(),
+    "codex",
+    "developer",
+    process.cwd(),
+    "headless",
+    "team",
+  );
+
+  assert.equal(created.session.interactionMode, "standalone");
+  assert.equal(updated.session.interactionMode, "team");
+  assert.equal(updated.isNew, false);
+});
+
 test("新会话保存工作目录，切换后清除旧 CLI 会话", async () => {
   const manager = new SessionManager({ createId: () => "session-workspace" });
   const created = (

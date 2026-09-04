@@ -180,7 +180,12 @@ class TaskRetryController {
               threadId: persisted.threadId,
               rootId: "",
             }),
-            interaction: createInteractionPolicy(persisted.threadId ? "team" : "direct", false),
+            // 会话键无法区分群聊与私聊；使用路由持久化的原模式。旧快照缺失时
+            // 按 direct 安全降级，避免重试意外获得跨 Bot 协作权限。
+            interaction: createInteractionPolicy(
+              persisted.interactionMode ?? "direct",
+              false,
+            ),
             requestedPrompt: persisted.retryPrompt,
             isCompacting: false,
             resources: [],

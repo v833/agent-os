@@ -153,7 +153,13 @@ async function handleMessage(
   const resolved = resolveMentions(message.text, message.mentions);
   let senderRuntime: BotRuntime | undefined;
   let collaboration: CollaborationMessage | undefined;
-  const messageInteraction = resolveInteractionPolicy(message);
+  // 真人在群里直接 @普通成员时只启动该成员的独立任务；@Leader 才开启团队模式。
+  // bot 消息必须先按 team 接受，随后仍要通过一次性交接单鉴权，不能伪装成普通指令。
+  const groupMode =
+    fromBot || botConfig.id === ctx.config.teamLeaderId
+      ? "team"
+      : "standalone";
+  const messageInteraction = resolveInteractionPolicy(message, { groupMode });
   if (fromBot) {
     if (!messageInteraction.capabilities.acceptBotMessages) {
       // 私聊只接受真人指令；即使存在旧交接单，也不能在 p2p 中恢复 bot 间协作。
@@ -193,6 +199,7 @@ async function handleMessage(
   let command = parseCommand(resolved);
   const parsedInteraction = resolveInteractionPolicy(message, {
     documentRequested: command?.name === "doc",
+    groupMode,
   });
   const startsDocumentTask =
     command?.name === "doc" && Boolean(command.prompt);
@@ -223,6 +230,7 @@ async function handleMessage(
     botConfig.id,
     collaboration?.workspaceDir ?? botConfig.workspaceDir,
     botConfig.accessMode ?? "headless",
+    messageInteraction.mode,
   );
   let { session } = resolvedSession;
   const { isNew } = resolvedSession;

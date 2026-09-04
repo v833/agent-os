@@ -1,4 +1,4 @@
-/** 交互策略测试：验证 direct/team 及显式 /doc 的能力矩阵和旧字段兼容归一化。 */
+/** 交互策略测试：验证 direct/standalone/team 与显式 /doc 的能力矩阵。 */
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -32,6 +32,21 @@ test("direct /doc 只开启文档交付，不开启产品流程", () => {
   assert.equal(policy.capabilities.collaborateWithBots, false);
 });
 
+test("standalone 保留成员能力但关闭跨 Bot 协作和自动回传", () => {
+  const policy = resolveInteractionPolicy(
+    { chatType: "group" },
+    { groupMode: "standalone" },
+  );
+  assert.equal(policy.mode, "standalone");
+  assert.deepEqual(policy.capabilities, {
+    acceptBotMessages: false,
+    collaborateWithBots: false,
+    runProductWorkflow: true,
+    deliverDocument: true,
+    suppressHandoff: true,
+  });
+});
+
 test("team 普通任务保留原团队能力，team /doc 不改变协作边界", () => {
   const team = createInteractionPolicy("team");
   const doc = createInteractionPolicy("team", true);
@@ -49,4 +64,3 @@ test("缺失策略归一化为 team 默认", () => {
   assert.equal(policy.documentRequested, false);
   assert.equal(policy.capabilities.acceptBotMessages, true);
 });
-

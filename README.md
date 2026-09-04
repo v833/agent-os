@@ -73,7 +73,7 @@ plugins:
 Copy-Item config/bots.example.json config/bots.json
 ```
 
-`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；可选的 `defaultProductDeliveryMode` 为 `local` 或 `lark-doc`，省略时保持兼容旧版本的 `local`；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`reviewBy`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`）。Skill 按当前 workspace 的 `.agents/skills`、`.claude/skills`、ThreadPilot 内置 `.agents/skills`，再到用户级 `~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills` 的顺序查找，workspace 同名 Skill 可以覆盖内置版本；任务启动时会把最终解析到的内容注入提示词。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
+`config/bots.json` 的顶层 `teamLeader` 声明团队负责人（稳定 ID，必须指向启用成员，否则在建立飞书连接前拒绝启动）；可选的 `defaultProductDeliveryMode` 为 `local` 或 `lark-doc`，省略时保持兼容旧版本的 `local`；`bots` 的每一项包含稳定的 `id`、凭证环境变量名、`defaultCli`、`workspace`、`role`、`systemPrompt` 和可选的 `skills`、`accessMode`、`enabled`、`collaborationMaxRounds`、`proxy`。`role` 是一句话职责说明，飞书 `/team` 团队卡片与成员提示词都会用到；`skills` 声明该成员处理任务时必须遵守的项目 Skill（如 `grill-me`）。Skill 按当前 workspace 的 `.agents/skills`、`.claude/skills`、ThreadPilot 内置 `.agents/skills`，再到用户级 `~/.agents/skills`、`~/.claude/skills`、`~/.codex/skills` 的顺序查找，workspace 同名 Skill 可以覆盖内置版本；任务启动时会把最终解析到的内容注入提示词。`accessMode` 可填写 `headless` 或 `acp`，未填写时默认 `headless`；`acp` 是标准接入能力，由 `engines/acp` 插件提供，任何 defaultCli 都可声明（前提是该引擎注册了对应接入模式，运行时由 CLI 注册表校验）。`collaborationMaxRounds` 默认是 `16`，可设置为 `1` 到 `32`，防止协作失控循环。可选的 `proxy` 为该 bot 的网络代理 URL（如 `http://127.0.0.1:10808`）：配置后执行 CLI 时会把 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` 注入子进程，供需要代理访问云端服务的引擎（如 agy）使用；不配置则该 bot 继承 `.env` 中的全局代理变量（见下）。也可以在 `.env` 中配置 `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` 作为所有 bot 的全局默认代理，bot 级 `proxy` 优先于 `.env` 的全局配置。两者都未配置则保持直连。示例文件可以提交，实际配置已被 Git 忽略：
 
 ```json
 {
@@ -86,9 +86,8 @@ Copy-Item config/bots.example.json config/bots.json
       "defaultCli": "dimagent",
       "accessMode": "acp",
       "workspace": ".",
-      "role": "开发工程师，负责完成实现，并组织内部审查与测试",
-      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现。",
-      "reviewBy": "qa",
+      "role": "开发工程师，负责完成实现与验证",
+      "systemPrompt": "你是主力开发助手，负责理解需求并完成实现；团队协作任务完成后向 Team Leader 返回结果，用户直接 @你的独立任务则直接向用户交付。",
       "collaborationMaxRounds": 16
     },
     {
@@ -98,7 +97,7 @@ Copy-Item config/bots.example.json config/bots.json
       "defaultCli": "codex",
       "workspace": ".",
       "role": "QA 工程师，负责执行测试、验证验收标准并给出质量结论",
-      "systemPrompt": "在隔离快照中执行验证，最后只按任务给出的 QAResult 协议输出结构化结论。",
+      "systemPrompt": "执行构建、测试和一次代码 review；团队协作任务完成后把测试证据与结构化缺陷交回 Team Leader，用户直接 @你的独立任务则直接向用户交付。",
       "enabled": true
     },
     {
@@ -117,11 +116,11 @@ Copy-Item config/bots.example.json config/bots.json
 
 `appIdEnv` 和 `appSecretEnv` 指向 `.env` 中的真实凭证变量。停用 bot 时设置 `enabled: false`，它不会读取凭证或建立长连接；全部停用或配置字段错误时程序会在启动阶段退出。修改 `.env` 或 `config/*.json` 会触发 `pnpm start` 自动重启。群里 @哪台 bot，就由哪台 bot 接手，程序无需再次判断目标应用。
 
-私聊 bot 时，任务默认进入 direct 模式：忽略该 bot 的团队角色、团队 Skill 和产品方案流程，不接受或派发其他 bot 的协作消息，直接回答当前用户。需要生成可查阅的飞书云文档时使用 `/doc <任务>` 显式开启文档交付；群聊和已有话题继续保持 team 模式及原有协作行为。
+私聊 bot 时，任务进入 direct 模式：忽略该 bot 的团队角色、团队 Skill 和产品方案流程，不接受或派发其他 bot 的协作消息，直接回答当前用户。群聊中直接 `@普通成员` 进入 standalone 模式：保留该成员自身角色、Skill 和产品能力，但禁止跨 Bot 协作与自动回传；直接 `@Team Leader` 才进入 team 模式。Leader 派发给成员的 Bot 交接消息也使用 team 模式，成员完成后固定回到 Leader。需要在私聊中生成可查阅的飞书云文档时，使用 `/doc <任务>` 显式开启文档交付。
 
-个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与开发 bot 的自动代码审查链。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
+个人助理使用独立的飞书应用凭证和 `assistant` bot ID，不参与 Team Leader 组织的研发协作流程。启用前请在 `.env` 中填写 `FEISHU_ASSISTANT_APP_ID` 和 `FEISHU_ASSISTANT_APP_SECRET`，并把本地 `config/bots.json` 中的 `assistant.enabled` 设置为 `true`。
 
-`reviewBy` 只用于可选的结构化 QA Gate：开发 bot 成功后创建隔离快照并交给指定 QA，后续由 `qa-gate` 根据 `QAResult` 决定通过、返工或升级。普通团队分工不读取 `reviewBy`，统一由 Team Leader 调用 `dispatch_task`。
+团队模式中的产品、开发和 QA 均由 Team Leader 统一调用 `dispatch_task` 派发；成员完成后通过固定的 `reportToBotId` 回到 Leader。用户直接 `@普通成员` 的 standalone 任务独立完成，不进入这条团队链。默认装配不启用自动 QA Gate，也不允许成员绕过 Leader 直接组织下一阶段。
 
 在飞书群中 @任意成员发送 `/team`，会返回一张团队卡片，展示每位成员的职责、默认执行引擎、项目 Skill 与连接状态。
 
@@ -480,28 +479,11 @@ ThreadPilot 启动完成
 
 CLI 返回的会话标识会保存为 `Session.cliSessionId`。同一话题下一轮会自动调用 Claude Code 的 `--resume <session_id>` 或 Codex 的 `exec resume <thread_id>`；新话题没有恢复指针，会从干净上下文开始。
 
-## QA 质量闸门
+## Leader 统一研发流程
 
-配置 `reviewBy` 后，普通开发任务成功会按以下顺序交接：
+团队研发任务由 Team Leader 统一编排：Leader 先按需派发产品经理；产品方案经用户确认后自动回到 Leader；Leader 再派发 Developer；Developer 完成后自动回到 Leader；Leader 最多派发一次 QA；QA 完成一次 review 后自动回到 Leader，由 Leader 汇总结果、决定是否安排修复并最终通知用户。成员不能调用 `dispatch_task`，因此不会绕过 Leader 互相派发。
 
-1. 开发 bot 更新原任务卡片为成功状态。
-2. `workspaces` 插件为 Developer 当前工作树创建隔离快照；revision 同时覆盖 Git HEAD、dirty diff 和未跟踪文件内容。
-3. 开发 bot 回复一张“协作任务已派发”卡片，再回复一条带任务编号的 `post` 消息，真实 `@` 审查 bot。
-4. 只有被提及且匹配任务编号的目标 bot 会领取交接单；领取后立即删除，重复事件不会再次执行。
-5. QA 在隔离快照中执行审查，并输出结构化 `QAResult`；报告 revision 与实际快照不一致、快照被修改或协议无效时一律按 `blocked` 处理。
-6. `pass` 立即结束链路；`changes_requested` 只把结构化缺陷交回 Developer 的源工作区；`blocked` 只升级 `teamLeader`。`collaborationMaxRounds` 仅是异常循环的安全上限。
-
-卡片只负责展示项目、角色和审查说明，不能替代真实提及。交接单当前保存在内存中，服务在投递后重启会丢失尚未领取的任务；验证交接链路时不要重启服务。
-
-### QA 闭环验收
-
-1. 将开发 bot 的 `reviewBy` 配为 `qa`；QA 的默认 `workspace` 可独立配置，reviewBy 审查会自动使用一次性隔离快照。
-2. 运行 `pnpm build`、`pnpm test` 后启动 `pnpm start`，日志应打印两台 bot 的 `name` 和 `open_id`。
-3. 在新话题发送 `@开发助手 阅读 TASK.md，完成里面的功能并运行验证。`。
-4. 开发任务完成后，应看到“协作任务已派发”卡片和一条新的 `@审查助手` 富文本消息。
-5. QA 返回 `pass` 后不再派发；返回 `changes_requested` 后只有 Developer 收到返工任务；返回 `blocked` 后只有 Team Leader 收到升级任务。
-6. QA 报告中的 revision 必须与交接提示完全相同；在 QA 执行期间修改快照，应被闸门拒绝并升级。
-7. 向非目标 bot 转发这条通知、删除任务编号或重复投递时，目标 bot 都不应启动 CLI。
+交接单保存真人发起人、固定编排者 `reportToBotId` 和协作轮次。卡片只负责展示任务说明，真实 `@` 消息负责触发目标 Bot；交接单被目标领取后立即删除，重复事件不会再次执行。当前交接单保存在内存中，服务在投递后重启会丢失尚未领取的任务。
 
 ### 多轮对话验收
 
@@ -719,7 +701,7 @@ ThreadPilot 可以把一个大目标拆成多个可并行的子任务，派发�
 流程与语义：
 
 - **拆解**：编排 bot 用自己绑定的 CLI 跑一次独立规划（不复用用户会话上下文），只输出结构化子任务 JSON（`{"tasks":[{"id","prompt","bot"}]}`）；解析容错、字段经 Zod 校验，2 分钟内未返回视为拆解失败，执行时继承编排 bot 的代理配置。
-- **派发方式（默认 `topic`，`same-topic` 为兼容降级）**：`cordis.yml` 的 `orchestration.dispatchMode` 决定。默认 `topic`：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在编排所在群内发一条独立根消息（独立话题）`@` 目标 bot——同一 bot 可跨话题并行承接多个子任务，两个子任务各走各的话题、互不阻塞。`same-topic` 为兼容降级：改在当前话题 `@` 目标 bot，此时同一 bot 的多个子任务会被整轮拒绝。`reviewBy` 交接链不受影响。
+- **派发方式（默认 `topic`，`same-topic` 为兼容降级）**：`cordis.yml` 的 `orchestration.dispatchMode` 决定。默认 `topic`：每个子任务构造协作交接单（`round=1`/`maxRounds=1`）经 `ctx.collaboration` 注册，再在编排所在群内发一条独立根消息（独立话题）`@` 目标 bot——同一 bot 可跨话题并行承接多个子任务，两个子任务各走各的话题、互不阻塞。`same-topic` 为兼容降级：改在当前话题 `@` 目标 bot，此时同一 bot 的多个子任务会被整轮拒绝。
 - **收集**：子任务成功由 `task/result` 事件驱动为 `done` 并保存回答摘要，失败由 `task/failed` 事件驱动为 `failed`；编排交接单明确禁止 collaboration 自动回传，因此叶子结果不会逐项通知真人；面板通过 `/panel` 实时查看。
 - **工作区隔离**：每个子任务使用目标 bot 自己配置的 `workspace`；不同 bot 若指向同一可写目录，整轮拒绝并要求配置独立 worktree 或改为串行任务。
 - **生命周期边界**：子任务 ID 会 trim 后校验唯一性；派发接口未返回 `message_id` 会立即将子任务标记为失败并撤销交接单。同一派发尝试的重复 `task/result`/`task/failed` 事件只接受首个终态；run 默认等待结果 30 分钟，超时后未完成子任务自动标记为失败并清理交接单。
